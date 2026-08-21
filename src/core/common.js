@@ -9618,7 +9618,7 @@ const SearchableSelect = ({ options, value, onChange, style, placeholder = "Sele
         top: "100%",
         left: 0,
         right: 0,
-        background: c.bgCard,
+        background: c.bg,
         border: "1px solid " + c.border,
         borderRadius: 7,
         marginTop: 4,
