@@ -1,5 +1,5 @@
-const PayrollMod = () => {
-  const [teachers] = useState(initPayrollTeachers);
+const PayrollMod = ({ user, teachers: propTeachers, qcViolations }) => {
+  const teachers = propTeachers || initPayrollTeachers;
   const [payHistory, setPayHistory] = useState(initPayHistory);
   const [tab, setTab] = useState("current");
   const [search, setSearch] = useState("");
@@ -11,13 +11,42 @@ const PayrollMod = () => {
   const [payForm, setPayForm] = useState({});
   const currentRecs = useMemo(() => {
     return teachers.map(t => {
-      const rec = payHistory[t.id]?.find(r => r.month === selectedMonth);
+      let rec = payHistory[t.id]?.find(r => r.month === selectedMonth);
+      
+      const tViols = (qcViolations || []).filter(v => v.teacher === t.name && v.date && v.date.startsWith(selectedMonth) && v.status !== "Waived" && v.status !== "Resolved");
+      const autoFine = tViols.reduce((sum, v) => sum + (Number(v.fine) || 0), 0);
+      
+      if (!rec) {
+        const b = typeof calcBonuses === 'function' ? calcBonuses(t) : { total: 0 };
+        rec = {
+          id: t.id + "_" + selectedMonth,
+          month: selectedMonth,
+          gross: (t.salary || 0) + (b.total || 0),
+          net: (t.salary || 0) + (b.total || 0) - autoFine,
+          fine: autoFine,
+          bonuses: b.total || 0,
+          advance: 0,
+          tax: 0,
+          deductions: autoFine,
+          status: "pending"
+        };
+      } else if (rec.status === "pending") {
+        if (rec.fine !== autoFine) {
+          const diff = autoFine - (rec.fine || 0);
+          rec = {
+            ...rec,
+            fine: autoFine,
+            deductions: (rec.deductions || 0) + diff,
+            net: (rec.net || 0) - diff
+          };
+        }
+      }
       return {
         ...t,
-        pay: rec || null
+        pay: rec
       };
     });
-  }, [teachers, payHistory, selectedMonth]);
+  }, [teachers, payHistory, selectedMonth, qcViolations]);
   const stats = useMemo(() => {
     const recs = currentRecs.filter(t => t.pay);
     const totalGross = recs.reduce((s, t) => s + t.pay.gross, 0);
@@ -98,51 +127,38 @@ const PayrollMod = () => {
       value
     }));
   }, [teachers]);
-  const approvePayment = id => setPayHistory({
-    ...payHistory,
-    [id]: payHistory[id].map(r => r.month === selectedMonth ? {
-      ...r,
-      status: "approved",
-      approvedBy: "Super Admin"
-    } : r)
-  });
-  const markAsPaid = id => setPayHistory({
-    ...payHistory,
-    [id]: payHistory[id].map(r => r.month === selectedMonth ? {
-      ...r,
-      status: "paid",
-      paidDate: todayPK(),
-      paymentMethod: teachers.find(t => t.id === id)?.bank.split(" - ")[0]
-    } : r)
-  });
-  const bulkApprove = () => {
-    const next = {
-      ...payHistory
-    };
-    selected.forEach(id => {
-      next[id] = next[id].map(r => r.month === selectedMonth && r.status === "pending" ? {
-        ...r,
-        status: "approved",
-        approvedBy: "Super Admin"
-      } : r);
+  const updateRec = (id, updater) => {
+    setPayHistory(prev => {
+      const arr = prev[id] || [];
+      const idx = arr.findIndex(r => r.month === selectedMonth);
+      if (idx >= 0) {
+        const next = [...arr];
+        next[idx] = updater(next[idx]);
+        return { ...prev, [id]: next };
+      } else {
+        const teacher = currentRecs.find(t => t.id === id);
+        if (teacher && teacher.pay) {
+          return { ...prev, [id]: [...arr, updater(teacher.pay)] };
+        }
+        return prev;
+      }
     });
-    setPayHistory(next);
+  };
+
+  const approvePayment = id => updateRec(id, r => ({ ...r, status: "approved", approvedBy: "Super Admin" }));
+  
+  const markAsPaid = id => updateRec(id, r => ({ ...r, status: "paid", paidDate: todayPK(), paymentMethod: teachers.find(t => t.id === id)?.bank.split(" - ")[0] }));
+  
+  const bulkApprove = () => {
+    selected.forEach(id => updateRec(id, r => r.status === "pending" ? { ...r, status: "approved", approvedBy: "Super Admin" } : r));
     setSelected([]);
   };
+  
   const bulkPay = () => {
-    const next = {
-      ...payHistory
-    };
     selected.forEach(id => {
       const t = teachers.find(x => x.id === id);
-      next[id] = next[id].map(r => r.month === selectedMonth && r.status === "approved" ? {
-        ...r,
-        status: "paid",
-        paidDate: todayPK(),
-        paymentMethod: t?.bank.split(" - ")[0]
-      } : r);
+      updateRec(id, r => r.status === "approved" ? { ...r, status: "paid", paidDate: todayPK(), paymentMethod: t?.bank.split(" - ")[0] } : r);
     });
-    setPayHistory(next);
     setSelected([]);
   };
   const openPayslip = t => setModal({
@@ -1383,15 +1399,12 @@ const PayrollMod = () => {
   }, "Cancel"), React.createElement(Btn, {
     onClick: () => {
       if (!payForm.amount) return;
-      setPayHistory({
-        ...payHistory,
-        [modal.data.id]: payHistory[modal.data.id].map(r => r.month === selectedMonth ? {
-          ...r,
-          advance: (r.advance || 0) + Number(payForm.amount),
-          deductions: r.deductions + Number(payForm.amount),
-          net: r.net - Number(payForm.amount)
-        } : r)
-      });
+      updateRec(modal.data.id, r => ({
+        ...r,
+        advance: (r.advance || 0) + Number(payForm.amount),
+        deductions: (r.deductions || 0) + Number(payForm.amount),
+        net: (r.net || 0) - Number(payForm.amount)
+      }));
       setModal(null);
     },
     icon: DollarSign

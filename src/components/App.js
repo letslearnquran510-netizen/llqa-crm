@@ -409,7 +409,9 @@ function App() {
         });
       case "payroll":
         return React.createElement(PayrollMod, {
-          user: user
+          user: user,
+          teachers: teachers,
+          qcViolations: qcViolations
         });
       case "finance":
         return React.createElement(FinanceMod, null);
