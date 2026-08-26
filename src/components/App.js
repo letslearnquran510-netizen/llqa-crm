@@ -408,7 +408,7 @@ function App() {
           setAutoAttendance: setAutoAttendance
         });
       case "payroll":
-        return React.createElement(PayrollMod, {
+        return React.createElement(PayrollMod, { appSettings: appSettings,
           user: user,
           teachers: teachers,
           qcViolations: qcViolations

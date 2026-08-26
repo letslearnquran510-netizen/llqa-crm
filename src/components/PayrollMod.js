@@ -1,4 +1,4 @@
-const PayrollMod = ({ user, teachers: propTeachers, qcViolations }) => {
+const PayrollMod = ({ user, teachers: propTeachers, qcViolations, appSettings }) => {
   const teachers = propTeachers || initPayrollTeachers;
   const [payHistory, setPayHistory] = useState(initPayHistory);
   const [tab, setTab] = useState("current");
@@ -1297,7 +1297,7 @@ const PayrollMod = ({ user, teachers: propTeachers, qcViolations }) => {
         fontWeight: 600
       }
     }, "Rs ", y.months > 0 ? Math.round(y.totalEarned / y.months).toLocaleString() : "0"));
-  }))))), modal && modal.type === "payslip" && React.createElement(PayslipModal, {
+  }))))), modal && modal.type === "payslip" && React.createElement(PayslipModal, { appSettings: appSettings,
     t: modal.data,
     onClose: () => setModal(null),
     selectedMonth: selectedMonth
