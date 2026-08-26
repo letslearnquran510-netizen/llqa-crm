@@ -119,7 +119,7 @@ const PayrollMod = ({ user, teachers: propTeachers, qcViolations }) => {
   const methodDist = useMemo(() => {
     const m = {};
     teachers.forEach(t => {
-      const method = t.bank.split(" - ")[0];
+      const method = t.bank ? String(t.bank).split(" - ")[0] : "Unspecified";
       m[method] = (m[method] || 0) + 1;
     });
     return Object.entries(m).map(([name, value]) => ({
@@ -513,7 +513,7 @@ const PayrollMod = ({ user, teachers: propTeachers, qcViolations }) => {
       fontSize: 9,
       color: c.textSec
     }
-  }, t.code, " \xB7 ", t.bank.split(" - ")[0])), React.createElement("td", {
+  }, t.code, " \xB7 ", t.bank ? String(t.bank).split(" - ")[0] : "Unspecified")), React.createElement("td", {
     style: {
       padding: "7px 8px"
     }
@@ -572,7 +572,7 @@ const PayrollMod = ({ user, teachers: propTeachers, qcViolations }) => {
       color: c.textSec,
       fontSize: 9
     }
-  }, t.pay.paymentMethod || t.bank.split(" - ")[0]), React.createElement("td", {
+  }, t.pay.paymentMethod || (t.bank ? String(t.bank).split(" - ")[0] : "Unspecified")), React.createElement("td", {
     style: {
       padding: "7px 8px"
     }
