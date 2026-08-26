@@ -107,6 +107,7 @@ function App() {
   const [customRoles, setCustomRoles] = useFirestoreCollection("customRoles", []);
   const [dailyProgress, setDailyProgress] = useFirestoreCollection("dailyProgress", []);
   const [parentNotes, setParentNotes] = useFirestoreCollection("parentNotes", []);
+  const [teacherFeedback, setTeacherFeedback] = useFirestoreCollection("teacherFeedback", []);
   const [access, setAccess] = useFirestoreDoc("settings/portalAccess", DEFAULT_ACCESS);
   const [leaves, setLeaves] = useFirestoreCollection("leaves", [{
     id: 1,
@@ -424,7 +425,9 @@ function App() {
           dailyProgress: dailyProgress,
           setDailyProgress: setDailyProgress,
           parentNotes: parentNotes,
-          setParentNotes: setParentNotes
+          setParentNotes: setParentNotes,
+          teacherFeedback: teacherFeedback,
+          setTeacherFeedback: setTeacherFeedback
         });
       case "hr":
         return React.createElement(HRMod, null);

@@ -75,6 +75,25 @@ const ParentMod = ({
     if (!confirm("Delete this note?")) return;
     setParentNotes((parentNotes || []).filter((n) => n.id !== id));
   };
+
+  const addFeedback = () => {
+    const finalFb = fbCat === "Custom" ? fbCustom.trim() : fbCat;
+    if (!finalFb) return;
+    const newFb = {
+      id: Date.now(),
+      studentId: stu.id,
+      author: user.name || "Teacher",
+      text: finalFb,
+      createdAt: new Date().toISOString(),
+    };
+    setTeacherFeedback([newFb, ...(teacherFeedback || [])]);
+    setFbCustom("");
+    setFbCat("Excellent Progress");
+  };
+  const deleteFeedback = (id) => {
+    if (!confirm("Delete this feedback?")) return;
+    setTeacherFeedback((teacherFeedback || []).filter((n) => n.id !== id));
+  };
   const generateParentId = () => {
     const existing = new Set(
       allStudents.map((s) => s.parentId).filter(Boolean),
@@ -150,25 +169,17 @@ const ParentMod = ({
         "</td><td>" +
         escHTML(stu.hoursPerWeek || "-") +
         "</td><td>" +
-        escHTML(stu.currency || "USD") +
+        escHTML(inv.currency) +
         " " +
-        escHTML(
-          stu.fee_amount && parseFloat(stu.fee_amount) > 0
-            ? parseFloat(stu.fee_amount).toLocaleString()
-            : "Not set",
-        ) +
+        escHTML(inv.amount !== null ? inv.amount.toLocaleString() : "Not set") +
         "</td></tr>",
     );
     w.document.write("</tbody></table>");
     w.document.write(
       '<div class="total">Total Due: ' +
-        escHTML(stu.currency || "USD") +
+        escHTML(inv.currency) +
         " " +
-        escHTML(
-          stu.fee_amount && parseFloat(stu.fee_amount) > 0
-            ? parseFloat(stu.fee_amount).toLocaleString()
-            : "Not set",
-        ) +
+        escHTML(inv.amount !== null ? inv.amount.toLocaleString() : "Not set") +
         "</div>",
     );
     w.document.write(
