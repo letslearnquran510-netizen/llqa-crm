@@ -8,7 +8,7 @@ let html = header + '\n';
 
 // Add script tags for each module
 buildOrder.forEach(file => {
-  html += `<script src="${file}"></script>\n`;
+  html += `<script src="${file}?v=${Date.now()}"></script>\n`;
 });
 
 // Add the boot logic
