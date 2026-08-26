@@ -15,6 +15,40 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
     t.pay.paymentMethod ||
     (t.bank ? String(t.bank).split(" - ")[0] : "Unspecified");
 
+  const Icon3D = ({ icon: Icon, color, bgGradient, size = 20 }) =>
+    React.createElement(
+      "div",
+      {
+        style: {
+          width: size * 2.2,
+          height: size * 2.2,
+          borderRadius: "50%",
+          background:
+            bgGradient || `linear-gradient(135deg, ${color}33, ${color}11)`,
+          border: `1px solid ${color}44`,
+          boxShadow: `0 8px 16px ${color}33, inset 0 2px 4px rgba(255,255,255,0.2), inset 0 -2px 4px rgba(0,0,0,0.1)`,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          position: "relative",
+          overflow: "hidden",
+        },
+      },
+      React.createElement("div", {
+        style: {
+          position: "absolute",
+          inset: 0,
+          background: `linear-gradient(180deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0) 50%)`,
+          borderRadius: "50%",
+        },
+      }),
+      React.createElement(Icon, {
+        size: size,
+        color: color,
+        style: { filter: `drop-shadow(0 2px 4px rgba(0,0,0,0.3))` },
+      }),
+    );
+
   const SectionTitle = ({ title, icon: Icon, color }) =>
     React.createElement(
       "div",
@@ -22,27 +56,11 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
         style: {
           display: "flex",
           alignItems: "center",
-          gap: 10,
-          marginBottom: 16,
+          gap: 12,
+          marginBottom: 20,
         },
       },
-      React.createElement(
-        "div",
-        {
-          style: {
-            width: 32,
-            height: 32,
-            borderRadius: 8,
-            background: `linear-gradient(135deg, ${color}22, ${color}11)`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            border: `1px solid ${color}44`,
-            boxShadow: `0 2px 8px ${color}33`,
-          },
-        },
-        React.createElement(Icon, { size: 16, color: color }),
-      ),
+      React.createElement(Icon3D, { icon: Icon, color: color, size: 16 }),
       React.createElement(
         "h4",
         {
@@ -51,7 +69,7 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
             color: c.text,
             fontSize: 13,
             fontWeight: 800,
-            letterSpacing: 1,
+            letterSpacing: 1.2,
             textTransform: "uppercase",
           },
         },
@@ -72,13 +90,13 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
         style: {
           display: "flex",
           justifyContent: "space-between",
-          marginBottom: 12,
+          marginBottom: 14,
           alignItems: "center",
         },
       },
       React.createElement(
         "span",
-        { style: { color: c.textSec, fontSize: 12, fontWeight: 500 } },
+        { style: { color: c.textSec, fontSize: 13, fontWeight: 500 } },
         label,
       ),
       React.createElement(
@@ -86,11 +104,11 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
         {
           style: {
             color: color,
-            fontSize: 13,
+            fontSize: 14,
             fontWeight: isBold || highlight ? 700 : 600,
-            background: highlight ? `${color}11` : "transparent",
-            padding: highlight ? "4px 10px" : 0,
-            borderRadius: highlight ? 6 : 0,
+            background: highlight ? `${color}15` : "transparent",
+            padding: highlight ? "6px 12px" : 0,
+            borderRadius: highlight ? 8 : 0,
             border: highlight ? `1px solid ${color}33` : "none",
           },
         },
@@ -108,9 +126,9 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
-        background: "rgba(0,0,0,.75)",
-        backdropFilter: "blur(12px)",
-        padding: 20,
+        background: "rgba(0,0,0,.8)",
+        backdropFilter: "blur(16px)",
+        padding: "20px",
         overflowY: "auto",
       },
     },
@@ -119,12 +137,12 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
       {
         style: {
           background: c.bgCard,
-          borderRadius: 24,
-          width: 580,
+          borderRadius: 28,
+          width: 760,
           maxHeight: "92vh",
           overflowY: "auto",
           boxShadow:
-            "0 30px 60px -12px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.05) inset",
+            "0 40px 80px -20px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(255, 255, 255, 0.08) inset",
           display: "flex",
           flexDirection: "column",
           position: "relative",
@@ -134,34 +152,46 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
         "div",
         {
           style: {
-            background: `linear-gradient(145deg, ${c.bgDeep}, ${c.bgCard})`,
-            padding: "32px",
+            background: `linear-gradient(135deg, ${c.bgDeep}, ${c.bgCard})`,
+            padding: "40px",
             display: "flex",
             justifyContent: "space-between",
             alignItems: "flex-start",
             borderBottom: "1px solid " + c.border,
             position: "relative",
+            overflow: "hidden",
           },
         },
         React.createElement(
           "div",
-          { style: { display: "flex", gap: 18, alignItems: "center" } },
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: `linear-gradient(135deg, ${c.accent}, ${c.purple})`,
-                width: 56,
-                height: 56,
-                borderRadius: 18,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                boxShadow: `0 12px 24px ${c.accent}55, inset 0 2px 4px rgba(255,255,255,0.4)`,
-              },
+          {
+            style: {
+              position: "absolute",
+              top: -40,
+              right: -40,
+              opacity: 0.03,
+              transform: "rotate(-15deg)",
             },
-            React.createElement(BookOpen, { size: 26, color: "#fff" }),
-          ),
+          },
+          React.createElement(BookOpen, { size: 300, color: c.text }),
+        ),
+        React.createElement(
+          "div",
+          {
+            style: {
+              display: "flex",
+              gap: 24,
+              alignItems: "center",
+              position: "relative",
+              zIndex: 1,
+            },
+          },
+          React.createElement(Icon3D, {
+            icon: BookOpen,
+            color: "#fff",
+            bgGradient: `linear-gradient(135deg, ${c.accent}, ${c.purple})`,
+            size: 28,
+          }),
           React.createElement(
             "div",
             null,
@@ -170,9 +200,9 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
               {
                 style: {
                   color: c.text,
-                  fontSize: 24,
+                  fontSize: 32,
                   fontWeight: 900,
-                  letterSpacing: -0.5,
+                  letterSpacing: -1,
                   marginBottom: 4,
                 },
               },
@@ -184,9 +214,14 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
                 style: {
                   color: c.accent,
                   fontSize: 11,
-                  fontWeight: 700,
-                  letterSpacing: 1.5,
+                  fontWeight: 800,
+                  letterSpacing: 2,
                   textTransform: "uppercase",
+                  display: "inline-block",
+                  background: `${c.accent}22`,
+                  padding: "4px 10px",
+                  borderRadius: 20,
+                  border: `1px solid ${c.accent}44`,
                 },
               },
               "Official Payslip",
@@ -195,7 +230,7 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
         ),
         React.createElement(
           "div",
-          { style: { textAlign: "right" } },
+          { style: { textAlign: "right", position: "relative", zIndex: 1 } },
           React.createElement(
             "button",
             {
@@ -204,68 +239,72 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
                 background: c.bgDeep,
                 border: "1px solid " + c.border,
                 borderRadius: "50%",
-                width: 36,
-                height: 36,
+                width: 40,
+                height: 40,
                 cursor: "pointer",
                 color: c.textSec,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 marginLeft: "auto",
-                boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+                boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+                transition: "0.2s",
               },
             },
-            React.createElement(X, { size: 16 }),
+            React.createElement(X, { size: 20 }),
           ),
           React.createElement(
             "div",
             {
               style: {
                 color: c.textSec,
-                fontSize: 13,
-                fontWeight: 600,
-                marginTop: 16,
+                fontSize: 14,
+                fontWeight: 700,
+                marginTop: 24,
               },
             },
             monthName,
           ),
         ),
       ),
+
       React.createElement(
         "div",
-        { style: { padding: "32px", flex: 1 } },
+        { style: { padding: "40px", flex: 1, position: "relative" } },
+
         React.createElement(
           "div",
           {
             style: {
-              background: `linear-gradient(to right, ${c.bgDeep}, transparent)`,
-              borderRadius: 16,
-              padding: "24px",
-              marginBottom: 32,
+              background: `linear-gradient(90deg, ${c.bgDeep}, transparent)`,
+              borderRadius: 20,
+              padding: "28px",
+              marginBottom: 36,
               display: "flex",
               alignItems: "center",
-              gap: 24,
+              gap: 32,
               border: "1px solid " + c.border,
-              boxShadow: "inset 0 2px 4px rgba(255,255,255,0.02)",
+              boxShadow: "inset 0 2px 4px rgba(255,255,255,0.03)",
             },
           },
           React.createElement(
             "div",
             {
               style: {
-                width: 68,
-                height: 68,
+                width: 80,
+                height: 80,
                 borderRadius: "50%",
                 background: `linear-gradient(135deg, ${c.border}, ${c.bgCard})`,
                 border: "2px solid " + c.border,
-                boxShadow: "0 6px 16px rgba(0,0,0,0.2)",
+                boxShadow:
+                  "0 8px 24px rgba(0,0,0,0.3), inset 0 2px 4px rgba(255,255,255,0.1)",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 color: c.text,
-                fontSize: 24,
-                fontWeight: 800,
-                textShadow: "0 2px 4px rgba(0,0,0,0.2)",
+                fontSize: 28,
+                fontWeight: 900,
+                textShadow: "0 2px 4px rgba(0,0,0,0.3)",
               },
             },
             initials,
@@ -277,7 +316,7 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
                 flex: 1,
                 display: "grid",
                 gridTemplateColumns: "1.2fr 1fr",
-                gap: "16px",
+                gap: "20px",
               },
             },
             React.createElement(
@@ -288,17 +327,18 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
                 {
                   style: {
                     color: c.textSec,
-                    fontSize: 9,
+                    fontSize: 10,
                     textTransform: "uppercase",
-                    letterSpacing: 1,
-                    marginBottom: 4,
+                    letterSpacing: 1.5,
+                    marginBottom: 6,
+                    fontWeight: 700,
                   },
                 },
                 "Employee Name",
               ),
               React.createElement(
                 "div",
-                { style: { color: c.text, fontSize: 16, fontWeight: 800 } },
+                { style: { color: c.text, fontSize: 18, fontWeight: 800 } },
                 t.name,
               ),
             ),
@@ -310,17 +350,18 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
                 {
                   style: {
                     color: c.textSec,
-                    fontSize: 9,
+                    fontSize: 10,
                     textTransform: "uppercase",
-                    letterSpacing: 1,
-                    marginBottom: 4,
+                    letterSpacing: 1.5,
+                    marginBottom: 6,
+                    fontWeight: 700,
                   },
                 },
                 "Payment Method",
               ),
               React.createElement(
                 "div",
-                { style: { color: c.text, fontSize: 14, fontWeight: 600 } },
+                { style: { color: c.text, fontSize: 15, fontWeight: 700 } },
                 bankMethod,
               ),
             ),
@@ -332,17 +373,18 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
                 {
                   style: {
                     color: c.textSec,
-                    fontSize: 9,
+                    fontSize: 10,
                     textTransform: "uppercase",
-                    letterSpacing: 1,
-                    marginBottom: 4,
+                    letterSpacing: 1.5,
+                    marginBottom: 6,
+                    fontWeight: 700,
                   },
                 },
                 "Code & Shift",
               ),
               React.createElement(
                 "div",
-                { style: { color: c.text, fontSize: 14, fontWeight: 600 } },
+                { style: { color: c.text, fontSize: 15, fontWeight: 700 } },
                 `${t.code} • ${t.shift}`,
               ),
             ),
@@ -354,17 +396,18 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
                 {
                   style: {
                     color: c.textSec,
-                    fontSize: 9,
+                    fontSize: 10,
                     textTransform: "uppercase",
-                    letterSpacing: 1,
-                    marginBottom: 4,
+                    letterSpacing: 1.5,
+                    marginBottom: 6,
+                    fontWeight: 700,
                   },
                 },
                 "Joined Date",
               ),
               React.createElement(
                 "div",
-                { style: { color: c.text, fontSize: 14, fontWeight: 600 } },
+                { style: { color: c.text, fontSize: 15, fontWeight: 700 } },
                 t.joinDate || "N/A",
               ),
             ),
@@ -375,140 +418,134 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
           "div",
           {
             style: {
-              display: "flex",
-              flexDirection: "column",
-              gap: 24,
-              marginBottom: 32,
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: 32,
+              marginBottom: 40,
             },
           },
+
           React.createElement(
             "div",
-            {
-              style: {
-                border: "1px solid " + c.border,
-                borderRadius: 16,
-                padding: "24px",
-                background: `linear-gradient(to bottom right, ${c.successBg}15, transparent)`,
-              },
-            },
+            null,
             React.createElement(SectionTitle, {
               title: "Earnings",
               icon: DollarSign,
               color: c.success,
             }),
-            React.createElement(Row, {
-              label: "Basic Salary",
-              value: "Rs " + t.pay.baseSalary.toLocaleString(),
-            }),
-            t.pay.bonusBreakdown &&
-              React.createElement(
-                React.Fragment,
-                null,
-                t.pay.bonusBreakdown.tenure > 0 &&
-                  React.createElement(Row, {
-                    label: "Tenure Bonus",
-                    value:
-                      "+Rs " + t.pay.bonusBreakdown.tenure.toLocaleString(),
-                    color: c.success,
-                  }),
-                t.pay.bonusBreakdown.performance > 0 &&
-                  React.createElement(Row, {
-                    label: "Performance Bonus",
-                    value:
-                      "+Rs " +
-                      t.pay.bonusBreakdown.performance.toLocaleString(),
-                    color: c.success,
-                  }),
-                t.pay.bonusBreakdown.students > 0 &&
-                  React.createElement(Row, {
-                    label: "Student Count Bonus",
-                    value:
-                      "+Rs " + t.pay.bonusBreakdown.students.toLocaleString(),
-                    color: c.success,
-                  }),
-              ),
             React.createElement(
               "div",
-              {
-                style: {
-                  borderTop: "1px dashed " + c.border,
-                  marginTop: 16,
-                  paddingTop: 16,
-                },
-              },
+              { style: { padding: "0 8px" } },
               React.createElement(Row, {
-                label: "TOTAL GROSS EARNINGS",
-                value: "Rs " + t.pay.gross.toLocaleString(),
-                color: c.success,
-                isBold: true,
-                highlight: true,
+                label: "Basic Salary",
+                value: "Rs " + t.pay.baseSalary.toLocaleString(),
               }),
+              t.pay.bonusBreakdown &&
+                React.createElement(
+                  React.Fragment,
+                  null,
+                  t.pay.bonusBreakdown.tenure > 0 &&
+                    React.createElement(Row, {
+                      label: "Tenure Bonus",
+                      value:
+                        "+Rs " + t.pay.bonusBreakdown.tenure.toLocaleString(),
+                      color: c.success,
+                    }),
+                  t.pay.bonusBreakdown.performance > 0 &&
+                    React.createElement(Row, {
+                      label: "Performance Bonus",
+                      value:
+                        "+Rs " +
+                        t.pay.bonusBreakdown.performance.toLocaleString(),
+                      color: c.success,
+                    }),
+                  t.pay.bonusBreakdown.students > 0 &&
+                    React.createElement(Row, {
+                      label: "Student Count Bonus",
+                      value:
+                        "+Rs " + t.pay.bonusBreakdown.students.toLocaleString(),
+                      color: c.success,
+                    }),
+                ),
+              React.createElement(
+                "div",
+                {
+                  style: {
+                    borderTop: "2px dotted " + c.border,
+                    marginTop: 20,
+                    paddingTop: 20,
+                  },
+                },
+                React.createElement(Row, {
+                  label: "GROSS EARNINGS",
+                  value: "Rs " + t.pay.gross.toLocaleString(),
+                  color: c.success,
+                  isBold: true,
+                  highlight: true,
+                }),
+              ),
             ),
           ),
 
           React.createElement(
             "div",
-            {
-              style: {
-                border: "1px solid " + c.border,
-                borderRadius: 16,
-                padding: "24px",
-                background: `linear-gradient(to bottom right, ${c.dangerBg}15, transparent)`,
-              },
-            },
+            null,
             React.createElement(SectionTitle, {
               title: "Deductions",
               icon: Receipt,
               color: c.danger,
             }),
-            t.pay.fine > 0 &&
-              React.createElement(Row, {
-                label: "Attendance / QC Fines",
-                value: "-Rs " + t.pay.fine.toLocaleString(),
-                color: c.danger,
-              }),
-            t.pay.advance > 0 &&
-              React.createElement(Row, {
-                label: "Advance Deductions",
-                value: "-Rs " + t.pay.advance.toLocaleString(),
-                color: c.danger,
-              }),
-            t.pay.tax > 0 &&
-              React.createElement(Row, {
-                label: "Income Tax",
-                value: "-Rs " + t.pay.tax.toLocaleString(),
-                color: c.danger,
-              }),
-            t.pay.deductions === 0 &&
+            React.createElement(
+              "div",
+              { style: { padding: "0 8px" } },
+              t.pay.fine > 0 &&
+                React.createElement(Row, {
+                  label: "Attendance / QC Fines",
+                  value: "-Rs " + t.pay.fine.toLocaleString(),
+                  color: c.danger,
+                }),
+              t.pay.advance > 0 &&
+                React.createElement(Row, {
+                  label: "Advance Deductions",
+                  value: "-Rs " + t.pay.advance.toLocaleString(),
+                  color: c.danger,
+                }),
+              t.pay.tax > 0 &&
+                React.createElement(Row, {
+                  label: "Income Tax",
+                  value: "-Rs " + t.pay.tax.toLocaleString(),
+                  color: c.danger,
+                }),
+              t.pay.deductions === 0 &&
+                React.createElement(
+                  "div",
+                  {
+                    style: {
+                      color: c.textMuted,
+                      fontSize: 13,
+                      fontStyle: "italic",
+                      padding: "10px 0",
+                    },
+                  },
+                  "No deductions this month.",
+                ),
               React.createElement(
                 "div",
                 {
                   style: {
-                    color: c.textMuted,
-                    fontSize: 12,
-                    fontStyle: "italic",
-                    textAlign: "center",
-                    padding: "10px 0",
+                    borderTop: "2px dotted " + c.border,
+                    marginTop: 20,
+                    paddingTop: 20,
                   },
                 },
-                "No deductions this month.",
+                React.createElement(Row, {
+                  label: "TOTAL DEDUCTIONS",
+                  value: "-Rs " + t.pay.deductions.toLocaleString(),
+                  color: c.danger,
+                  isBold: true,
+                  highlight: true,
+                }),
               ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  borderTop: "1px dashed " + c.border,
-                  marginTop: 16,
-                  paddingTop: 16,
-                },
-              },
-              React.createElement(Row, {
-                label: "TOTAL DEDUCTIONS",
-                value: "-Rs " + t.pay.deductions.toLocaleString(),
-                color: c.danger,
-                isBold: true,
-                highlight: true,
-              }),
             ),
           ),
         ),
@@ -518,13 +555,13 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
           {
             style: {
               background: `linear-gradient(135deg, ${c.accent}, ${c.purple})`,
-              borderRadius: 20,
-              padding: "32px",
-              marginBottom: 32,
+              borderRadius: 24,
+              padding: "40px",
+              marginBottom: 40,
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
-              boxShadow: `0 16px 32px ${c.accent}45, inset 0 2px 4px rgba(255,255,255,0.2)`,
+              boxShadow: `0 20px 40px ${c.accent}55, inset 0 2px 4px rgba(255,255,255,0.3)`,
               color: "#fff",
               position: "relative",
               overflow: "hidden",
@@ -535,12 +572,13 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
             {
               style: {
                 position: "absolute",
-                top: -20,
+                top: -30,
                 right: -20,
-                opacity: 0.1,
+                opacity: 0.15,
+                transform: "rotate(10deg)",
               },
             },
-            React.createElement(Award, { size: 140, color: "#fff" }),
+            React.createElement(Award, { size: 180, color: "#fff" }),
           ),
           React.createElement(
             "div",
@@ -549,12 +587,12 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
               "div",
               {
                 style: {
-                  fontSize: 11,
+                  fontSize: 13,
                   textTransform: "uppercase",
-                  letterSpacing: 2,
+                  letterSpacing: 2.5,
                   opacity: 0.9,
-                  marginBottom: 8,
-                  fontWeight: 700,
+                  marginBottom: 12,
+                  fontWeight: 800,
                 },
               },
               "Net Salary Payable",
@@ -563,10 +601,11 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
               "div",
               {
                 style: {
-                  fontSize: 42,
+                  fontSize: 52,
                   fontWeight: 900,
-                  textShadow: "0 4px 12px rgba(0,0,0,0.3)",
-                  letterSpacing: -1,
+                  textShadow: "0 8px 16px rgba(0,0,0,0.4)",
+                  letterSpacing: -1.5,
+                  lineHeight: 1,
                 },
               },
               "Rs ",
@@ -578,30 +617,30 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
             {
               style: {
                 background: "rgba(255,255,255,0.15)",
-                backdropFilter: "blur(12px)",
-                padding: "12px 24px",
-                borderRadius: 32,
-                border: "1px solid rgba(255,255,255,0.4)",
+                backdropFilter: "blur(20px)",
+                padding: "16px 28px",
+                borderRadius: 40,
+                border: "1px solid rgba(255,255,255,0.5)",
                 display: "flex",
                 alignItems: "center",
-                gap: 10,
+                gap: 12,
                 position: "relative",
                 zIndex: 1,
-                boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+                boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
               },
             },
             React.createElement(t.pay.status === "paid" ? CheckCircle : Clock, {
-              size: 18,
+              size: 24,
               color: "#fff",
             }),
             React.createElement(
               "span",
               {
                 style: {
-                  fontSize: 14,
-                  fontWeight: 800,
+                  fontSize: 16,
+                  fontWeight: 900,
                   textTransform: "uppercase",
-                  letterSpacing: 1.5,
+                  letterSpacing: 2,
                 },
               },
               t.pay.status,
@@ -616,15 +655,15 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
               display: "flex",
               justifyContent: "space-between",
               alignItems: "center",
-              paddingTop: 24,
+              paddingTop: 32,
               borderTop: "1px solid " + c.border,
               color: c.textSec,
-              fontSize: 11,
+              fontSize: 12,
             },
           },
           React.createElement(
             "div",
-            { style: { display: "flex", gap: 32 } },
+            { style: { display: "flex", gap: 40 } },
             React.createElement(
               "div",
               null,
@@ -632,17 +671,18 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
                 "div",
                 {
                   style: {
-                    fontSize: 9,
+                    fontSize: 10,
                     textTransform: "uppercase",
-                    letterSpacing: 1,
-                    marginBottom: 4,
+                    letterSpacing: 1.5,
+                    marginBottom: 6,
+                    fontWeight: 600,
                   },
                 },
                 "Approved By",
               ),
               React.createElement(
                 "div",
-                { style: { color: c.text, fontWeight: 700, fontSize: 12 } },
+                { style: { color: c.text, fontWeight: 800, fontSize: 14 } },
                 t.pay.approvedBy || "Pending",
               ),
             ),
@@ -653,17 +693,18 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
                 "div",
                 {
                   style: {
-                    fontSize: 9,
+                    fontSize: 10,
                     textTransform: "uppercase",
-                    letterSpacing: 1,
-                    marginBottom: 4,
+                    letterSpacing: 1.5,
+                    marginBottom: 6,
+                    fontWeight: 600,
                   },
                 },
                 "Paid Date",
               ),
               React.createElement(
                 "div",
-                { style: { color: c.text, fontWeight: 700, fontSize: 12 } },
+                { style: { color: c.text, fontWeight: 800, fontSize: 14 } },
                 t.pay.paidDate || "—",
               ),
             ),
@@ -673,40 +714,49 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
             { style: { textAlign: "right" } },
             React.createElement(
               "div",
-              { style: { marginBottom: 6, fontWeight: 600, color: c.text } },
+              {
+                style: {
+                  marginBottom: 8,
+                  fontWeight: 800,
+                  color: c.text,
+                  fontSize: 13,
+                  letterSpacing: 0.5,
+                },
+              },
               "LLQA Academy",
             ),
             React.createElement(
               "div",
-              { style: { fontSize: 10, opacity: 0.8 } },
-              "Computer-generated \u2022 No signature required",
+              { style: { fontSize: 11, opacity: 0.7, fontStyle: "italic" } },
+              "Computer-generated payslip \u2022 No signature required",
             ),
           ),
         ),
       ),
+
       React.createElement(
         "div",
         {
           style: {
             background: `linear-gradient(to top, ${c.bgDeep}, ${c.bgCard})`,
             borderTop: "1px solid " + c.border,
-            padding: "20px 32px",
+            padding: "24px 40px",
             display: "flex",
             justifyContent: "flex-end",
-            gap: 14,
-            borderBottomLeftRadius: 24,
-            borderBottomRightRadius: 24,
+            gap: 16,
+            borderBottomLeftRadius: 28,
+            borderBottomRightRadius: 28,
           },
         },
         React.createElement(
           Btn,
           { variant: "outline", onClick: onClose },
-          "Close",
+          "Close Window",
         ),
         React.createElement(
           Btn,
           { icon: Download, onClick: () => window.print && window.print() },
-          "Download PDF",
+          "Download Official PDF",
         ),
       ),
     ),
