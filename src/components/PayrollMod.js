@@ -21,6 +21,8 @@ const PayrollMod = ({ user, teachers: propTeachers, qcViolations }) => {
         rec = {
           id: t.id + "_" + selectedMonth,
           month: selectedMonth,
+          baseSalary: t.salary || 0,
+          bonusBreakdown: b,
           gross: (t.salary || 0) + (b.total || 0),
           net: (t.salary || 0) + (b.total || 0) - autoFine,
           fine: autoFine,
