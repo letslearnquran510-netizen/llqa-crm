@@ -51,8 +51,8 @@ const PayslipModal = ({ t, onClose, selectedMonth, appSettings }) => {
   .row { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 15px; }
   .row-label { color: #333; font-weight: 600; }
   .row-val { font-weight: 800; }
-  .earn-val { color: #006838; }
-  .ded-val { color: #c49a00; }
+  .earn-val { color: #000; }
+  .ded-val { color: #000; }
   
   .total-row { display: flex; justify-content: space-between; margin-top: 15px; padding-top: 15px; border-top: 2px dashed #aaa; font-size: 18px; font-weight: 900; }
   
