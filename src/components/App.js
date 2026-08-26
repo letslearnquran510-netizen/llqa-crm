@@ -416,7 +416,7 @@ function App() {
       case "finance":
         return React.createElement(FinanceMod, null);
       case "parent":
-        return React.createElement(ParentMod, {
+        return React.createElement(ParentMod, { arPayments: arPayments,
           user: user,
           students: students,
           setStudents: setStudents,

@@ -1,5 +1,5 @@
 const ParentMod = ({
-  user,
+  user, arPayments,
   students,
   setStudents,
   teachers,
@@ -85,11 +85,14 @@ const ParentMod = ({
     const now = new Date();
     const months = [];
     const cursor = new Date(dor.getFullYear(), dor.getMonth(), 1);
+    const pays = arPayments || [];
+    const studentPays = pays.filter(p => String(p.studentId) === String(stu.id));
     while (cursor <= now) {
       const ym = cursor.getFullYear() + "-" + String(cursor.getMonth() + 1).padStart(2, "0");
       const isCurrent = cursor.getFullYear() === now.getFullYear() && cursor.getMonth() === now.getMonth();
       const monthsAgo = (now.getFullYear() - cursor.getFullYear()) * 12 + (now.getMonth() - cursor.getMonth());
-      let status = stu.fee === "overdue" && monthsAgo <= 1 ? "overdue" : monthsAgo > 0 ? "paid" : stu.fee === "paid" ? "paid" : "pending";
+      const hasPaid = studentPays.some(p => p.paidDate && p.paidDate.startsWith(ym));
+      let status = hasPaid ? "paid" : (monthsAgo > 0 ? "overdue" : "pending");
       months.push({
         id: ym,
         date: todayPK(cursor),

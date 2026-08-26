@@ -23,94 +23,169 @@ const PayslipModal = ({ t, onClose, selectedMonth }) => {
 <head>
 <title>Payslip - ${t.name}</title>
 <style>
-  body { font-family: 'Segoe UI', Arial, sans-serif; padding: 40px; color: #1f2937; background: #fff; }
-  .header { display: flex; justify-content: space-between; border-bottom: 2px solid #3b82f6; padding-bottom: 20px; margin-bottom: 30px; }
-  .brand { font-size: 28px; font-weight: 900; color: #1e3a8a; letter-spacing: -1px; }
-  .meta { color: #6b7280; font-size: 13px; margin-top: 4px; }
-  .title { font-size: 24px; font-weight: 800; color: #3b82f6; text-align: right; text-transform: uppercase; letter-spacing: 2px; }
-  .emp-box { background: #f3f4f6; border-radius: 12px; padding: 24px; margin-bottom: 30px; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; border: 1px solid #e5e7eb; }
-  .emp-label { font-size: 10px; text-transform: uppercase; color: #6b7280; font-weight: 700; letter-spacing: 1px; margin-bottom: 4px; }
-  .emp-val { font-size: 15px; font-weight: 700; color: #1f2937; }
+  @media print {
+    @page { margin: 20mm; }
+  }
+  body { 
+    font-family: "Times New Roman", Times, serif; 
+    padding: 0; 
+    color: #000; 
+    background: #fff; 
+    line-height: 1.6;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+  .header { 
+    text-align: center; 
+    border-bottom: 2px solid #000; 
+    padding-bottom: 20px; 
+    margin-bottom: 40px; 
+    padding-top: 20px;
+  }
+  .brand { font-size: 32px; font-weight: bold; text-transform: uppercase; letter-spacing: 2px; }
+  .brand-sub { font-size: 14px; font-style: italic; color: #333; }
+  .doc-title { font-size: 20px; font-weight: bold; text-decoration: underline; margin-top: 20px; text-transform: uppercase; }
   
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-bottom: 30px; }
+  .emp-table { 
+    width: 100%; 
+    border-collapse: collapse; 
+    margin-bottom: 40px; 
+    font-size: 14px;
+  }
+  .emp-table th, .emp-table td { 
+    border: 1px solid #000; 
+    padding: 12px; 
+    text-align: left; 
+  }
+  .emp-table th { background: #f9f9f9; width: 25%; }
   
-  .section-title { font-size: 14px; font-weight: 800; text-transform: uppercase; margin-bottom: 16px; letter-spacing: 1px; padding-bottom: 8px; border-bottom: 2px solid #e5e7eb; }
-  .earn-title { color: #10b981; border-color: #10b981; }
-  .ded-title { color: #ef4444; border-color: #ef4444; }
+  .pay-table { 
+    width: 100%; 
+    border-collapse: collapse; 
+    margin-bottom: 40px; 
+  }
+  .pay-table th, .pay-table td { 
+    border: 1px solid #000; 
+    padding: 12px; 
+  }
+  .pay-table th { 
+    background: #f0f0f0; 
+    text-transform: uppercase; 
+    font-weight: bold; 
+    text-align: center;
+  }
+  .pay-table td:nth-child(2), .pay-table td:nth-child(3) {
+    text-align: right;
+  }
+  .pay-total { font-weight: bold; background: #f9f9f9; }
   
-  .row { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 13px; }
-  .row-label { color: #4b5563; font-weight: 500; }
-  .row-val { font-weight: 700; }
-  .earn-val { color: #059669; }
-  .ded-val { color: #dc2626; }
+  .net-section { 
+    border: 2px solid #000; 
+    padding: 20px; 
+    text-align: center; 
+    margin-bottom: 60px;
+    background: #fbfbfb;
+  }
+  .net-title { font-size: 16px; text-transform: uppercase; font-weight: bold; margin-bottom: 10px; }
+  .net-amount { font-size: 32px; font-weight: bold; text-decoration: underline; }
   
-  .total-row { display: flex; justify-content: space-between; margin-top: 16px; padding-top: 16px; border-top: 2px dashed #d1d5db; font-size: 14px; font-weight: 800; }
+  .signatures { 
+    display: flex; 
+    justify-content: space-between; 
+    margin-top: 80px; 
+  }
+  .sig-block { text-align: center; width: 200px; }
+  .sig-line { border-top: 1px solid #000; margin-bottom: 10px; }
   
-  .net-box { background: linear-gradient(135deg, #1e3a8a, #3b82f6); color: #fff; border-radius: 16px; padding: 30px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 40px; box-shadow: 0 10px 25px rgba(59, 130, 246, 0.3); }
-  .net-label { font-size: 12px; text-transform: uppercase; letter-spacing: 2px; opacity: 0.9; margin-bottom: 8px; font-weight: 700; }
-  .net-val { font-size: 42px; font-weight: 900; letter-spacing: -1px; }
-  .status-badge { background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4); padding: 10px 20px; border-radius: 30px; font-weight: 800; text-transform: uppercase; letter-spacing: 1.5px; font-size: 14px; }
-  
-  .footer { display: flex; justify-content: space-between; border-top: 1px solid #e5e7eb; padding-top: 20px; font-size: 11px; color: #6b7280; }
-  .sig-line { width: 150px; border-top: 1px solid #1f2937; margin-top: 40px; margin-bottom: 8px; }
+  .footer { 
+    text-align: center; 
+    font-size: 11px; 
+    color: #555; 
+    margin-top: 50px; 
+    border-top: 1px solid #ccc; 
+    padding-top: 10px; 
+  }
 </style>
 </head>
 <body>
   <div class="header">
-    <div>
-      <div class="brand">LLQA Academy</div>
-      <div class="meta">Official Employee Payslip</div>
-    </div>
-    <div>
-      <div class="title">PAYSLIP</div>
-      <div class="meta" style="text-align: right; font-weight: 700;">${monthName}</div>
-    </div>
+    <div class="brand">LLQA Academy</div>
+    <div class="brand-sub">Lets Learn Quran - Official HR & Payroll Department</div>
+    <div class="doc-title">OFFICIAL PAYSLIP</div>
+    <div style="margin-top: 10px; font-weight: bold;">Salary Month: ${monthName}</div>
   </div>
   
-  <div class="emp-box">
-    <div><div class="emp-label">Employee Name</div><div class="emp-val">${t.name}</div></div>
-    <div><div class="emp-label">Payment Method</div><div class="emp-val">${bankMethod}</div></div>
-    <div><div class="emp-label">Code & Shift</div><div class="emp-val">${t.code} &bull; ${t.shift} Shift</div></div>
-    <div><div class="emp-label">Joined Date</div><div class="emp-val">${t.joinDate || "N/A"}</div></div>
+  <table class="emp-table">
+    <tr>
+      <th>Employee Name</th>
+      <td><strong>${t.name}</strong></td>
+      <th>Employee Code</th>
+      <td>${t.code}</td>
+    </tr>
+    <tr>
+      <th>Shift / Role</th>
+      <td>${t.shift} Shift</td>
+      <th>Joined Date</th>
+      <td>${t.joinDate || "N/A"}</td>
+    </tr>
+    <tr>
+      <th>Payment Method</th>
+      <td>${bankMethod}</td>
+      <th>Payment Status</th>
+      <td style="text-transform: uppercase; font-weight: bold;">${t.pay.status}</td>
+    </tr>
+  </table>
+  
+  <table class="pay-table">
+    <thead>
+      <tr>
+        <th style="text-align: left; width: 60%;">Description</th>
+        <th style="width: 20%;">Earnings (Rs)</th>
+        <th style="width: 20%;">Deductions (Rs)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Basic Salary</td>
+        <td>${t.pay.baseSalary.toLocaleString()}</td>
+        <td></td>
+      </tr>
+      ${t.pay.bonusBreakdown && t.pay.bonusBreakdown.tenure > 0 ? `<tr><td>Tenure Bonus</td><td>${t.pay.bonusBreakdown.tenure.toLocaleString()}</td><td></td></tr>` : ""}
+      ${t.pay.bonusBreakdown && t.pay.bonusBreakdown.performance > 0 ? `<tr><td>Performance Bonus</td><td>${t.pay.bonusBreakdown.performance.toLocaleString()}</td><td></td></tr>` : ""}
+      ${t.pay.bonusBreakdown && t.pay.bonusBreakdown.students > 0 ? `<tr><td>Student Count Bonus</td><td>${t.pay.bonusBreakdown.students.toLocaleString()}</td><td></td></tr>` : ""}
+      
+      ${t.pay.fine > 0 ? `<tr><td>Attendance / QC Fines</td><td></td><td>${t.pay.fine.toLocaleString()}</td></tr>` : ""}
+      ${t.pay.advance > 0 ? `<tr><td>Advance Deductions</td><td></td><td>${t.pay.advance.toLocaleString()}</td></tr>` : ""}
+      ${t.pay.tax > 0 ? `<tr><td>Income Tax</td><td></td><td>${t.pay.tax.toLocaleString()}</td></tr>` : ""}
+      
+      <tr class="pay-total">
+        <td style="text-align: right;"><strong>TOTALS</strong></td>
+        <td><strong>${t.pay.gross.toLocaleString()}</strong></td>
+        <td><strong>${t.pay.deductions.toLocaleString()}</strong></td>
+      </tr>
+    </tbody>
+  </table>
+  
+  <div class="net-section">
+    <div class="net-title">Net Salary Payable</div>
+    <div class="net-amount">Rs ${t.pay.net.toLocaleString()}</div>
   </div>
   
-  <div class="grid-2">
-    <div>
-      <div class="section-title earn-title">Earnings</div>
-      <div class="row"><span class="row-label">Basic Salary</span><span class="row-val earn-val">Rs ${t.pay.baseSalary.toLocaleString()}</span></div>
-      ${t.pay.bonusBreakdown && t.pay.bonusBreakdown.tenure > 0 ? `<div class="row"><span class="row-label">Tenure Bonus</span><span class="row-val earn-val">+Rs ${t.pay.bonusBreakdown.tenure.toLocaleString()}</span></div>` : ""}
-      ${t.pay.bonusBreakdown && t.pay.bonusBreakdown.performance > 0 ? `<div class="row"><span class="row-label">Performance Bonus</span><span class="row-val earn-val">+Rs ${t.pay.bonusBreakdown.performance.toLocaleString()}</span></div>` : ""}
-      ${t.pay.bonusBreakdown && t.pay.bonusBreakdown.students > 0 ? `<div class="row"><span class="row-label">Student Count Bonus</span><span class="row-val earn-val">+Rs ${t.pay.bonusBreakdown.students.toLocaleString()}</span></div>` : ""}
-      <div class="total-row"><span class="row-label" style="color:#10b981;">TOTAL GROSS</span><span class="row-val earn-val">Rs ${t.pay.gross.toLocaleString()}</span></div>
+  <div class="signatures">
+    <div class="sig-block">
+      <div class="sig-line"></div>
+      <strong>Employee Signature</strong>
     </div>
-    
-    <div>
-      <div class="section-title ded-title">Deductions</div>
-      ${t.pay.fine > 0 ? `<div class="row"><span class="row-label">Attendance / QC Fines</span><span class="row-val ded-val">-Rs ${t.pay.fine.toLocaleString()}</span></div>` : ""}
-      ${t.pay.advance > 0 ? `<div class="row"><span class="row-label">Advance Deductions</span><span class="row-val ded-val">-Rs ${t.pay.advance.toLocaleString()}</span></div>` : ""}
-      ${t.pay.tax > 0 ? `<div class="row"><span class="row-label">Income Tax</span><span class="row-val ded-val">-Rs ${t.pay.tax.toLocaleString()}</span></div>` : ""}
-      ${t.pay.deductions === 0 ? `<div style="font-size:12px; color:#9ca3af; font-style:italic;">No deductions this month.</div>` : ""}
-      <div class="total-row"><span class="row-label" style="color:#ef4444;">TOTAL DEDUCTIONS</span><span class="row-val ded-val">-Rs ${t.pay.deductions.toLocaleString()}</span></div>
+    <div class="sig-block">
+      <div class="sig-line"></div>
+      <strong>Authorized Signatory</strong><br>
+      <span style="font-size: 12px;">${t.pay.approvedBy || "HR Department"}</span>
     </div>
-  </div>
-  
-  <div class="net-box">
-    <div>
-      <div class="net-label">Net Salary Payable</div>
-      <div class="net-val">Rs ${t.pay.net.toLocaleString()}</div>
-    </div>
-    <div class="status-badge">${t.pay.status}</div>
   </div>
   
   <div class="footer">
-    <div>
-      <div style="font-weight:700; margin-bottom: 4px; color:#1f2937;">Approved By: ${t.pay.approvedBy || "Pending"}</div>
-      <div>Paid Date: ${t.pay.paidDate || "—"}</div>
-    </div>
-    <div style="text-align: right;">
-      <div style="font-weight: 800; color: #1e3a8a; font-size: 13px; margin-bottom: 4px;">LLQA Academy</div>
-      <div style="font-style: italic;">Computer-generated official document &bull; No signature required</div>
-    </div>
+    This is a computer-generated official document by LLQA Academy HR. <br>
+    Date Generated: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}
   </div>
   
   <script>window.onload = function() { window.print(); }</script>
