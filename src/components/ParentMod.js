@@ -8,6 +8,8 @@ const ParentMod = ({
   setDailyProgress,
   parentNotes,
   setParentNotes,
+  teacherFeedback,
+  setTeacherFeedback,
 }) => {
   const isParent = user && user.role === "parent";
   const allStudents = students || [];
