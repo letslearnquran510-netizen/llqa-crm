@@ -1,5 +1,6 @@
 const StudentsMod = ({
   user,
+  teacherFeedback,
   teachers: appTeachers,
   setTeachers: setAppTeachers,
   students: propStudents,
@@ -1468,6 +1469,7 @@ const StudentsMod = ({
   }, "Re-enroll"))))))))), modal && modal.type === "view" && React.createElement(StudentDetailC, {
     s: modal.data,
     onClose: () => setModal(null),
+      teacherFeedback: teacherFeedback,
     onP: () => {
       const s = modal.data;
       setModal(null);

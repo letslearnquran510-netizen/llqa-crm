@@ -367,6 +367,7 @@ function App() {
           setTeachers: setTeachers,
           leaves: leaves,
           setLeaves: setLeaves,
+            teacherFeedback: teacherFeedback,
           teamLeads: teamLeads
         });
       case "timetable":
@@ -378,10 +379,13 @@ function App() {
           setStudents: scSetStudents,
           dailyProgress: dailyProgress,
           setDailyProgress: setDailyProgress,
-          arPayments: arPayments
+          arPayments: arPayments,
+            teacherFeedback: teacherFeedback,
+            setTeacherFeedback: setTeacherFeedback
         });
       case "students":
         return React.createElement(StudentsMod, {
+            teacherFeedback: teacherFeedback,
           user: user,
           teachers: scTeachers,
           setTeachers: scSetTeachers,
@@ -418,6 +422,8 @@ function App() {
         return React.createElement(FinanceMod, null);
       case "parent":
         return React.createElement(ParentMod, { arPayments: arPayments,
+            teacherFeedback: teacherFeedback,
+            setTeacherFeedback: setTeacherFeedback,
           user: user,
           students: students,
           setStudents: setStudents,
@@ -454,6 +460,8 @@ function App() {
         return React.createElement(AccountsRMod, {
           students: students,
           arPayments: arPayments,
+            teacherFeedback: teacherFeedback,
+            setTeacherFeedback: setTeacherFeedback,
           setArPayments: setArPayments
         });
       case "ap":
@@ -484,6 +492,8 @@ function App() {
           students: students,
           teachers: teachers,
           arPayments: arPayments,
+            teacherFeedback: teacherFeedback,
+            setTeacherFeedback: setTeacherFeedback,
           apLiabilities: apLiabilities,
           salesReferrals: salesReferrals,
           leaves: leaves,

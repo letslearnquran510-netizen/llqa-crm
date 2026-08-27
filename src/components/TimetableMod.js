@@ -6,14 +6,18 @@ const TimetableMod = ({
   setStudents,
   dailyProgress,
   setDailyProgress,
-  arPayments
+  arPayments,
+  teacherFeedback,
+  setTeacherFeedback
 }) => {
   const ttStage = cell => {
     if (!cell || !cell.s) return null;
     const _st = (students || []).find(x => x.name === cell.s && (x.trial || x.fee === "trial"));
     if (!_st) return null;
     const _pr = _st.attended || 0;
-    const _paid = _st.fee === "paid" || (arPayments || []).some(p => String(p.studentId) === String(_st.id));
+    const _paid = _st.fee === "paid" || (arPayments,
+  teacherFeedback,
+  setTeacherFeedback || []).some(p => String(p.studentId) === String(_st.id));
     if (_paid) return null;
     if (_pr >= 3) return {
       bg: "color-mix(in srgb, var(--warn) 35%, transparent)",

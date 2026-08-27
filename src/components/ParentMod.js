@@ -1704,6 +1704,7 @@ const ParentMod = ({
         ["attendance", "Attendance"],
         ["invoices", "Invoices"],
         ["notes", "Notes (" + myNotes.length + ")"],
+        ["feedback", "Teacher Feedback"],
       ].map(([k, l]) =>
         React.createElement(
           "button",
@@ -1779,19 +1780,19 @@ const ParentMod = ({
           }),
           React.createElement(SC, {
             label: "Fee Status",
-            value: (stu.fee || "-").toUpperCase(),
+            value: (invoiceHistory[0] ? invoiceHistory[0].status : "PENDING").toUpperCase(),
             color:
-              stu.fee === "paid"
+              invoiceHistory[0] && invoiceHistory[0].status === "paid"
                 ? c.success
-                : stu.fee === "overdue"
+                : invoiceHistory[0] && invoiceHistory[0].status === "overdue"
                   ? c.danger
                   : c.warn,
             sub:
-              (stu.currency || "USD") +
+              (invoiceHistory[0] ? invoiceHistory[0].currency : "USD") +
               " " +
-              (stu.fee_amount && parseFloat(stu.fee_amount) > 0
-                ? parseFloat(stu.fee_amount).toLocaleString()
-                : "not set") +
+              (invoiceHistory[0] && invoiceHistory[0].amount !== null
+                ? invoiceHistory[0].amount.toLocaleString()
+                : "Not set") +
               "/month",
           }),
         ),

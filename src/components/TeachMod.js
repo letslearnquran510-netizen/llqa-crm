@@ -1,4 +1,5 @@
 const TeachMod = ({
+  teacherFeedback,
   teachers,
   setTeachers,
   leaves,
@@ -1158,6 +1159,7 @@ const TeachMod = ({
   }, modal.type === "add" ? "Add" : "Save")))), modal && modal.type === "view" && React.createElement(ViewDetail, {
     t: modal.data,
     tLeaves: leaves.filter(l => l.teacherId === modal.data.id),
+      teacherFeedback: teacherFeedback,
     onClose: () => setModal(null),
     onEdit: () => {
       const d = modal.data;
