@@ -24,7 +24,7 @@ const ParentMod = ({
     : allStudents.find((s) => s.id === selectedStuId);
   const [tab, setTab] = useState("overview");
   const [noteText, setNoteText] = useState("");
-  const [fbCat, setFbCat] = useState("Excellent Progress");
+  const [fbCat, setFbCat] = useState("Excellent Teaching");
   const [fbCustom, setFbCustom] = useState("");
   const [invoiceModal, setInvoiceModal] = useState(null);
   const [dayDetail, setDayDetail] = useState(null);
@@ -95,7 +95,7 @@ const ParentMod = ({
     };
     setTeacherFeedback([newFb, ...(teacherFeedback || [])]);
     setFbCustom("");
-    setFbCat("Excellent Progress");
+    setFbCat("Excellent Teaching");
   };
   const deleteFeedback = (id) => {
     if (!confirm("Delete this feedback?")) return;
@@ -3533,53 +3533,38 @@ const ParentMod = ({
               },
               React.createElement(
                 "option",
-                { value: "Excellent Progress" },
-                "Excellent Progress",
+                { value: "Excellent Teaching" },
+                "Excellent Teaching",
               ),
               React.createElement(
                 "option",
-                { value: "Very Good Recitation" },
-                "Very Good Recitation",
+                { value: "Highly Professional" },
+                "Highly Professional",
               ),
               React.createElement(
                 "option",
-                { value: "Strong Memorization" },
-                "Strong Memorization",
+                { value: "Engaging and Supportive" },
+                "Engaging and Supportive",
               ),
               React.createElement(
                 "option",
-                { value: "Consistent & Punctual" },
-                "Consistent & Punctual",
+                { value: "Always Punctual" },
+                "Always Punctual",
               ),
               React.createElement(
                 "option",
-                { value: "Needs Focus" },
-                "Needs Focus",
+                { value: "Teacher is Often Late" },
+                "Teacher is Often Late",
               ),
               React.createElement(
                 "option",
-                { value: "Needs More Practice at Home" },
-                "Needs More Practice at Home",
+                { value: "Needs More Engaging Classes" },
+                "Needs More Engaging Classes",
               ),
               React.createElement(
                 "option",
-                { value: "Tajweed Needs Improvement" },
-                "Tajweed Needs Improvement",
-              ),
-              React.createElement(
-                "option",
-                { value: "Lacking Attention in Class" },
-                "Lacking Attention in Class",
-              ),
-              React.createElement(
-                "option",
-                { value: "Attendance Issue" },
-                "Attendance Issue",
-              ),
-              React.createElement(
-                "option",
-                { value: "Behavioral Issue" },
-                "Behavioral Issue",
+                { value: "Communication Needs Improvement" },
+                "Communication Needs Improvement",
               ),
               React.createElement(
                 "option",
