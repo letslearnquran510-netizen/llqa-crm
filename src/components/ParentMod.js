@@ -1780,7 +1780,10 @@ const ParentMod = ({
           }),
           React.createElement(SC, {
             label: "Fee Status",
-            value: (invoiceHistory[0] ? invoiceHistory[0].status : "PENDING").toUpperCase(),
+            value: (invoiceHistory[0]
+              ? invoiceHistory[0].status
+              : "PENDING"
+            ).toUpperCase(),
             color:
               invoiceHistory[0] && invoiceHistory[0].status === "paid"
                 ? c.success
@@ -3466,6 +3469,270 @@ const ParentMod = ({
                         fontSize: 12,
                         lineHeight: 1.5,
                         whiteSpace: "pre-wrap",
+                      },
+                    },
+                    n.text,
+                  ),
+                ),
+              ),
+            ),
+      ),
+    tab === "feedback" &&
+      React.createElement(
+        "div",
+        null,
+        !isParent &&
+          React.createElement(
+            "div",
+            {
+              style: {
+                background: c.bgCard,
+                border: "1px solid " + c.border,
+                borderRadius: 10,
+                padding: 14,
+                marginBottom: 14,
+              },
+            },
+            React.createElement(
+              "div",
+              {
+                style: {
+                  color: c.textSec,
+                  fontSize: 10,
+                  fontWeight: 600,
+                  marginBottom: 6,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.5,
+                },
+              },
+              "Add Teacher Feedback",
+            ),
+            React.createElement(
+              "select",
+              {
+                value: fbCat,
+                onChange: (e) => setFbCat(e.target.value),
+                style: {
+                  width: "100%",
+                  padding: "8px 12px",
+                  background: c.bgInput,
+                  border: "1px solid " + c.border,
+                  borderRadius: 6,
+                  color: c.text,
+                  fontSize: 12,
+                  outline: "none",
+                  marginBottom: 10,
+                },
+              },
+              React.createElement(
+                "option",
+                { value: "Excellent Progress" },
+                "Excellent Progress",
+              ),
+              React.createElement(
+                "option",
+                { value: "Very Good Recitation" },
+                "Very Good Recitation",
+              ),
+              React.createElement(
+                "option",
+                { value: "Strong Memorization" },
+                "Strong Memorization",
+              ),
+              React.createElement(
+                "option",
+                { value: "Consistent & Punctual" },
+                "Consistent & Punctual",
+              ),
+              React.createElement(
+                "option",
+                { value: "Needs Focus" },
+                "Needs Focus",
+              ),
+              React.createElement(
+                "option",
+                { value: "Needs More Practice at Home" },
+                "Needs More Practice at Home",
+              ),
+              React.createElement(
+                "option",
+                { value: "Tajweed Needs Improvement" },
+                "Tajweed Needs Improvement",
+              ),
+              React.createElement(
+                "option",
+                { value: "Lacking Attention in Class" },
+                "Lacking Attention in Class",
+              ),
+              React.createElement(
+                "option",
+                { value: "Attendance Issue" },
+                "Attendance Issue",
+              ),
+              React.createElement(
+                "option",
+                { value: "Behavioral Issue" },
+                "Behavioral Issue",
+              ),
+              React.createElement(
+                "option",
+                { value: "Custom" },
+                "Custom (Write your own)",
+              ),
+            ),
+            fbCat === "Custom" &&
+              React.createElement("textarea", {
+                value: fbCustom,
+                onChange: (e) => setFbCustom(e.target.value),
+                placeholder: "Write custom feedback for the parent...",
+                rows: 3,
+                style: {
+                  width: "100%",
+                  padding: "10px 12px",
+                  background: c.bgInput,
+                  border: "1px solid " + c.border,
+                  borderRadius: 6,
+                  color: c.text,
+                  fontSize: 12,
+                  outline: "none",
+                  boxSizing: "border-box",
+                  fontFamily: "inherit",
+                  resize: "vertical",
+                },
+              }),
+            React.createElement(
+              "div",
+              {
+                style: {
+                  display: "flex",
+                  justifyContent: "flex-end",
+                  marginTop: 8,
+                },
+              },
+              React.createElement(
+                "button",
+                {
+                  onClick: addFeedback,
+                  disabled: fbCat === "Custom" && !fbCustom.trim(),
+                  style: {
+                    padding: "7px 14px",
+                    background:
+                      fbCat !== "Custom" || fbCustom.trim()
+                        ? c.accent
+                        : c.bgDeep,
+                    border: "none",
+                    borderRadius: 6,
+                    color:
+                      fbCat !== "Custom" || fbCustom.trim()
+                        ? "#fff"
+                        : c.textMuted,
+                    fontSize: 11,
+                    fontWeight: 600,
+                    cursor:
+                      fbCat !== "Custom" || fbCustom.trim()
+                        ? "pointer"
+                        : "not-allowed",
+                  },
+                },
+                "Post Feedback",
+              ),
+            ),
+          ),
+        myFeedbacks.length === 0
+          ? React.createElement(
+              "div",
+              {
+                style: {
+                  background: c.bgDeep,
+                  border: "1px dashed " + c.border,
+                  borderRadius: 10,
+                  padding: 24,
+                  textAlign: "center",
+                  color: c.textMuted,
+                  fontSize: 11,
+                },
+              },
+              "No teacher feedback logged yet.",
+            )
+          : React.createElement(
+              "div",
+              null,
+              myFeedbacks.map((n) =>
+                React.createElement(
+                  "div",
+                  {
+                    key: n.id,
+                    style: {
+                      background: c.bgCard,
+                      border: "1px solid " + c.border,
+                      borderLeft: "3px solid " + c.success,
+                      borderRadius: 8,
+                      padding: 12,
+                      marginBottom: 8,
+                    },
+                  },
+                  React.createElement(
+                    "div",
+                    {
+                      style: {
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        marginBottom: 6,
+                      },
+                    },
+                    React.createElement(
+                      "div",
+                      null,
+                      React.createElement(
+                        "strong",
+                        {
+                          style: {
+                            color: c.success,
+                            fontSize: 11,
+                          },
+                        },
+                        n.author,
+                      ),
+                      React.createElement(
+                        "span",
+                        {
+                          style: {
+                            color: c.textMuted,
+                            fontSize: 9,
+                            marginLeft: 8,
+                          },
+                        },
+                        new Date(n.createdAt).toLocaleString(),
+                      ),
+                    ),
+                    !isParent
+                      ? React.createElement(
+                          "button",
+                          {
+                            onClick: () => deleteFeedback(n.id),
+                            style: {
+                              background: "none",
+                              border: "none",
+                              color: c.danger,
+                              fontSize: 10,
+                              cursor: "pointer",
+                              padding: "2px 6px",
+                            },
+                          },
+                          "Delete",
+                        )
+                      : null,
+                  ),
+                  React.createElement(
+                    "div",
+                    {
+                      style: {
+                        color: c.text,
+                        fontSize: 12,
+                        lineHeight: 1.5,
+                        whiteSpace: "pre-wrap",
+                        fontWeight: 600,
                       },
                     },
                     n.text,
