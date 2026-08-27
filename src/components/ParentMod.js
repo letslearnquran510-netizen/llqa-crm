@@ -22,6 +22,8 @@ const ParentMod = ({
     : allStudents.find((s) => s.id === selectedStuId);
   const [tab, setTab] = useState("overview");
   const [noteText, setNoteText] = useState("");
+  const [fbCat, setFbCat] = useState("Excellent Progress");
+  const [fbCustom, setFbCustom] = useState("");
   const [invoiceModal, setInvoiceModal] = useState(null);
   const [dayDetail, setDayDetail] = useState(null);
   if (!stu) {
@@ -44,6 +46,9 @@ const ParentMod = ({
     .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const myNotes = (parentNotes || [])
     .filter((n) => n.studentId === stu.id)
+    .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
+  const myFeedbacks = (teacherFeedback || [])
+    .filter((f) => f.studentId === stu.id)
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""));
   const today = todayPK();
   const monthAgo = todayPK(new Date(Date.now() - 30 * 86400000));
