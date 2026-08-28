@@ -406,7 +406,9 @@ function App() {
         if (u.role === "teacher" || u.role === "teamlead") {
           const today = todayPK();
           const exists = (autoAttendance || []).find(
-            (a) => a.userId === u.id && a.date === today,
+            (a) =>
+              (a.userId === u.id || a.userId === u.teacherId) &&
+              a.date === today,
           );
           if (!exists) {
             const onLeave = (leaves || []).find(
@@ -472,7 +474,7 @@ function App() {
               }
               const rec = {
                 id: Date.now() + Math.floor(Math.random() * 1000),
-                userId: u.id,
+                userId: u.id || u.teacherId,
                 userName: u.name,
                 role: u.role,
                 date: today,
@@ -489,7 +491,9 @@ function App() {
               };
               setAutoAttendance([...(autoAttendance || []), rec]);
               const newHist = { ...attendanceHistory };
-              newHist[u.id] = (newHist[u.id] || [])
+              newHist[u.id || u.teacherId] = (
+                newHist[u.id || u.teacherId] || []
+              )
                 .filter((h) => h.date !== today)
                 .concat([
                   {
