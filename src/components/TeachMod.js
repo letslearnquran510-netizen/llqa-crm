@@ -438,6 +438,7 @@ const TeachMod = ({
         ["list", "Teacher List"],
         ["leave", "Leave Mgmt"],
         ["perf", "Performance"],
+        ["feedback", "Parents Feedback"],
         ["zoom", "Zoom Links"],
       ].map(([k, l]) =>
         React.createElement(
@@ -1594,113 +1595,118 @@ const TeachMod = ({
           ),
         ),
       ),
-    React.createElement(
-      "div",
-      {
-        style: {
-          marginTop: 20,
-          background: c.bgCard,
-          backdropFilter: "blur(16px)",
-          boxShadow: c.shadow3d,
-          border: "1px solid " + c.border,
-          borderRadius: 12,
-          padding: 16,
-        },
-      },
+    st === "feedback" &&
       React.createElement(
-        "h4",
+        "div",
         {
           style: {
-            color: c.text,
-            margin: "0 0 14px",
-            fontSize: 14,
-            fontWeight: 600,
+            marginTop: 20,
+            background: c.bgCard,
+            backdropFilter: "blur(16px)",
+            boxShadow: c.shadow3d,
+            border: "1px solid " + c.border,
+            borderRadius: 12,
+            padding: 16,
           },
         },
-        "\uD83D\uDDE3\uFE0F Recent Parent Feedbacks",
-      ),
-      (teacherFeedback || []).length === 0
-        ? React.createElement(
-            "div",
-            {
-              style: {
-                color: c.textMuted,
-                fontSize: 11,
-                textAlign: "center",
-                padding: 20,
-              },
+        React.createElement(
+          "h4",
+          {
+            style: {
+              color: c.text,
+              margin: "0 0 14px",
+              fontSize: 14,
+              fontWeight: 600,
             },
-            "No feedbacks yet.",
-          )
-        : React.createElement(
-            "div",
-            {
-              style: { display: "flex", flexDirection: "column", gap: 10 },
-            },
-            (teacherFeedback || []).slice(0, 15).map((f) =>
-              React.createElement(
-                "div",
-                {
-                  key: f.id,
-                  style: {
-                    background: c.bgDeep,
-                    borderRadius: 8,
-                    borderLeft: "3px solid " + c.success,
-                    padding: 14,
-                  },
+          },
+          "\uD83D\uDDE3\uFE0F Recent Parent Feedbacks",
+        ),
+        (teacherFeedback || []).length === 0
+          ? React.createElement(
+              "div",
+              {
+                style: {
+                  color: c.textMuted,
+                  fontSize: 11,
+                  textAlign: "center",
+                  padding: 20,
                 },
+              },
+              "No feedbacks yet.",
+            )
+          : React.createElement(
+              "div",
+              {
+                style: { display: "flex", flexDirection: "column", gap: 10 },
+              },
+              (teacherFeedback || []).map((f) =>
                 React.createElement(
                   "div",
                   {
+                    key: f.id,
                     style: {
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      marginBottom: 6,
+                      background: c.bgDeep,
+                      borderRadius: 8,
+                      borderLeft: "3px solid " + c.success,
+                      padding: 14,
                     },
                   },
                   React.createElement(
                     "div",
-                    null,
-                    React.createElement(
-                      "span",
-                      {
-                        style: { fontWeight: 600, color: c.text, fontSize: 12 },
+                    {
+                      style: {
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        marginBottom: 6,
                       },
-                      f.teacherName || "Unknown Teacher",
+                    },
+                    React.createElement(
+                      "div",
+                      null,
+                      React.createElement(
+                        "span",
+                        {
+                          style: {
+                            fontWeight: 600,
+                            color: c.text,
+                            fontSize: 12,
+                          },
+                        },
+                        f.teacherName || "Unknown Teacher",
+                      ),
+                      React.createElement(
+                        "span",
+                        {
+                          style: {
+                            color: c.textMuted,
+                            fontSize: 10,
+                            marginLeft: 8,
+                          },
+                        },
+                        "by ",
+                        f.author,
+                      ),
                     ),
                     React.createElement(
                       "span",
                       {
-                        style: {
-                          color: c.textMuted,
-                          fontSize: 10,
-                          marginLeft: 8,
-                        },
+                        style: { color: c.textSec, fontSize: 10 },
                       },
-                      "by ",
-                      f.author,
+                      new Date(f.createdAt).toLocaleDateString(),
                     ),
                   ),
                   React.createElement(
-                    "span",
+                    "div",
                     {
-                      style: { color: c.textSec, fontSize: 10 },
+                      style: { color: c.text, fontSize: 12, fontWeight: 500 },
                     },
-                    new Date(f.createdAt).toLocaleDateString(),
+                    f.text,
                   ),
-                ),
-                React.createElement(
-                  "div",
-                  {
-                    style: { color: c.text, fontSize: 12, fontWeight: 500 },
-                  },
-                  f.text,
                 ),
               ),
             ),
-          ),
-    ),
+      ),
     modal &&
       (modal.type === "add" || modal.type === "edit") &&
       React.createElement(
