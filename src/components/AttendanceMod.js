@@ -2,8 +2,8 @@ const AttendanceMod = ({
   user,
   autoAttendance,
   setAutoAttendance,
-  teachers,
-  history,
+  teachers = [],
+  history = {},
   setHistory,
 }) => {
   const [, setTick] = useState(0);

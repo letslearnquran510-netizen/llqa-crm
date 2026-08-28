@@ -145,6 +145,10 @@ function App() {
     "settings/portalAccess",
     DEFAULT_ACCESS,
   );
+  const [attendanceHistory, setAttendanceHistory] = useFirestoreDoc(
+    "data/attendanceHistory",
+    initAttHist,
+  );
   const [leaves, setLeaves] = useFirestoreCollection("leaves", [
     {
       id: 1,
@@ -591,6 +595,9 @@ function App() {
           user: user,
           autoAttendance: autoAttendance,
           setAutoAttendance: setAutoAttendance,
+          teachers: teachers,
+          history: attendanceHistory,
+          setHistory: setAttendanceHistory,
         });
       case "payroll":
         return React.createElement(PayrollMod, {
