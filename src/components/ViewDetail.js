@@ -401,12 +401,14 @@ const ViewDetail = ({
                       },
                     },
                     "Feedback Provided (",
-                    (teacherFeedback || []).filter((f) => f.author === t.name)
-                      .length,
+                    (teacherFeedback || []).filter(
+                      (f) => f.teacherName === t.name || f.author === t.name,
+                    ).length,
                     ")",
                   ),
-                  (teacherFeedback || []).filter((f) => f.author === t.name)
-                    .length === 0
+                  (teacherFeedback || []).filter(
+                    (f) => f.teacherName === t.name || f.author === t.name,
+                  ).length === 0
                     ? React.createElement(
                         "p",
                         {
@@ -427,7 +429,10 @@ const ViewDetail = ({
                           },
                         },
                         (teacherFeedback || [])
-                          .filter((f) => f.author === t.name)
+                          .filter(
+                            (f) =>
+                              f.teacherName === t.name || f.author === t.name,
+                          )
                           .map((f) =>
                             React.createElement(
                               "div",

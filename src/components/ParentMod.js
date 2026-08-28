@@ -70,6 +70,7 @@ const ParentMod = ({
     const newNote = {
       id: Date.now(),
       studentId: stu.id,
+      teacherName: stu.teacher,
       author: isParent ? user.name || "Parent" : "Admin",
       authorRole: isParent ? "parent" : "admin",
       text: noteText.trim(),
@@ -89,6 +90,7 @@ const ParentMod = ({
     const newFb = {
       id: Date.now(),
       studentId: stu.id,
+      teacherName: stu.teacher,
       author: isParent ? "Parent of " + stu.name : user.name || "Teacher",
       text: finalFb,
       createdAt: new Date().toISOString(),
