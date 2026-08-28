@@ -89,7 +89,7 @@ const ParentMod = ({
     const newFb = {
       id: Date.now(),
       studentId: stu.id,
-      author: user.name || "Teacher",
+      author: isParent ? "Parent of " + stu.name : user.name || "Teacher",
       text: finalFb,
       createdAt: new Date().toISOString(),
     };
@@ -3488,148 +3488,174 @@ const ParentMod = ({
       React.createElement(
         "div",
         null,
-        !isParent &&
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgCard,
-                border: "1px solid " + c.border,
-                borderRadius: 10,
-                padding: 14,
-                marginBottom: 14,
-              },
-            },
-            React.createElement(
-              "div",
-              {
-                style: {
-                  color: c.textSec,
-                  fontSize: 10,
-                  fontWeight: 600,
-                  marginBottom: 6,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.5,
-                },
-              },
-              "Add Teacher Feedback",
-            ),
-            React.createElement(
-              "select",
-              {
-                value: fbCat,
-                onChange: (e) => setFbCat(e.target.value),
-                style: {
-                  width: "100%",
-                  padding: "8px 12px",
-                  background: c.bgInput,
-                  border: "1px solid " + c.border,
-                  borderRadius: 6,
-                  color: c.text,
-                  fontSize: 12,
-                  outline: "none",
-                  marginBottom: 10,
-                },
-              },
-              React.createElement(
-                "option",
-                { value: "Excellent Teaching" },
-                "Excellent Teaching",
-              ),
-              React.createElement(
-                "option",
-                { value: "Highly Professional" },
-                "Highly Professional",
-              ),
-              React.createElement(
-                "option",
-                { value: "Engaging and Supportive" },
-                "Engaging and Supportive",
-              ),
-              React.createElement(
-                "option",
-                { value: "Always Punctual" },
-                "Always Punctual",
-              ),
-              React.createElement(
-                "option",
-                { value: "Teacher is Often Late" },
-                "Teacher is Often Late",
-              ),
-              React.createElement(
-                "option",
-                { value: "Needs More Engaging Classes" },
-                "Needs More Engaging Classes",
-              ),
-              React.createElement(
-                "option",
-                { value: "Communication Needs Improvement" },
-                "Communication Needs Improvement",
-              ),
-              React.createElement(
-                "option",
-                { value: "Custom" },
-                "Custom (Write your own)",
-              ),
-            ),
-            fbCat === "Custom" &&
-              React.createElement("textarea", {
-                value: fbCustom,
-                onChange: (e) => setFbCustom(e.target.value),
-                placeholder: "Write custom feedback for the parent...",
-                rows: 3,
-                style: {
-                  width: "100%",
-                  padding: "10px 12px",
-                  background: c.bgInput,
-                  border: "1px solid " + c.border,
-                  borderRadius: 6,
-                  color: c.text,
-                  fontSize: 12,
-                  outline: "none",
-                  boxSizing: "border-box",
-                  fontFamily: "inherit",
-                  resize: "vertical",
-                },
-              }),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  display: "flex",
-                  justifyContent: "flex-end",
-                  marginTop: 8,
-                },
-              },
-              React.createElement(
-                "button",
+        (() => {
+          const hasFbToday =
+            isParent &&
+            myFeedbacks.some(
+              (f) =>
+                new Date(f.createdAt).toLocaleDateString() ===
+                  new Date().toLocaleDateString() &&
+                f.author.startsWith("Parent"),
+            );
+          return hasFbToday
+            ? React.createElement(
+                "div",
                 {
-                  onClick: addFeedback,
-                  disabled: fbCat === "Custom" && !fbCustom.trim(),
                   style: {
-                    padding: "7px 14px",
-                    background:
-                      fbCat !== "Custom" || fbCustom.trim()
-                        ? c.accent
-                        : c.bgDeep,
-                    border: "none",
-                    borderRadius: 6,
-                    color:
-                      fbCat !== "Custom" || fbCustom.trim()
-                        ? "#fff"
-                        : c.textMuted,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    cursor:
-                      fbCat !== "Custom" || fbCustom.trim()
-                        ? "pointer"
-                        : "not-allowed",
+                    background: c.bgCard,
+                    border: "1px solid " + c.border,
+                    borderRadius: 10,
+                    padding: 14,
+                    marginBottom: 14,
+                    color: c.textMuted,
+                    fontSize: 12,
+                    textAlign: "center",
                   },
                 },
-                "Post Feedback",
-              ),
-            ),
-          ),
+                "You have already submitted a feedback today. Thank you!",
+              )
+            : React.createElement(
+                "div",
+                {
+                  style: {
+                    background: c.bgCard,
+                    border: "1px solid " + c.border,
+                    borderRadius: 10,
+                    padding: 14,
+                    marginBottom: 14,
+                  },
+                },
+                React.createElement(
+                  "div",
+                  {
+                    style: {
+                      color: c.textSec,
+                      fontSize: 10,
+                      fontWeight: 600,
+                      marginBottom: 6,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                    },
+                  },
+                  "Add Teacher Feedback",
+                ),
+                React.createElement(
+                  "select",
+                  {
+                    value: fbCat,
+                    onChange: (e) => setFbCat(e.target.value),
+                    style: {
+                      width: "100%",
+                      padding: "8px 12px",
+                      background: c.bgInput,
+                      border: "1px solid " + c.border,
+                      borderRadius: 6,
+                      color: c.text,
+                      fontSize: 12,
+                      outline: "none",
+                      marginBottom: 10,
+                    },
+                  },
+                  React.createElement(
+                    "option",
+                    { value: "Excellent Teaching" },
+                    "Excellent Teaching",
+                  ),
+                  React.createElement(
+                    "option",
+                    { value: "Highly Professional" },
+                    "Highly Professional",
+                  ),
+                  React.createElement(
+                    "option",
+                    { value: "Engaging and Supportive" },
+                    "Engaging and Supportive",
+                  ),
+                  React.createElement(
+                    "option",
+                    { value: "Always Punctual" },
+                    "Always Punctual",
+                  ),
+                  React.createElement(
+                    "option",
+                    { value: "Teacher is Often Late" },
+                    "Teacher is Often Late",
+                  ),
+                  React.createElement(
+                    "option",
+                    { value: "Needs More Engaging Classes" },
+                    "Needs More Engaging Classes",
+                  ),
+                  React.createElement(
+                    "option",
+                    { value: "Communication Needs Improvement" },
+                    "Communication Needs Improvement",
+                  ),
+                  React.createElement(
+                    "option",
+                    { value: "Custom" },
+                    "Custom (Write your own)",
+                  ),
+                ),
+                fbCat === "Custom" &&
+                  React.createElement("textarea", {
+                    value: fbCustom,
+                    onChange: (e) => setFbCustom(e.target.value),
+                    placeholder: "Write custom feedback for the parent...",
+                    rows: 3,
+                    style: {
+                      width: "100%",
+                      padding: "10px 12px",
+                      background: c.bgInput,
+                      border: "1px solid " + c.border,
+                      borderRadius: 6,
+                      color: c.text,
+                      fontSize: 12,
+                      outline: "none",
+                      boxSizing: "border-box",
+                      fontFamily: "inherit",
+                      resize: "vertical",
+                    },
+                  }),
+                React.createElement(
+                  "div",
+                  {
+                    style: {
+                      display: "flex",
+                      justifyContent: "flex-end",
+                      marginTop: 8,
+                    },
+                  },
+                  React.createElement(
+                    "button",
+                    {
+                      onClick: addFeedback,
+                      disabled: fbCat === "Custom" && !fbCustom.trim(),
+                      style: {
+                        padding: "7px 14px",
+                        background:
+                          fbCat !== "Custom" || fbCustom.trim()
+                            ? c.accent
+                            : c.bgDeep,
+                        border: "none",
+                        borderRadius: 6,
+                        color:
+                          fbCat !== "Custom" || fbCustom.trim()
+                            ? "#fff"
+                            : c.textMuted,
+                        fontSize: 11,
+                        fontWeight: 600,
+                        cursor:
+                          fbCat !== "Custom" || fbCustom.trim()
+                            ? "pointer"
+                            : "not-allowed",
+                      },
+                    },
+                    "Post Feedback",
+                  ),
+                ),
+              );
+        })(),
         myFeedbacks.length === 0
           ? React.createElement(
               "div",
