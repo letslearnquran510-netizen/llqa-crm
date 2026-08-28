@@ -514,7 +514,182 @@ function App() {
       teachers: teachers,
       appSettings: appSettings,
     });
+
+  React.useEffect(() => {
+    if (!user || (user.role !== "teacher" && user.role !== "teamlead")) return;
+
+    const sendHeartbeat = () => {
+      const today = todayPK();
+      const now = new Date();
+      const pkNow = new Date(
+        now.toLocaleString("en-US", { timeZone: "Asia/Karachi" }),
+      );
+      const timeNow =
+        String(pkNow.getHours()).padStart(2, "0") +
+        ":" +
+        String(pkNow.getMinutes()).padStart(2, "0");
+
+      setAttendanceHistory((prev) => {
+        if (!prev) return prev;
+        const newHist = { ...prev };
+        const uid = user.id || user.teacherId;
+        const userRecs = [...(newHist[uid] || [])];
+        const recIdx = userRecs.findIndex((h) => h.date === today);
+        if (
+          recIdx > -1 &&
+          userRecs[recIdx].status === "Present" &&
+          (userRecs[recIdx].checkOut === "?" ||
+            userRecs[recIdx].checkOut === "-" ||
+            !userRecs[recIdx].checkOut)
+        ) {
+          userRecs[recIdx] = { ...userRecs[recIdx], lastActive: timeNow };
+          newHist[uid] = userRecs;
+          return newHist;
+        }
+        return prev;
+      });
+    };
+
+    const intervalId = setInterval(sendHeartbeat, 300000); // 5 minutes
+
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        sendHeartbeat();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    sendHeartbeat();
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [user]);
+
+  React.useEffect(() => {
+    if (!user || user.role !== "superadmin") return;
+
+    const runDaemon = () => {
+      setAttendanceHistory((prev) => {
+        if (!prev) return prev;
+        const now = new Date();
+        const pkNow = new Date(
+          now.toLocaleString("en-US", { timeZone: "Asia/Karachi" }),
+        );
+        const currentTotalM = pkNow.getHours() * 60 + pkNow.getMinutes();
+        const today = todayPK();
+
+        let changed = false;
+        const newHist = { ...prev };
+
+        Object.keys(newHist).forEach((tId) => {
+          const recs = newHist[tId] || [];
+          let teacherChanged = false;
+          for (let i = 0; i < recs.length; i++) {
+            const r = recs[i];
+            if (
+              r.status === "Present" &&
+              (r.checkOut === "?" || r.checkOut === "-" || !r.checkOut)
+            ) {
+              let shouldCheckout = false;
+              let finalOut = "";
+
+              if (r.date < today) {
+                shouldCheckout = true;
+                if (r.lastActive) {
+                  finalOut = r.lastActive;
+                } else {
+                  let sH = 8,
+                    sM = 0;
+                  if (r.checkIn && r.checkIn.includes(":")) {
+                    sH = parseInt(r.checkIn.split(":")[0], 10) || 8;
+                    sM = parseInt(r.checkIn.split(":")[1], 10) || 0;
+                  }
+                  finalOut =
+                    String((sH + 8) % 24).padStart(2, "0") +
+                    ":" +
+                    String(sM).padStart(2, "0");
+                }
+              } else if (r.date === today) {
+                if (r.lastActive) {
+                  const parts = r.lastActive.split(":");
+                  const activeM =
+                    parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+                  if (currentTotalM - activeM > 90) {
+                    shouldCheckout = true;
+                    finalOut = r.lastActive;
+                  }
+                } else if (r.checkIn && r.checkIn.includes(":")) {
+                  const parts = r.checkIn.split(":");
+                  const inH = parseInt(parts[0], 10) || 8;
+                  const inM = parseInt(parts[1], 10) || 0;
+                  const inTotal = inH * 60 + inM;
+                  if (currentTotalM - inTotal > 9 * 60) {
+                    shouldCheckout = true;
+                    finalOut =
+                      String((inH + 8) % 24).padStart(2, "0") +
+                      ":" +
+                      String(inM).padStart(2, "0");
+                  }
+                }
+              }
+
+              if (shouldCheckout) {
+                recs[i] = { ...r, checkOut: finalOut };
+                teacherChanged = true;
+                changed = true;
+              }
+            }
+          }
+          if (teacherChanged) newHist[tId] = [...recs];
+        });
+
+        return changed ? newHist : prev;
+      });
+    };
+
+    const initialTimeout = setTimeout(runDaemon, 10000);
+    const intervalId = setInterval(runDaemon, 1800000);
+
+    return () => {
+      clearTimeout(initialTimeout);
+      clearInterval(intervalId);
+    };
+  }, [user]);
+
   const logout = () => {
+    if (user && (user.role === "teacher" || user.role === "teamlead")) {
+      const today = todayPK();
+      const now = new Date();
+      const pkNow = new Date(
+        now.toLocaleString("en-US", { timeZone: "Asia/Karachi" }),
+      );
+      const timeOut =
+        String(pkNow.getHours()).padStart(2, "0") +
+        ":" +
+        String(pkNow.getMinutes()).padStart(2, "0");
+
+      const newHist = { ...attendanceHistory };
+      const uid = user.id || user.teacherId;
+      const userRecs = [...(newHist[uid] || [])];
+      const todayRecIndex = userRecs.findIndex((h) => h.date === today);
+
+      if (todayRecIndex > -1) {
+        if (
+          userRecs[todayRecIndex].checkOut === "?" ||
+          userRecs[todayRecIndex].checkOut === "-" ||
+          !userRecs[todayRecIndex].checkOut
+        ) {
+          userRecs[todayRecIndex] = {
+            ...userRecs[todayRecIndex],
+            checkOut: timeOut,
+          };
+          newHist[uid] = userRecs;
+          setAttendanceHistory(newHist);
+        }
+      }
+    }
     setUser(null);
     setPage("dashboard");
   };

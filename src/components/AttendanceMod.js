@@ -750,6 +750,80 @@ const AttendanceMod = ({
             },
             "Mark All Present",
           ),
+          React.createElement(
+            "button",
+            {
+              onClick: () => {
+                if (
+                  confirm(
+                    "Auto-fill missing checkouts for today? Teachers who closed their browser will be checked out at their last active (Heartbeat) time. Others will be assigned an automatic checkout time (8 hours after check-in).",
+                  )
+                ) {
+                  const today = todayPK();
+                  const newHist = { ...history };
+                  let count = 0;
+                  teachers.forEach((t) => {
+                    const todayRecs = newHist[t.id] || [];
+                    const recIdx = todayRecs.findIndex((h) => h.date === today);
+                    if (
+                      recIdx > -1 &&
+                      todayRecs[recIdx].status === "Present" &&
+                      (todayRecs[recIdx].checkOut === "?" ||
+                        todayRecs[recIdx].checkOut === "-" ||
+                        !todayRecs[recIdx].checkOut)
+                    ) {
+                      let endStr = "";
+                      if (todayRecs[recIdx].lastActive) {
+                        endStr = todayRecs[recIdx].lastActive;
+                      } else {
+                        let startH = 8,
+                          startM = 0;
+                        if (
+                          todayRecs[recIdx].checkIn &&
+                          todayRecs[recIdx].checkIn !== "?" &&
+                          todayRecs[recIdx].checkIn !== "-"
+                        ) {
+                          const parts = todayRecs[recIdx].checkIn.split(":");
+                          startH = parseInt(parts[0], 10) || 8;
+                          startM = parseInt(parts[1], 10) || 0;
+                        }
+                        let endH = startH + 8;
+                        if (endH >= 24) endH -= 24;
+                        endStr =
+                          String(endH).padStart(2, "0") +
+                          ":" +
+                          String(startM).padStart(2, "0");
+                      }
+                      todayRecs[recIdx] = {
+                        ...todayRecs[recIdx],
+                        checkOut: endStr,
+                      };
+                      newHist[t.id] = [...todayRecs];
+                      count++;
+                    }
+                  });
+                  if (count > 0) {
+                    setHistory(newHist);
+                    alert(count + " missing checkouts were auto-filled!");
+                  } else {
+                    alert("No missing checkouts found for today.");
+                  }
+                }
+              },
+              style: {
+                padding: "8px 12px",
+                background: c.accentBg,
+                border: "1px solid " + c.accent + "44",
+                borderRadius: 7,
+                cursor: "pointer",
+                color: c.accentText,
+                fontSize: 11,
+                fontWeight: 600,
+                marginLeft: 10,
+              },
+            },
+            "Auto-Fill Checkouts",
+          ),
         ),
         React.createElement(
           "div",
