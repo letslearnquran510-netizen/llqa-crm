@@ -389,59 +389,57 @@ function App() {
       setPage(visibleNav[0].id);
     }
   }, [user, access, page]);
-  if (!user)
-    React.useEffect(() => {
-      if (!user || (user.role !== "teacher" && user.role !== "teamlead"))
-        return;
+  React.useEffect(() => {
+    if (!user || (user.role !== "teacher" && user.role !== "teamlead")) return;
 
-      const sendHeartbeat = () => {
-        const today = todayPK();
-        const now = new Date();
-        const pkNow = new Date(
-          now.toLocaleString("en-US", { timeZone: "Asia/Karachi" }),
-        );
-        const timeNow =
-          String(pkNow.getHours()).padStart(2, "0") +
-          ":" +
-          String(pkNow.getMinutes()).padStart(2, "0");
+    const sendHeartbeat = () => {
+      const today = todayPK();
+      const now = new Date();
+      const pkNow = new Date(
+        now.toLocaleString("en-US", { timeZone: "Asia/Karachi" }),
+      );
+      const timeNow =
+        String(pkNow.getHours()).padStart(2, "0") +
+        ":" +
+        String(pkNow.getMinutes()).padStart(2, "0");
 
-        setAttendanceHistory((prev) => {
-          if (!prev) return prev;
-          const newHist = { ...prev };
-          const uid = user.id || user.teacherId;
-          const userRecs = [...(newHist[uid] || [])];
-          const recIdx = userRecs.findIndex((h) => h.date === today);
-          if (
-            recIdx > -1 &&
-            userRecs[recIdx].status === "Present" &&
-            (userRecs[recIdx].checkOut === "?" ||
-              userRecs[recIdx].checkOut === "-" ||
-              !userRecs[recIdx].checkOut)
-          ) {
-            userRecs[recIdx] = { ...userRecs[recIdx], lastActive: timeNow };
-            newHist[uid] = userRecs;
-            return newHist;
-          }
-          return prev;
-        });
-      };
-
-      const intervalId = setInterval(sendHeartbeat, 300000); // 5 minutes
-
-      const handleVisibility = () => {
-        if (document.visibilityState === "hidden") {
-          sendHeartbeat();
+      setAttendanceHistory((prev) => {
+        if (!prev) return prev;
+        const newHist = { ...prev };
+        const uid = user.id || user.teacherId;
+        const userRecs = [...(newHist[uid] || [])];
+        const recIdx = userRecs.findIndex((h) => h.date === today);
+        if (
+          recIdx > -1 &&
+          userRecs[recIdx].status === "Present" &&
+          (userRecs[recIdx].checkOut === "?" ||
+            userRecs[recIdx].checkOut === "-" ||
+            !userRecs[recIdx].checkOut)
+        ) {
+          userRecs[recIdx] = { ...userRecs[recIdx], lastActive: timeNow };
+          newHist[uid] = userRecs;
+          return newHist;
         }
-      };
-      document.addEventListener("visibilitychange", handleVisibility);
+        return prev;
+      });
+    };
 
-      sendHeartbeat();
+    const intervalId = setInterval(sendHeartbeat, 300000); // 5 minutes
 
-      return () => {
-        clearInterval(intervalId);
-        document.removeEventListener("visibilitychange", handleVisibility);
-      };
-    }, [user]);
+    const handleVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        sendHeartbeat();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    sendHeartbeat();
+
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [user]);
 
   React.useEffect(() => {
     if (!user || user.role !== "superadmin") return;
@@ -534,132 +532,136 @@ function App() {
     };
   }, [user]);
 
-  return React.createElement(LoginScreen, {
-    students: students || [],
-    customRoles: customRoles || [],
-    onLogin: (u) => {
-      setUser(u);
-      const customAcc =
-        u.role && u.role.startsWith && u.role.startsWith("custom:")
-          ? buildAccessFromPermissions(u.customPermissions)
-          : null;
-      setPage(
-        u.role === "teacher"
-          ? "timetable"
-          : u.role === "parent"
-            ? "parent"
-            : customAcc && customAcc.length > 0
-              ? customAcc[0]
-              : "dashboard",
-      );
-      if (u.role === "teacher" || u.role === "teamlead") {
-        const today = todayPK();
-        const exists = (autoAttendance || []).find(
-          (a) =>
-            (a.userId === u.id || a.userId === u.teacherId) && a.date === today,
+  if (!user)
+    return React.createElement(LoginScreen, {
+      students: students || [],
+      customRoles: customRoles || [],
+      onLogin: (u) => {
+        setUser(u);
+        const customAcc =
+          u.role && u.role.startsWith && u.role.startsWith("custom:")
+            ? buildAccessFromPermissions(u.customPermissions)
+            : null;
+        setPage(
+          u.role === "teacher"
+            ? "timetable"
+            : u.role === "parent"
+              ? "parent"
+              : customAcc && customAcc.length > 0
+                ? customAcc[0]
+                : "dashboard",
         );
-        if (!exists) {
-          const onLeave = (leaves || []).find(
-            (lv) =>
-              lv.teacherId === u.id &&
-              lv.status === "approved" &&
-              lv.from <= today &&
-              lv.to >= today,
+        if (u.role === "teacher" || u.role === "teamlead") {
+          const today = todayPK();
+          const exists = (autoAttendance || []).find(
+            (a) =>
+              (a.userId === u.id || a.userId === u.teacherId) &&
+              a.date === today,
           );
-          if (!onLeave) {
-            const now = new Date();
-            const pkNow = new Date(
-              now.toLocaleString("en-US", {
-                timeZone: "Asia/Karachi",
-              }),
+          if (!exists) {
+            const onLeave = (leaves || []).find(
+              (lv) =>
+                lv.teacherId === u.id &&
+                lv.status === "approved" &&
+                lv.from <= today &&
+                lv.to >= today,
             );
-            const hh = pkNow.getHours();
-            const mm = pkNow.getMinutes();
-            const timeIn =
-              String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
-            const t = teachers.find((tt) => tt.id === u.id);
-            let shiftStartH = 0,
-              shiftStartM = 0,
-              shiftName = "";
-            try {
-              const shifts = Object.keys(TT_DATA || {});
-              for (const sn of shifts) {
-                const sd = TT_DATA[sn];
-                if (
-                  sd &&
-                  sd.teachers &&
-                  sd.teachers.find(
-                    (tt) => tt.name === u.name || tt.code === (t && t.code),
-                  )
-                ) {
-                  shiftName = sn;
-                  const firstSlot = sd.slots && sd.slots[0];
-                  if (firstSlot) {
-                    const parts = firstSlot.split(":");
-                    shiftStartH = parseInt(parts[0], 10) || 0;
-                    shiftStartM = parseInt(parts[1], 10) || 0;
+            if (!onLeave) {
+              const now = new Date();
+              const pkNow = new Date(
+                now.toLocaleString("en-US", {
+                  timeZone: "Asia/Karachi",
+                }),
+              );
+              const hh = pkNow.getHours();
+              const mm = pkNow.getMinutes();
+              const timeIn =
+                String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
+              const t = teachers.find((tt) => tt.id === u.id);
+              let shiftStartH = 0,
+                shiftStartM = 0,
+                shiftName = "";
+              try {
+                const shifts = Object.keys(TT_DATA || {});
+                for (const sn of shifts) {
+                  const sd = TT_DATA[sn];
+                  if (
+                    sd &&
+                    sd.teachers &&
+                    sd.teachers.find(
+                      (tt) => tt.name === u.name || tt.code === (t && t.code),
+                    )
+                  ) {
+                    shiftName = sn;
+                    const firstSlot = sd.slots && sd.slots[0];
+                    if (firstSlot) {
+                      const parts = firstSlot.split(":");
+                      shiftStartH = parseInt(parts[0], 10) || 0;
+                      shiftStartM = parseInt(parts[1], 10) || 0;
+                    }
+                    break;
                   }
-                  break;
+                }
+              } catch (_) {}
+              if (!shiftName) {
+                if (t && t.location === "IBA") {
+                  shiftStartH = 0;
+                } else if (t && t.location === "WFH") {
+                  shiftStartH = 16;
                 }
               }
-            } catch (_) {}
-            if (!shiftName) {
-              if (t && t.location === "IBA") {
-                shiftStartH = 0;
-              } else if (t && t.location === "WFH") {
-                shiftStartH = 16;
+              const lateThr = (appSettings && appSettings.lateThreshold) || 10;
+              const startMin = shiftStartH * 60 + shiftStartM;
+              const nowMin = hh * 60 + mm;
+              const diff = nowMin - startMin;
+              let status = "Present";
+              let lateMin = 0;
+              if (diff > lateThr) {
+                status = "Late";
+                lateMin = diff;
               }
+              const rec = {
+                id: Date.now() + Math.floor(Math.random() * 1000),
+                userId: u.id || u.teacherId,
+                userName: u.name,
+                role: u.role,
+                date: today,
+                timeIn: timeIn,
+                status: status,
+                lateMin: lateMin,
+                shiftStart:
+                  String(shiftStartH).padStart(2, "0") +
+                  ":" +
+                  String(shiftStartM).padStart(2, "0"),
+                shiftName: shiftName || "Default",
+                location: (t && t.location) || "-",
+                method: "auto-login",
+              };
+              setAutoAttendance([...(autoAttendance || []), rec]);
+              const newHist = { ...attendanceHistory };
+              newHist[u.id || u.teacherId] = (
+                newHist[u.id || u.teacherId] || []
+              )
+                .filter((h) => h.date !== today)
+                .concat([
+                  {
+                    date: today,
+                    status: status,
+                    checkIn: timeIn,
+                    checkOut: "?",
+                    lateMin: lateMin,
+                    fine: 0,
+                    approved: true,
+                  },
+                ]);
+              setAttendanceHistory(newHist);
             }
-            const lateThr = (appSettings && appSettings.lateThreshold) || 10;
-            const startMin = shiftStartH * 60 + shiftStartM;
-            const nowMin = hh * 60 + mm;
-            const diff = nowMin - startMin;
-            let status = "Present";
-            let lateMin = 0;
-            if (diff > lateThr) {
-              status = "Late";
-              lateMin = diff;
-            }
-            const rec = {
-              id: Date.now() + Math.floor(Math.random() * 1000),
-              userId: u.id || u.teacherId,
-              userName: u.name,
-              role: u.role,
-              date: today,
-              timeIn: timeIn,
-              status: status,
-              lateMin: lateMin,
-              shiftStart:
-                String(shiftStartH).padStart(2, "0") +
-                ":" +
-                String(shiftStartM).padStart(2, "0"),
-              shiftName: shiftName || "Default",
-              location: (t && t.location) || "-",
-              method: "auto-login",
-            };
-            setAutoAttendance([...(autoAttendance || []), rec]);
-            const newHist = { ...attendanceHistory };
-            newHist[u.id || u.teacherId] = (newHist[u.id || u.teacherId] || [])
-              .filter((h) => h.date !== today)
-              .concat([
-                {
-                  date: today,
-                  status: status,
-                  checkIn: timeIn,
-                  checkOut: "?",
-                  lateMin: lateMin,
-                  fine: 0,
-                  approved: true,
-                },
-              ]);
-            setAttendanceHistory(newHist);
           }
         }
-      }
-    },
-    teachers: teachers,
-    appSettings: appSettings,
-  });
+      },
+      teachers: teachers,
+      appSettings: appSettings,
+    });
 
   const logout = () => {
     if (user && (user.role === "teacher" || user.role === "teamlead")) {
