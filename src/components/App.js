@@ -232,6 +232,14 @@ function App() {
     "procPurchases",
     [],
   );
+  const [hrInterviews, setHrInterviews] = useFirestoreCollection(
+    "hrInterviews",
+    [],
+  );
+  const [hrHiring, setHrHiring] = useFirestoreCollection(
+    "hrHiring",
+    [],
+  );
   const upsertSalesMaster = (records) => {
     if (!records || records.length === 0) return;
     setSalesMasterData((prev) => {
@@ -804,7 +812,14 @@ function App() {
           setTeacherFeedback: setTeacherFeedback,
         });
       case "hr":
-        return React.createElement(HRMod, null);
+        return React.createElement(HRMod, {
+          user: user,
+          teachers: teachers,
+          hrInterviews: hrInterviews,
+          setHrInterviews: setHrInterviews,
+          hrHiring: hrHiring,
+          setHrHiring: setHrHiring
+        });
       case "training":
         return React.createElement(TrainingMod, {
           teachers: teachers,
@@ -1483,3 +1498,5 @@ function App() {
     ),
   );
 }
+
+
