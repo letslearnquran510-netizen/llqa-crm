@@ -134,7 +134,7 @@ const ParentMod = ({
     w.document.write(
       "<!DOCTYPE html><html><head><title>Invoice " +
         escHTML(inv.id) +
-        "</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#222;}h1{color:#065f46;border-bottom:2px solid #065f46;padding-bottom:8px;}table{width:100%;border-collapse:collapse;margin-top:20px;}th,td{border:1px solid #ddd;padding:10px;text-align:left;}th{background:#f3f4f6;}.total{font-size:18px;font-weight:bold;color:#065f46;text-align:right;padding:15px 0;border-top:2px solid #065f46;margin-top:20px;}.meta{color:#666;margin:5px 0;font-size:12px;}.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:30px;}.brand{font-size:20px;font-weight:bold;color:#065f46;}.muted{color:#888;font-size:11px;margin-top:30px;text-align:center;}</style></head><body>",
+        "</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#222;}h1{color:#926f18;border-bottom:2px solid #926f18;padding-bottom:8px;}table{width:100%;border-collapse:collapse;margin-top:20px;}th,td{border:1px solid #ddd;padding:10px;text-align:left;}th{background:#f3f4f6;}.total{font-size:18px;font-weight:bold;color:#926f18;text-align:right;padding:15px 0;border-top:2px solid #926f18;margin-top:20px;}.meta{color:#666;margin:5px 0;font-size:12px;}.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:30px;}.brand{font-size:20px;font-weight:bold;color:#926f18;}.muted{color:#888;font-size:11px;margin-top:30px;text-align:center;}</style></head><body>",
     );
     w.document.write(
       '<div class="header"><div>' +
