@@ -136,7 +136,25 @@ const ParentMod = ({
         "</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#222;}h1{color:#1e40af;border-bottom:2px solid #1e40af;padding-bottom:8px;}table{width:100%;border-collapse:collapse;margin-top:20px;}th,td{border:1px solid #ddd;padding:10px;text-align:left;}th{background:#f3f4f6;}.total{font-size:18px;font-weight:bold;color:#1e40af;text-align:right;padding:15px 0;border-top:2px solid #1e40af;margin-top:20px;}.meta{color:#666;margin:5px 0;font-size:12px;}.header{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:30px;}.brand{font-size:20px;font-weight:bold;color:#1e40af;}.muted{color:#888;font-size:11px;margin-top:30px;text-align:center;}</style></head><body>",
     );
     w.document.write(
-      '<div class="header"><div><div class="brand">LLQA Academy</div><div class="meta">Let\u0027s Learn Quran</div><div class="meta">Rawalpindi, Pakistan</div><div class="meta">letslearnquran.net</div></div><div style="text-align:right;"><h1 style="margin:0;border:none;padding:0;">INVOICE</h1><div class="meta">Invoice #: INV-' +
+      '<div class="header"><div>' +
+        (appSettings && appSettings.logoDataUrl
+          ? '<img src="' +
+            appSettings.logoDataUrl +
+            '" style="max-height: 60px; max-width: 200px; margin-bottom: 10px;" />'
+          : '<div class="brand">' +
+            escHTML(
+              (appSettings && appSettings.academyName) || "LLQA Academy",
+            ) +
+            "</div>") +
+        '<div class="meta">' +
+        escHTML((appSettings && appSettings.tagline) || "Let's Learn Quran") +
+        '</div><div class="meta">' +
+        escHTML(
+          (appSettings && appSettings.address) || "Rawalpindi, Pakistan",
+        ) +
+        '</div><div class="meta">' +
+        escHTML((appSettings && appSettings.website) || "letslearnquran.net") +
+        '</div></div><div style="text-align:right;"><h1 style="margin:0;border:none;padding:0;">INVOICE</h1><div class="meta">Invoice #: INV-' +
         escHTML(inv.id) +
         '</div><div class="meta">Date: ' +
         escHTML(inv.date) +
@@ -151,19 +169,25 @@ const ParentMod = ({
         "</strong></div></div></div>",
     );
     w.document.write(
-      '<div style="background:#f9fafb;padding:15px;border-radius:8px;margin-bottom:20px;"><strong>Bill To:</strong><br>' +
+      '<div style="background:#f9fafb;padding:15px;border-radius:8px;margin-bottom:20px;">' +
+        '<div style="font-size:15px;margin-bottom:8px;"><strong>Bill To:</strong><br>' +
         escHTML(stu.parent || "-") +
-        '<br><span class="meta">Student: ' +
+        "</div>" +
+        '<div style="color:#444;line-height:1.6;font-size:13px;">' +
+        '<strong>Student:</strong> <span style="color:#000;">' +
         escHTML(stu.name) +
-        " (Age " +
+        "</span><br>" +
+        "<strong>Age:</strong> " +
         escHTML(stu.age || "-") +
-        ')</span><br><span class="meta">Course: ' +
+        "<br>" +
+        "<strong>Course:</strong> " +
         escHTML(stu.course || "-") +
-        '</span><br><span class="meta">Country: ' +
+        "<br>" +
+        "<strong>Country:</strong> " +
         escHTML(stu.country || "-") +
-        " \u00B7 " +
+        " &middot; " +
         escHTML(stu.state || "") +
-        "</span></div>",
+        "</div></div>",
     );
     w.document.write(
       "<table><thead><tr><th>Description</th><th>Period</th><th>Hours/Week</th><th>Amount</th></tr></thead><tbody>",

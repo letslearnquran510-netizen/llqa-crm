@@ -805,8 +805,7 @@ function App() {
           setDailyProgress: setDailyProgress,
           parentNotes: parentNotes,
           setParentNotes: setParentNotes,
-          teacherFeedback: teacherFeedback,
-          setTeacherFeedback: setTeacherFeedback,
+          appSettings: appSettings,
         });
       case "hr":
         return React.createElement(HRMod, {
@@ -1495,3 +1494,4 @@ function App() {
     ),
   );
 }
+
