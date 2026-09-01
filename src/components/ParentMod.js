@@ -10,6 +10,7 @@ const ParentMod = ({
   setParentNotes,
   teacherFeedback,
   setTeacherFeedback,
+  appSettings,
 }) => {
   const isParent = user && user.role === "parent";
   const allStudents = students || [];
