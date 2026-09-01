@@ -167,7 +167,13 @@ const ParentMod = ({
             : "#f59e0b") +
         '">' +
         escHTML(inv.status.toUpperCase()) +
-        "</strong></div></div></div>",
+        "</strong></div>" +
+        (inv.receipt
+          ? '<div class="meta">Transaction #: ' +
+            escHTML(inv.receipt) +
+            "</div>"
+          : "") +
+        "</div></div>",
     );
     w.document.write(
       '<div style="background:#f9fafb;padding:15px;border-radius:8px;margin-bottom:20px;">' +
@@ -195,9 +201,10 @@ const ParentMod = ({
     );
     w.document.write(
       "<tr><td>" +
-        "<strong>Monthly Tuition Fee - " +
+        "<strong>Monthly Tuition Fee</strong><br>" +
+        "<span style='color:#444;font-size:13px;'>Course: " +
         escHTML(stu.course || "Quran") +
-        "</strong><br>" +
+        "</span><br>" +
         "<span style='font-size:12px;color:#666;'>Assigned Teacher: " +
         escHTML(stu.teacher || "Pending") +
         "</span>" +
