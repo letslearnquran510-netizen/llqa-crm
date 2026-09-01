@@ -2420,7 +2420,7 @@ const SettingsMod = ({
     title: "Connected Services",
     icon: Globe,
     color: c.cyan
-  }, [["Zoom", "Video class meetings", "zoomConnected", c.accent, "Auto-generate meeting links for each class"], ["Google Calendar", "Sync timetable with calendars", "googleConnected", c.success, "Two-way sync with teacher calendars"], ["WhatsApp Business", "Automated parent messaging", "whatsappConnected", c.success, "Send lesson reports, fee reminders"], ["SMTP Email", "Gmail/Outlook email sending", "smtpConnected", c.warn, "Configured: admin@letslearnquran.net"], ["Google Analytics", "Website traffic insights", "googleAnalytics", c.purple, "Track enrollment funnel"]].map(([name, desc, key, col, info]) => React.createElement("div", {
+  }, [["Zoom", "Video class meetings", "zoomConnected", c.accent, "Auto-generate meeting links for each class"], ["Google Calendar", "Sync timetable with calendars", "googleConnected", c.success, "Two-way sync with teacher calendars"], ["WhatsApp Business", "Automated parent messaging", "whatsappConnected", c.success, "Send lesson reports, fee reminders"], ["SMTP Email", "Gmail/Outlook email sending", "smtpConnected", c.warn, "Configured: admin@letslearnquran.net"], ["Hiring Email Sync", "Make.com/Zapier Webhook for CV parsing", "hiringSync", c.accent, "Automatically extracts PDFs from emails"], ["Google Analytics", "Website traffic insights", "googleAnalytics", c.purple, "Track enrollment funnel"]].map(([name, desc, key, col, info]) => React.createElement("div", {
     key: name,
     style: {
       display: "flex",
@@ -4959,4 +4959,5 @@ const SettingsMod = ({
     }
   }, "Apply Logo")))));
 };
+
 
