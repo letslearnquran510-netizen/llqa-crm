@@ -195,9 +195,12 @@ const ParentMod = ({
     );
     w.document.write(
       "<tr><td>" +
-        escHTML(stu.course || "Quran Class") +
-        " - " +
-        escHTML(stu.teacher || "Unassigned") +
+        "<strong>Monthly Tuition Fee - " +
+        escHTML(stu.course || "Quran") +
+        "</strong><br>" +
+        "<span style='font-size:12px;color:#666;'>Assigned Teacher: " +
+        escHTML(stu.teacher || "Pending") +
+        "</span>" +
         "</td><td>" +
         escHTML(inv.period) +
         "</td><td>" +
