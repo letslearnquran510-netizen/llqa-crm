@@ -496,7 +496,7 @@ const TimetableMod = ({
     .filter(
       (t) =>
         !existingCodes.has(t.code) &&
-        (t.shift === shift || (!t.shift && shift === "Night")),
+        ((t.shift || "").includes(shift) || (!t.shift && shift === "Night")),
     )
     .map((t) => ({
       sno: baseTeachers.length + 1,

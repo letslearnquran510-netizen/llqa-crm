@@ -94,7 +94,7 @@ const AttendanceMod = ({
   }, [teachers, history, selectedMonth]);
   const filteredTeachers = useMemo(() => {
     let d = teachers;
-    if (fShift !== "all") d = d.filter((t) => t.shift === fShift);
+    if (fShift !== "all") d = d.filter((t) => (t.shift || "").includes(fShift));
     if (search)
       d = d.filter(
         (t) =>
@@ -122,14 +122,13 @@ const AttendanceMod = ({
   }, [teachers, history]);
   const markAttendance = (teacherId, status) => {
     const t = teachers.find((x) => x.id === teacherId);
-    const sm =
-      t.shift === "Morning"
-        ? 8
-        : t.shift === "Evening"
-          ? 16
-          : t.shift === "Night"
-            ? 0
-            : 10;
+    const sm = (t.shift || "").includes("Morning")
+      ? 8
+      : (t.shift || "").includes("Evening")
+        ? 16
+        : (t.shift || "").includes("Night")
+          ? 0
+          : 10;
     const now = new Date();
     const checkIn =
       now.getHours().toString().padStart(2, "0") +
@@ -928,14 +927,13 @@ const AttendanceMod = ({
                     },
                     React.createElement(Badge, {
                       text: t.shift,
-                      color:
-                        t.shift === "Morning"
-                          ? "warn"
-                          : t.shift === "Evening"
-                            ? "cyan"
-                            : t.shift === "Night"
-                              ? "purple"
-                              : "accent",
+                      color: (t.shift || "").includes("Morning")
+                        ? "warn"
+                        : (t.shift || "").includes("Evening")
+                          ? "cyan"
+                          : (t.shift || "").includes("Night")
+                            ? "purple"
+                            : "accent",
                     }),
                   ),
                   React.createElement(
@@ -1946,14 +1944,13 @@ const AttendanceMod = ({
                     },
                     React.createElement(Badge, {
                       text: t.shift,
-                      color:
-                        t.shift === "Morning"
-                          ? "warn"
-                          : t.shift === "Evening"
-                            ? "cyan"
-                            : t.shift === "Night"
-                              ? "purple"
-                              : "accent",
+                      color: (t.shift || "").includes("Morning")
+                        ? "warn"
+                        : (t.shift || "").includes("Evening")
+                          ? "cyan"
+                          : (t.shift || "").includes("Night")
+                            ? "purple"
+                            : "accent",
                     }),
                   ),
                   React.createElement(
@@ -2328,14 +2325,13 @@ const AttendanceMod = ({
                       },
                       React.createElement(Badge, {
                         text: t.shift,
-                        color:
-                          t.shift === "Morning"
-                            ? "warn"
-                            : t.shift === "Evening"
-                              ? "cyan"
-                              : t.shift === "Night"
-                                ? "purple"
-                                : "accent",
+                        color: (t.shift || "").includes("Morning")
+                          ? "warn"
+                          : (t.shift || "").includes("Evening")
+                            ? "cyan"
+                            : (t.shift || "").includes("Night")
+                              ? "purple"
+                              : "accent",
                       }),
                     ),
                     React.createElement(
@@ -3045,7 +3041,9 @@ const AttendanceMod = ({
               BarChart,
               {
                 data: SHIFTS_ATT.map((s) => {
-                  const ts = teachers.filter((t) => t.shift === s);
+                  const ts = teachers.filter((t) =>
+                    (t.shift || "").includes(s),
+                  );
                   const tot = ts.reduce(
                     (acc, t) => {
                       acc.p += monthlySummary[t.id].present;
