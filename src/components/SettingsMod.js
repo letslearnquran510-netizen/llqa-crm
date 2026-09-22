@@ -1980,7 +1980,7 @@ const SettingsMod = ({
       fontSize: 11,
       margin: "0 0 10px"
     }
-  }, "Manage registered devices \xB7 ", auditLog.filter(l => l.trusted).length, " trusted \xB7 ", auditLog.filter(l => l.trusted === false).length, " flagged for review"), [["Hafiz Suleman's Phone", "Mobile · Chrome", "FP-A8X3M9K2", "trusted"], ["Hafiz Abdullah ATD's Laptop", "Desktop · Chrome", "FP-K9P2L4N7", "trusted"], ["Qazi Junaid's Office PC", "Desktop · Edge", "FP-Z3W5Q8R6", "trusted"], ["Unknown device · Esha", "Mobile · Safari", "FP-NEW9X2L1", "flagged"]].map(([n, d, fp, st]) => React.createElement("div", {
+  }, "Manage registered devices \xB7 ", auditLog.filter(l => l.trusted).length, " trusted \xB7 ", auditLog.filter(l => l.trusted === false).length, " flagged for review"), [].map(([n, d, fp, st]) => React.createElement("div", {
     key: fp,
     style: {
       display: "flex",
