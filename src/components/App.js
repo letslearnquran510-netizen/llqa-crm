@@ -149,52 +149,7 @@ function App() {
     "data/attendanceHistory",
     initAttHist,
   );
-  const [leaves, setLeaves] = useFirestoreCollection("leaves", [
-    {
-      id: 1,
-      teacherId: 5,
-      teacherName: "Qari Faizan Khan",
-      type: "Ramadan Leave",
-      from: "2026-03-01",
-      to: "2026-03-30",
-      days: 30,
-      status: "approved",
-      reason: "Ramadan",
-    },
-    {
-      id: 2,
-      teacherId: 16,
-      teacherName: "Hafiz Abdullah ATD",
-      type: "Sick Leave",
-      from: "2026-04-10",
-      to: "2026-04-12",
-      days: 3,
-      status: "approved",
-      reason: "Fever",
-    },
-    {
-      id: 3,
-      teacherId: 34,
-      teacherName: "Hafiza Saqeela Satti",
-      type: "Casual Leave",
-      from: "2026-04-14",
-      to: "2026-04-14",
-      days: 1,
-      status: "pending",
-      reason: "Personal",
-    },
-    {
-      id: 4,
-      teacherId: 30,
-      teacherName: "Hafiza Momina Akbar",
-      type: "Annual Leave",
-      from: "2026-05-01",
-      to: "2026-05-07",
-      days: 7,
-      status: "pending",
-      reason: "Family visit",
-    },
-  ]);
+  const [leaves, setLeaves] = useFirestoreCollection("leaves", []);
   const [teamLeads, setTeamLeads] = useFirestoreCollection(
     "teamLeads",
     DEFAULT_TEAM_LEADS,
@@ -1494,4 +1449,3 @@ function App() {
     ),
   );
 }
-
