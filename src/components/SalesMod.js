@@ -186,6 +186,7 @@ const SalesMod = ({
     const newStudent = {
       id: newId,
       name: pf.name,
+      code: pf.code || "",
       age: parseInt(pf.age) || 0,
       gender: pf.gender || "",
       parent: pf.parent,
@@ -228,19 +229,27 @@ const SalesMod = ({
         let updatedTeachers = [...teachers];
         const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+        let skippedSlots = [];
         for (const slot of pf.schedule) {
           if (
             !slot.teacher ||
             slot.teacher === "Unassigned" ||
             !slot.time ||
             !slot.day
-          )
+          ) {
+            skippedSlots.push(slot.day + " " + (slot.time || "No Time"));
             continue;
+          }
 
           const targetTeacher = updatedTeachers.find(
             (t) => t.name === slot.teacher,
           );
-          if (!targetTeacher) continue;
+          if (!targetTeacher) {
+            skippedSlots.push(
+              slot.day + " " + (slot.time || "") + " (Teacher not found)",
+            );
+            continue;
+          }
 
           const parsed = parseUSTime(slot.time);
           const tz = detectTZ(pf.state || "", slot.time);
@@ -292,6 +301,13 @@ const SalesMod = ({
         }
 
         setTeachers(updatedTeachers);
+        if (skippedSlots.length > 0) {
+          alert(
+            "Student saved successfully!\n\nHowever, the following slots were NOT booked in the Timetable because no Teacher was selected (or the Teacher was hidden because the time falls outside their Shift):\n\n" +
+              skippedSlots.join("\n") +
+              "\n\nPlease ensure you select a Teacher that is available during the converted PKT times.",
+          );
+        }
       } catch (e) {
         console.error("Auto-booking failed:", e);
       }

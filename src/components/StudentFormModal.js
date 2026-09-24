@@ -101,7 +101,7 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
         {
           style: {
             display: "grid",
-            gridTemplateColumns: "2fr 1fr",
+            gridTemplateColumns: "2fr 1fr 1fr",
             gap: "0 14px",
           },
         },
@@ -124,7 +124,17 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
               age: v,
             }),
           type: "number",
-          placeholder: "8",
+          placeholder: "e.g. 10",
+        }),
+        React.createElement(Inp, {
+          label: "Code",
+          value: pf.code || "",
+          onChange: (v) =>
+            setPf({
+              ...pf,
+              code: v,
+            }),
+          placeholder: "e.g. S-1001",
         }),
       ),
       React.createElement(Inp, {
@@ -612,15 +622,19 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
 
           const updatePfSchedule = (newSlots) => {
             const legacyT = newSlots[0]?.teacher || "Unassigned";
-            const legacyTm =
-              newSlots[0]?.day && newSlots[0]?.time
-                ? newSlots[0].day + "|" + newSlots[0].time
-                : "";
+            const legacyTm = newSlots
+              .filter((s) => s.day && s.time)
+              .map((s) => s.day + "|" + s.time)
+              .join(", ");
+
+            const validSlots = newSlots.filter((s) => s.day && s.time).length;
+            const autoHours = validSlots > 0 ? String(validSlots * 0.5) : "";
             setPf({
               ...pf,
               schedule: newSlots,
               teacher: legacyT,
               time: legacyTm,
+              hoursPerWeek: autoHours,
             });
           };
 
@@ -915,7 +929,7 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
               ...pf,
               hoursPerWeek: v,
             }),
-          placeholder: "e.g. 5",
+          placeholder: "Auto (0.5 hr/slot)",
         }),
         React.createElement(Inp, {
           label: "Fee Amount",
