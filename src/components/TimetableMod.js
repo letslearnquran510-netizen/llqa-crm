@@ -1368,7 +1368,7 @@ const TimetableMod = ({
                     day,
                   ),
                   slots.map((slot) => {
-                    const cell = currentTeacher.schedule[day]?.[slot];
+                    const cell = currentTeacher.schedule[day]?.[slot] || "F";
                     return React.createElement(
                       "td",
                       {
@@ -2022,7 +2022,7 @@ const TimetableMod = ({
                     ),
                   ),
                   slots.map((slot) => {
-                    const cell = t.schedule[selectedDay]?.[slot];
+                    const cell = t.schedule[selectedDay]?.[slot] || "F";
                     const isBooked = cell && cell.s;
                     const isFree = cell === "F";
                     const hasFlag = isBooked && cell.f && cell.f.length > 0;
@@ -2860,7 +2860,8 @@ const TimetableMod = ({
                     },
                   },
                   slots.map((slot) => {
-                    const cell = teachers[qbTeacher]?.schedule[qbDay]?.[slot];
+                    const cell =
+                      teachers[qbTeacher]?.schedule[qbDay]?.[slot] || "F";
                     const isFree = cell === "F";
                     const isEmpty =
                       !cell && qbDay === (shift === "Weekend" ? "Sat" : "Mon");
