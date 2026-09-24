@@ -222,71 +222,81 @@ const SalesMod = ({
       trialStart: pf.dor || todayPK(),
     };
     setStudents([...current, newStudent]);
-    if (
-      pf.teacher &&
-      pf.teacher !== "Unassigned" &&
-      pf.time &&
-      setTeachers &&
-      teachers
-    ) {
+
+    if (pf.schedule && pf.schedule.length > 0 && setTeachers && teachers) {
       try {
-        const targetTeacher = teachers.find((t) => t.name === pf.teacher);
-        if (targetTeacher) {
-          let bookDay = "Mon";
-          let usaTime = pf.time;
-          if (pf.time.indexOf("|") >= 0) {
-            const parts = pf.time.split("|");
-            bookDay = parts[0];
-            usaTime = parts[1];
+        let updatedTeachers = [...teachers];
+        const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+        for (const slot of pf.schedule) {
+          if (
+            !slot.teacher ||
+            slot.teacher === "Unassigned" ||
+            !slot.time ||
+            !slot.day
+          )
+            continue;
+
+          const targetTeacher = updatedTeachers.find(
+            (t) => t.name === slot.teacher,
+          );
+          if (!targetTeacher) continue;
+
+          const parsed = parseUSTime(slot.time);
+          const tz = detectTZ(pf.state || "", slot.time);
+          if (!parsed || !tz) continue;
+
+          const diffMin =
+            tzOffsetMinutes("Asia/Karachi", new Date()) -
+            tzOffsetMinutes(tz, new Date());
+          let totalMin = parsed.hour * 60 + parsed.minute + diffMin;
+          let dayIdx = DAYS.indexOf(slot.day);
+
+          if (totalMin >= 1440) {
+            dayIdx = (dayIdx + 1) % 7;
+            totalMin -= 1440;
+          } else if (totalMin < 0) {
+            dayIdx = (dayIdx - 1 + 7) % 7;
+            totalMin += 1440;
           }
-          const parsed = parseUSTime(usaTime);
-          const tz = detectTZ(pf.state || "", usaTime);
-          if (parsed && tz) {
-            const refDate = new Date();
-            const diffMin =
-              tzOffsetMinutes("Asia/Karachi", refDate) -
-              tzOffsetMinutes(tz, refDate);
-            const totalMin = parsed.hour * 60 + parsed.minute + diffMin;
-            const wrapped = ((totalMin % 1440) + 1440) % 1440;
-            const pakH = Math.floor(wrapped / 60);
-            const pakM = Math.floor((wrapped % 60) / 30) * 30;
-            const slotStr =
-              String(pakH).padStart(2, "0") +
-              ":" +
-              String(pakM).padStart(2, "0");
-            const newBooking = {
-              s: pf.name,
-              a: String(parseInt(pf.age) || ""),
-              c: courseVal,
-              l: pf.parent || "",
-              t: usaTime + " USA",
-              country: pf.country || "USA",
-              state: pf.state || "",
-              gender: pf.gender || "Any",
-              phone: pf.phone || "",
-              family: pf.family || "",
-              f: [],
-            };
-            setTeachers(
-              teachers.map((t) => {
-                if (t.id !== targetTeacher.id) return t;
-                const sch = t._ttSchedule
-                  ? JSON.parse(JSON.stringify(t._ttSchedule))
-                  : {};
-                if (!sch[bookDay]) sch[bookDay] = {};
-                sch[bookDay][slotStr] = newBooking;
-                return {
-                  ...t,
-                  _ttSchedule: sch,
-                };
-              }),
-            );
-          }
+
+          const pakH = Math.floor(totalMin / 60);
+          const pakM = Math.floor((totalMin % 60) / 30) * 30;
+          const slotStr =
+            String(pakH).padStart(2, "0") + ":" + String(pakM).padStart(2, "0");
+          const pakDay = DAYS[dayIdx];
+
+          const newBooking = {
+            s: pf.name,
+            a: String(parseInt(pf.age) || ""),
+            c: courseVal,
+            l: pf.parent || "",
+            t: slot.time + " USA",
+            country: pf.country || "USA",
+            state: pf.state || "",
+            gender: pf.gender || "Any",
+            phone: pf.phone || "",
+            family: pf.family || "",
+            f: [],
+          };
+
+          updatedTeachers = updatedTeachers.map((t) => {
+            if (t.id !== targetTeacher.id) return t;
+            const sch = t._ttSchedule
+              ? JSON.parse(JSON.stringify(t._ttSchedule))
+              : {};
+            if (!sch[pakDay]) sch[pakDay] = {};
+            sch[pakDay][slotStr] = newBooking;
+            return { ...t, _ttSchedule: sch };
+          });
         }
+
+        setTeachers(updatedTeachers);
       } catch (e) {
         console.error("Auto-booking failed:", e);
       }
     }
+
     setModal(null);
   };
   const REF_STATUSES = [

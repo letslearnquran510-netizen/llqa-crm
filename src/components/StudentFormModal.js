@@ -410,120 +410,145 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
             gap: "0 14px",
           },
         },
-        React.createElement(Inp, {
-          label: "Course *",
-          value: pf.course || "",
-          onChange: (v) =>
-            setPf({
-              ...pf,
-              course: v,
-              customCourse: v === "Other (Custom)" ? pf.customCourse || "" : "",
-            }),
-          options: [
-            "Quran",
-            "EN-Quaida",
-            "Quran with Tajweed",
-            "Quran-Memo",
-            "Saudi Quran",
-            "Quran+Memo+Islamic Ed",
-            "Eng/Noorani Quaida",
-            "Subject",
-            "Other (Custom)",
-          ],
-        }),
+
+        // --- SMART SCHEDULE BUILDER START ---
         React.createElement(
           "div",
           {
             style: {
-              marginBottom: 12,
+              background: c.bgDeep,
+              border: "1px solid " + c.border,
+              borderRadius: 12,
+              padding: 16,
+              marginBottom: 16,
+              marginTop: 16,
             },
           },
           React.createElement(
-            "label",
+            "div",
             {
               style: {
-                display: "block",
-                color: c.textSec,
-                fontSize: 10,
-                marginBottom: 4,
-                fontWeight: 600,
-                textTransform: "uppercase",
-                letterSpacing: 0.5,
+                display: "grid",
+                gridTemplateColumns: "1fr 1fr",
+                gap: "0 14px",
               },
             },
-            "Assigned Teacher",
-          ),
-          React.createElement(
-            NativeSelectWrapper,
-            {
-              value: pf.teacher || "",
-              onChange: (e) =>
+            React.createElement(Inp, {
+              label: "Course *",
+              value: pf.course || "",
+              onChange: (v) =>
                 setPf({
                   ...pf,
-                  teacher: e.target.value,
+                  course: v,
+                  customCourse:
+                    v === "Other (Custom)" ? pf.customCourse || "" : "",
+                  schedule: [], // reset schedule when course changes to avoid mismatched teacher rules
+                  teacher: "",
+                  time: "",
                 }),
-              style: {
-                width: "100%",
-                padding: "8px 10px",
-                background: c.bgInput,
-                border: "1px solid " + c.border,
-                borderRadius: 6,
-                color: c.text,
-                fontSize: 12,
-                outline: "none",
-                boxSizing: "border-box",
-              },
-            },
-            React.createElement(
-              "option",
-              {
-                value: "",
-              },
-              "-- Select Teacher --",
-            ),
-            React.createElement(
-              "option",
-              {
-                value: "Unassigned",
-              },
-              "Unassigned",
-            ),
-            (() => {
-              const computeFree = (t) => {
-                let tShift = t.shift || "Night";
-                let baseSched = null;
-                for (const sh of ["Morning", "Evening", "Night", "Weekend"]) {
-                  const found = (TT_DATA[sh].teachers || []).find(
-                    (x) => x.name === t.name || x.code === t.code,
-                  );
-                  if (found) {
-                    tShift = sh;
-                    baseSched = found.schedule || {};
-                    break;
-                  }
-                }
-                if (!TT_DATA[tShift]) return 0;
-                const slots = TT_DATA[tShift].slots || [];
-                const days =
-                  tShift === "Weekend"
-                    ? ["Sat", "Sun"]
-                    : ["Mon", "Tue", "Wed", "Thu", "Fri"];
-                const overlay = t._ttSchedule || null;
-                let free = 0;
-                days.forEach((day) => {
-                  slots.forEach((slot) => {
-                    const baseVal = baseSched
-                      ? (baseSched[day] || {})[slot]
-                      : undefined;
-                    const ovrVal = overlay
-                      ? (overlay[day] || {})[slot]
-                      : undefined;
-                    const effective = ovrVal !== undefined ? ovrVal : baseVal;
-                    if (!effective || effective === "F") free++;
-                  });
-                });
-                return free;
+              options: [
+                "Quran",
+                "EN-Quaida",
+                "Quran with Tajweed",
+                "Quran-Memo",
+                "Saudi Quran",
+                "Quran+Memo+Islamic Ed",
+                "Eng/Noorani Quaida",
+                "Subject",
+                "Other (Custom)",
+              ],
+            }),
+            pf.course === "Other (Custom)" &&
+              React.createElement(Inp, {
+                label: "Custom Course Name *",
+                value: pf.customCourse || "",
+                onChange: (v) =>
+                  setPf({
+                    ...pf,
+                    customCourse: v,
+                  }),
+                placeholder: "e.g. Hifz Revision, Tafseer Class",
+              }),
+          ),
+
+          (() => {
+            const tz = pf.state ? detectTZ(pf.state, "") : null;
+            if (!tz) {
+              return React.createElement(
+                "div",
+                {
+                  style: {
+                    marginTop: 12,
+                    padding: "12px",
+                    background: c.warnBg,
+                    borderRadius: 8,
+                    color: c.warn,
+                    fontSize: 12,
+                  },
+                },
+                "ℹ Please select a State / Province above first. We need your timezone to calculate correct teacher availability.",
+              );
+            }
+
+            const slots = pf.schedule || [
+              { id: Date.now(), day: "Mon", time: "", teacher: "" },
+            ];
+            const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+            const isQuran = pf.course !== "Subject";
+
+            // Helper to compute PKT slot
+            const getPakSlot = (usaDay, usaTime) => {
+              if (!usaTime) return null;
+              const parsed = parseUSTime(usaTime);
+              if (!parsed) return null;
+              const diffMin =
+                tzOffsetMinutes("Asia/Karachi", new Date()) -
+                tzOffsetMinutes(tz, new Date());
+              let totalMin = parsed.hour * 60 + parsed.minute + diffMin;
+              let dayIdx = DAYS.indexOf(usaDay);
+              if (totalMin >= 1440) {
+                dayIdx = (dayIdx + 1) % 7;
+                totalMin -= 1440;
+              } else if (totalMin < 0) {
+                dayIdx = (dayIdx - 1 + 7) % 7;
+                totalMin += 1440;
+              }
+              const pakH = Math.floor(totalMin / 60);
+              const pakM = Math.floor((totalMin % 60) / 30) * 30;
+              return {
+                pakDay: DAYS[dayIdx],
+                pakSlot:
+                  String(pakH).padStart(2, "0") +
+                  ":" +
+                  String(pakM).padStart(2, "0"),
               };
+            };
+
+            const isTeacherFree = (t, pakDay, pakSlot) => {
+              let tShift = t.shift || "Night";
+              let baseSched = null;
+              for (const sh of ["Morning", "Evening", "Night", "Weekend"]) {
+                const found = (TT_DATA[sh].teachers || []).find(
+                  (x) => x.name === t.name || x.code === t.code,
+                );
+                if (found) {
+                  tShift = sh;
+                  baseSched = found.schedule || {};
+                  break;
+                }
+              }
+              const baseVal = baseSched
+                ? (baseSched[pakDay] || {})[pakSlot]
+                : undefined;
+              const overlay = t._ttSchedule || null;
+              const ovrVal = overlay
+                ? (overlay[pakDay] || {})[pakSlot]
+                : undefined;
+              const effective = ovrVal !== undefined ? ovrVal : baseVal;
+              return !effective || effective === "F";
+            };
+
+            const getAvailableTeachersForSlots = (slotsToCheck) => {
               return (appTeachers || [])
                 .filter(
                   (t) =>
@@ -531,245 +556,239 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
                     t.status !== "quit" &&
                     t.status !== "terminated",
                 )
-                .map((t) => ({
-                  t: t,
-                  fs: computeFree(t),
-                }))
-                .sort((a, b) => b.fs - a.fs)
-                .map((o) =>
-                  React.createElement(
-                    "option",
-                    {
-                      key: o.t.id,
-                      value: o.t.name,
-                    },
-                    o.t.name +
-                      " \u2014 " +
-                      o.fs +
-                      " free slots" +
-                      (o.t.location ? " (" + o.t.location + ")" : ""),
-                  ),
-                );
-            })(),
-          ),
-        ),
-      ),
-      pf.course === "Other (Custom)" &&
-        React.createElement(Inp, {
-          label: "Custom Course Name *",
-          value: pf.customCourse || "",
-          onChange: (v) =>
-            setPf({
-              ...pf,
-              customCourse: v,
-            }),
-          placeholder: "e.g. Hifz Revision, Tafseer Class, Arabic Grammar",
-        }),
-      React.createElement(
-        "div",
-        {
-          style: {
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr 1fr",
-            gap: "0 14px",
-          },
-        },
-        (() => {
-          if (!pf.teacher || pf.teacher === "Unassigned") {
-            return React.createElement(Inp, {
-              label: "Class Time (USA)",
-              value: pf.time || "",
-              onChange: (v) =>
-                setPf({
-                  ...pf,
-                  time: v,
-                }),
-              placeholder: "0700 PM (select teacher first for smart picker)",
-            });
-          }
-          const tz = pf.state ? detectTZ(pf.state, "") : null;
-          if (!tz) {
-            return React.createElement(
-              "div",
-              {
-                style: {
-                  marginBottom: 12,
-                },
-              },
-              React.createElement(
-                "label",
-                {
-                  style: {
-                    display: "block",
-                    color: c.textSec,
-                    fontSize: 10,
-                    marginBottom: 4,
-                    fontWeight: 600,
-                    textTransform: "uppercase",
-                    letterSpacing: 0.5,
-                  },
-                },
-                "Class Time (USA)",
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    padding: "10px 12px",
-                    background: c.accentBg,
-                    border: "1px solid " + c.accent + "55",
-                    borderRadius: 6,
-                    color: c.accent,
-                    fontSize: 11,
-                  },
-                },
-                "\u2139 Please fill Country and State first so we can show class times in the student's timezone.",
-              ),
-            );
-          }
-          let tShift = "Night";
-          let tSchedule = null;
-          for (const sh of ["Morning", "Evening", "Night", "Weekend"]) {
-            const found = (TT_DATA[sh].teachers || []).find(
-              (x) => x.name === pf.teacher,
-            );
-            if (found) {
-              tShift = sh;
-              tSchedule = found.schedule || {};
-              break;
+                .filter((t) => {
+                  return slotsToCheck.every((slot) => {
+                    const pak = getPakSlot(slot.day, slot.time);
+                    if (!pak) return true; // If no time selected yet, don't filter out
+                    return isTeacherFree(t, pak.pakDay, pak.pakSlot);
+                  });
+                })
+                .map((t) => ({ value: t.name, label: t.name }));
+            };
+
+            const usaTimes = [];
+            for (let h = 0; h < 24; h++) {
+              for (let m of [0, 30]) {
+                const period = h >= 12 ? "PM" : "AM";
+                let dh = h % 12;
+                if (dh === 0) dh = 12;
+                const compact =
+                  String(dh).padStart(2, "0") +
+                  String(m).padStart(2, "0") +
+                  " " +
+                  period;
+                usaTimes.push({ value: compact, label: compact });
+              }
             }
-          }
-          const appT = (appTeachers || []).find((x) => x.name === pf.teacher);
-          if (appT) {
-            if (appT.shift) tShift = appT.shift;
-            if (!tSchedule) tSchedule = {};
-          }
-          const overlay = appT && appT._ttSchedule ? appT._ttSchedule : null;
-          const shiftSlots = TT_DATA[tShift].slots;
-          const daysForShift =
-            tShift === "Weekend"
-              ? ["Sat", "Sun"]
-              : ["Mon", "Tue", "Wed", "Thu", "Fri"];
-          const refDate = new Date();
-          const diffMin =
-            tzOffsetMinutes("Asia/Karachi", refDate) -
-            tzOffsetMinutes(tz, refDate);
-          const allFreeOpts = [];
-          daysForShift.forEach((day) => {
-            shiftSlots.forEach((pktSlot) => {
-              const base = (tSchedule[day] || {})[pktSlot];
-              const ovr = overlay ? (overlay[day] || {})[pktSlot] : undefined;
-              const effective = ovr !== undefined ? ovr : base;
-              const isFree = !effective || effective === "F";
-              if (!isFree) return;
-              const [ph, pm] = pktSlot.split(":").map(Number);
-              const totalMin = ph * 60 + pm - diffMin;
-              const wrapped = ((totalMin % 1440) + 1440) % 1440;
-              const uH = Math.floor(wrapped / 60);
-              const uM = wrapped % 60;
-              const period = uH >= 12 ? "PM" : "AM";
-              let dh = uH % 12;
-              if (dh === 0) dh = 12;
-              const usaCompact =
-                String(dh).padStart(2, "0") +
-                String(uM).padStart(2, "0") +
-                " " +
-                period;
-              const usaDisplay =
-                String(dh).padStart(2, "0") +
-                ":" +
-                String(uM).padStart(2, "0") +
-                " " +
-                period;
-              allFreeOpts.push({
-                value: day + "|" + usaCompact,
-                label:
-                  day +
-                  " \u00B7 " +
-                  to12h(pktSlot) +
-                  " PKT \u00B7 " +
-                  usaDisplay +
-                  " USA",
-                day: day,
-                pktSlot: pktSlot,
+
+            const updatePfSchedule = (newSlots) => {
+              const legacyT = newSlots[0]?.teacher || "Unassigned";
+              const legacyTm =
+                newSlots[0]?.day && newSlots[0]?.time
+                  ? newSlots[0].day + "|" + newSlots[0].time
+                  : "";
+              setPf({
+                ...pf,
+                schedule: newSlots,
+                teacher: legacyT,
+                time: legacyTm,
               });
-            });
-          });
-          if (allFreeOpts.length === 0) {
+            };
+
+            const addSlot = () =>
+              updatePfSchedule([
+                ...slots,
+                {
+                  id: Date.now(),
+                  day: "Mon",
+                  time: "",
+                  teacher: isQuran ? slots[0]?.teacher : "",
+                },
+              ]);
+            const removeSlot = (idx) =>
+              updatePfSchedule(slots.filter((_, i) => i !== idx));
+
+            // If Quran, we compute a Master Teacher List
+            const masterTeachers = isQuran
+              ? getAvailableTeachersForSlots(slots)
+              : [];
+
             return React.createElement(
               "div",
-              {
-                style: {
-                  marginBottom: 12,
-                },
-              },
-              React.createElement(
-                "label",
-                {
-                  style: {
-                    display: "block",
-                    color: c.textSec,
-                    fontSize: 10,
-                    marginBottom: 4,
-                    fontWeight: 600,
-                    textTransform: "uppercase",
-                    letterSpacing: 0.5,
-                  },
-                },
-                "Class Time (USA)",
-              ),
+              { style: { marginTop: 16 } },
               React.createElement(
                 "div",
                 {
                   style: {
-                    padding: "10px 12px",
-                    background: c.warnBg,
-                    border: "1px solid " + c.warn + "55",
-                    borderRadius: 6,
-                    color: c.warn,
-                    fontSize: 11,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 10,
                   },
                 },
-                "\u26A0 " +
-                  pf.teacher +
-                  " has no free slots this week. Pick another teacher or free up slots in Timetable.",
+                React.createElement(
+                  "h4",
+                  {
+                    style: {
+                      color: c.text,
+                      margin: 0,
+                      fontSize: 13,
+                      fontWeight: 600,
+                    },
+                  },
+                  "📅 Smart Schedule Builder",
+                ),
+                React.createElement(
+                  "button",
+                  {
+                    onClick: addSlot,
+                    style: {
+                      background: c.accentBg,
+                      color: c.accent,
+                      border: "none",
+                      padding: "4px 10px",
+                      borderRadius: 4,
+                      cursor: "pointer",
+                      fontSize: 11,
+                      fontWeight: "bold",
+                    },
+                  },
+                  "+ Add Slot",
+                ),
               ),
+
+              isQuran &&
+                React.createElement(
+                  "div",
+                  {
+                    style: {
+                      marginBottom: 14,
+                      padding: "10px",
+                      background: c.bgHover,
+                      borderRadius: 8,
+                      border: "1px solid " + c.border,
+                    },
+                  },
+                  React.createElement(
+                    "label",
+                    {
+                      style: {
+                        display: "block",
+                        color: c.textSec,
+                        fontSize: 10,
+                        marginBottom: 4,
+                        fontWeight: 600,
+                        textTransform: "uppercase",
+                      },
+                    },
+                    "Master Assigned Teacher (Quran Rule)",
+                  ),
+                  React.createElement(
+                    NativeSelectWrapper,
+                    {
+                      value: slots[0]?.teacher || "",
+                      onChange: (e) => {
+                        const newSlots = slots.map((s) => ({
+                          ...s,
+                          teacher: e.target.value,
+                        }));
+                        updatePfSchedule(newSlots);
+                      },
+                    },
+                    React.createElement(
+                      "option",
+                      { value: "" },
+                      "-- Select Master Teacher --",
+                    ),
+                    masterTeachers.map((t) =>
+                      React.createElement(
+                        "option",
+                        { key: t.value, value: t.value },
+                        t.label,
+                      ),
+                    ),
+                  ),
+                ),
+
+              slots.map((slot, idx) => {
+                const slotTeachers = isQuran
+                  ? []
+                  : getAvailableTeachersForSlots([slot]);
+                return React.createElement(
+                  "div",
+                  {
+                    key: slot.id,
+                    style: {
+                      display: "grid",
+                      gridTemplateColumns: isQuran
+                        ? "1fr 2fr auto"
+                        : "1fr 2fr 2fr auto",
+                      gap: 10,
+                      marginBottom: 10,
+                      alignItems: "end",
+                    },
+                  },
+                  React.createElement(Inp, {
+                    label: "Day",
+                    value: slot.day,
+                    onChange: (v) => {
+                      const n = [...slots];
+                      n[idx].day = v;
+                      updatePfSchedule(n);
+                    },
+                    options: DAYS,
+                  }),
+                  React.createElement(Inp, {
+                    label: "Time (USA)",
+                    value: slot.time,
+                    onChange: (v) => {
+                      const n = [...slots];
+                      n[idx].time = v;
+                      updatePfSchedule(n);
+                    },
+                    options: [
+                      { value: "", label: "-- Select Time --" },
+                      ...usaTimes,
+                    ],
+                  }),
+                  !isQuran &&
+                    React.createElement(Inp, {
+                      label: "Teacher",
+                      value: slot.teacher,
+                      onChange: (v) => {
+                        const n = [...slots];
+                        n[idx].teacher = v;
+                        updatePfSchedule(n);
+                      },
+                      options: [
+                        { value: "", label: "-- Select Teacher --" },
+                        ...slotTeachers,
+                      ],
+                    }),
+                  slots.length > 1 &&
+                    React.createElement(
+                      "button",
+                      {
+                        onClick: () => removeSlot(idx),
+                        style: {
+                          padding: "8px",
+                          background: c.dangerBg,
+                          color: c.danger,
+                          border: "none",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          height: 34,
+                          marginBottom: 12,
+                        },
+                      },
+                      "X",
+                    ),
+                );
+              }),
             );
-          }
-          return React.createElement(
-            "div",
-            {
-              style: {
-                marginBottom: 12,
-              },
-            },
-            React.createElement(
-              "label",
-              {
-                style: {
-                  display: "block",
-                  color: c.textSec,
-                  fontSize: 10,
-                  marginBottom: 4,
-                  fontWeight: 600,
-                  textTransform: "uppercase",
-                  letterSpacing: 0.5,
-                },
-              },
-              "Class Time (USA) \u2014 " +
-                allFreeOpts.length +
-                " free slot" +
-                (allFreeOpts.length === 1 ? "" : "s") +
-                " this week",
-            ),
-            React.createElement(CustomSelect, {
-              value: pf.time || "",
-              onChange: (v) => setPf({ ...pf, time: v }),
-              options: allFreeOpts,
-              placeholder: "-- Select Free Slot --",
-            }),
-          );
-        })(),
+          })(),
+        ),
+        // --- SMART SCHEDULE BUILDER END ---
         React.createElement(Inp, {
           label: "Date of Registration",
           value: pf.dor || "",
