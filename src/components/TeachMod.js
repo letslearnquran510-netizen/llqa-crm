@@ -1902,6 +1902,20 @@ const TeachMod = ({
               options: ["IBA", "WFH"],
             }),
             React.createElement(Inp, {
+              label: "Teaches Subjects? (e.g. Math, English)",
+              value: form.subjects
+                ? Array.isArray(form.subjects)
+                  ? form.subjects.join(", ")
+                  : form.subjects
+                : "",
+              onChange: (v) =>
+                setForm({
+                  ...form,
+                  subjects: v ? v.split(",").map((s) => s.trim()) : [],
+                }),
+              placeholder: "Leave blank for Quran-only",
+            }),
+            React.createElement(Inp, {
               label: "Team Lead (add new in Settings) *",
               value: form.teamLead || "",
               onChange: (v) =>

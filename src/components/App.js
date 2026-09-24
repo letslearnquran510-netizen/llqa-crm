@@ -728,7 +728,7 @@ function App() {
           setShifts: setShifts,
         });
       case "subjects":
-        return React.createElement(SubjectsMod, null);
+        return React.createElement(SubjectsMod, { teachers, setTeachers });
       case "attendance":
         return React.createElement(AttendanceMod, {
           user: user,
