@@ -528,6 +528,9 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
                 break;
               }
             }
+            const shiftSlots = TT_DATA[tShift] ? TT_DATA[tShift].slots : [];
+            if (!shiftSlots.includes(pakSlot)) return false;
+
             const baseVal = baseSched
               ? (baseSched[pakDay] || {})[pakSlot]
               : undefined;
@@ -557,20 +560,42 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
               .map((t) => ({ value: t.name, label: t.name }));
           };
 
-          const usaTimes = [];
-          for (let h = 0; h < 24; h++) {
-            for (let m of [0, 30]) {
-              const period = h >= 12 ? "PM" : "AM";
-              let dh = h % 12;
-              if (dh === 0) dh = 12;
-              const compact =
-                String(dh).padStart(2, "0") +
-                String(m).padStart(2, "0") +
-                " " +
-                period;
-              usaTimes.push({ value: compact, label: compact });
+          const getDynamicUsaTimes = (selectedDay) => {
+            const times = [];
+            for (let h = 0; h < 24; h++) {
+              for (let m of [0, 30]) {
+                const period = h >= 12 ? "PM" : "AM";
+                let dh = h % 12;
+                if (dh === 0) dh = 12;
+                const compact =
+                  String(dh).padStart(2, "0") +
+                  String(m).padStart(2, "0") +
+                  " " +
+                  period;
+
+                let label = compact;
+                if (selectedDay) {
+                  const pak = getPakSlot(selectedDay, compact);
+                  if (pak) {
+                    const pkh = parseInt(pak.pakSlot.split(":")[0], 10);
+                    const pkm = pak.pakSlot.split(":")[1];
+                    const pkPer = pkh >= 12 ? "PM" : "AM";
+                    let pkDh = pkh % 12;
+                    if (pkDh === 0) pkDh = 12;
+                    const displayPak =
+                      String(pkDh).padStart(2, "0") + ":" + pkm + " " + pkPer;
+
+                    let dayStr = "";
+                    if (pak.pakDay !== selectedDay) dayStr = pak.pakDay + " ";
+
+                    label = compact + " (" + dayStr + displayPak + " PKT)";
+                  }
+                }
+                times.push({ value: compact, label });
+              }
             }
-          }
+            return times;
+          };
 
           const updatePfSchedule = (newSlots) => {
             const legacyT = newSlots[0]?.teacher || "Unassigned";
@@ -739,7 +764,7 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
                   },
                   options: [
                     { value: "", label: "-- Select Time --" },
-                    ...usaTimes,
+                    ...getDynamicUsaTimes(slot.day),
                   ],
                 }),
                 !isQuran &&
