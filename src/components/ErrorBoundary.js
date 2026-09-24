@@ -28,8 +28,16 @@ class ErrorBoundary extends React.Component {
           },
         },
         React.createElement("h3", { style: { marginTop: 0 } }, "Module Error"),
-        React.createElement("p", null, "This tab crashed, but the rest of the CRM is still running."),
-        React.createElement("p", { style: { fontSize: 11, opacity: 0.8 } }, String(this.state.error)),
+        React.createElement(
+          "p",
+          null,
+          "This tab crashed, but the rest of the CRM is still running.",
+        ),
+        React.createElement(
+          "p",
+          { style: { fontSize: 11, opacity: 0.8 } },
+          String(this.state.error),
+        ),
         React.createElement(
           "button",
           {
@@ -44,8 +52,8 @@ class ErrorBoundary extends React.Component {
               cursor: "pointer",
             },
           },
-          "Try Again"
-        )
+          "Try Again",
+        ),
       );
     }
     return this.props.children;
