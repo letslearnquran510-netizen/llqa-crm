@@ -517,19 +517,31 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
 
           const isTeacherFree = (t, pakDay, pakSlot) => {
             let tShift = t.shift || "Night";
+            const shiftArr = tShift.split(",").map((x) => x.trim());
+
             let baseSched = null;
+            let foundValidShift = false;
+
+            // 1. Check if the slot belongs to ANY of the teacher's designated shifts
+            for (const sh of shiftArr) {
+              if (TT_DATA[sh] && TT_DATA[sh].slots.includes(pakSlot)) {
+                foundValidShift = true;
+                break;
+              }
+            }
+
+            // 2. Check if they are hardcoded in TT_DATA (legacy Base Teachers)
             for (const sh of ["Morning", "Evening", "Night", "Weekend"]) {
               const found = (TT_DATA[sh].teachers || []).find(
                 (x) => x.name === t.name || x.code === t.code,
               );
               if (found) {
-                tShift = sh;
                 baseSched = found.schedule || {};
-                break;
+                if (TT_DATA[sh].slots.includes(pakSlot)) foundValidShift = true;
               }
             }
-            const shiftSlots = TT_DATA[tShift] ? TT_DATA[tShift].slots : [];
-            if (!shiftSlots.includes(pakSlot)) return false;
+
+            if (!foundValidShift) return false; // The slot is entirely outside their working hours
 
             const baseVal = baseSched
               ? (baseSched[pakDay] || {})[pakSlot]
@@ -539,6 +551,7 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
               ? (overlay[pakDay] || {})[pakSlot]
               : undefined;
             const effective = ovrVal !== undefined ? ovrVal : baseVal;
+
             return !effective || effective === "F";
           };
 
@@ -673,59 +686,6 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
               ),
             ),
 
-            isQuran &&
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    marginBottom: 14,
-                    padding: "10px",
-                    background: c.bgHover,
-                    borderRadius: 8,
-                    border: "1px solid " + c.border,
-                  },
-                },
-                React.createElement(
-                  "label",
-                  {
-                    style: {
-                      display: "block",
-                      color: c.textSec,
-                      fontSize: 10,
-                      marginBottom: 4,
-                      fontWeight: 600,
-                      textTransform: "uppercase",
-                    },
-                  },
-                  "Master Assigned Teacher (Quran Rule)",
-                ),
-                React.createElement(
-                  NativeSelectWrapper,
-                  {
-                    value: slots[0]?.teacher || "",
-                    onChange: (e) => {
-                      const newSlots = slots.map((s) => ({
-                        ...s,
-                        teacher: e.target.value,
-                      }));
-                      updatePfSchedule(newSlots);
-                    },
-                  },
-                  React.createElement(
-                    "option",
-                    { value: "" },
-                    "-- Select Master Teacher --",
-                  ),
-                  masterTeachers.map((t) =>
-                    React.createElement(
-                      "option",
-                      { key: t.value, value: t.value },
-                      t.label,
-                    ),
-                  ),
-                ),
-              ),
-
             slots.map((slot, idx) => {
               const slotTeachers = isQuran
                 ? []
@@ -801,6 +761,58 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
                   ),
               );
             }),
+            isQuran &&
+              React.createElement(
+                "div",
+                {
+                  style: {
+                    marginBottom: 14,
+                    padding: "10px",
+                    background: c.bgHover,
+                    borderRadius: 8,
+                    border: "1px solid " + c.border,
+                  },
+                },
+                React.createElement(
+                  "label",
+                  {
+                    style: {
+                      display: "block",
+                      color: c.textSec,
+                      fontSize: 10,
+                      marginBottom: 4,
+                      fontWeight: 600,
+                      textTransform: "uppercase",
+                    },
+                  },
+                  "Master Assigned Teacher (Quran Rule)",
+                ),
+                React.createElement(
+                  NativeSelectWrapper,
+                  {
+                    value: slots[0]?.teacher || "",
+                    onChange: (e) => {
+                      const newSlots = slots.map((s) => ({
+                        ...s,
+                        teacher: e.target.value,
+                      }));
+                      updatePfSchedule(newSlots);
+                    },
+                  },
+                  React.createElement(
+                    "option",
+                    { value: "" },
+                    "-- Select Master Teacher --",
+                  ),
+                  masterTeachers.map((t) =>
+                    React.createElement(
+                      "option",
+                      { key: t.value, value: t.value },
+                      t.label,
+                    ),
+                  ),
+                ),
+              ),
           );
         })(),
         // --- SMART SCHEDULE BUILDER END ---
