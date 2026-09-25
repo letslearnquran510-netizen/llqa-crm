@@ -53,8 +53,8 @@ const SubjectsMod = ({
           wed: "Wed",
           thu: "Thu",
           fri: "Fri",
-          sat: "Sat",
-          sun: "Sun",
+          sat: "sat",
+          sun: "sun",
         };
 
         for (const lowerDay in daysMap) {
@@ -83,6 +83,188 @@ const SubjectsMod = ({
         return { ...updated, _ttSchedule: newTt };
       }),
     );
+  };
+  const [tab, setTab] = useState("directory");
+  const [teacherIdx, setTeacherIdx] = useState(0);
+  const [selDay, setSelDay] = useState("mon");
+  const [search, setSearch] = useState("");
+  const [fSubj, setFSubj] = useState("all");
+  const [fGrade, setFGrade] = useState("all");
+  const [fLoc, setFLoc] = useState("all");
+  const [onlyFree, setOnlyFree] = useState(false);
+  const [cellModal, setCellModal] = useState(null);
+  const [modal, setModal] = useState(null);
+  const [f, setF] = useState({});
+  const [cmp1, setCmp1] = useState(0);
+  const [cmp2, setCmp2] = useState(1);
+  const [subjShift, setSubjShift] = useState("weekday");
+  const days =
+    subjShift === "weekend"
+      ? [
+          ["sat", "Sat"],
+          ["sun", "Sun"],
+        ]
+      : [
+          ["mon", "Mon"],
+          ["tue", "Tue"],
+          ["wed", "Wed"],
+          ["thu", "Thu"],
+          ["fri", "Fri"],
+        ];
+  const filtered = useMemo(() => {
+    let d = teachers;
+    if (search)
+      d = d.filter(
+        (t) =>
+          t.name.toLowerCase().includes(search.toLowerCase()) ||
+          t.code.includes(search) ||
+          t.subjects.some((s) =>
+            s.toLowerCase().includes(search.toLowerCase()),
+          ),
+      );
+    if (fSubj !== "all") d = d.filter((t) => t.subjects.includes(fSubj));
+    if (fGrade !== "all") {
+      d = d.filter((t) => {
+        const [gFrom, gTo] = t.grades.split("-");
+        return (
+          ALL_GRADES.indexOf(fGrade) >= ALL_GRADES.indexOf(gFrom) &&
+          ALL_GRADES.indexOf(fGrade) <= ALL_GRADES.indexOf(gTo)
+        );
+      });
+    }
+    if (fLoc !== "all") d = d.filter((t) => t.location === fLoc);
+    return d;
+  }, [teachers, search, fSubj, fGrade, fLoc]);
+  const stats = useMemo(() => {
+    let totalB = 0,
+      totalF = 0,
+      subjCount = {},
+      gradeCount = {},
+      stateCount = {};
+    teachers.forEach((t) => {
+      ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].forEach((d) => {
+        for (let i = 4; i < 52; i++) {
+          const cell = t[d] ? t[d][i] : null;
+          if (cell && typeof cell === "object") {
+            totalB++;
+            subjCount[cell.sub] = (subjCount[cell.sub] || 0) + 1;
+            gradeCount[cell.gr] = (gradeCount[cell.gr] || 0) + 1;
+            stateCount[cell.st] = (stateCount[cell.st] || 0) + 1;
+          }
+        }
+      });
+    });
+    const totalPossible = teachers.length * 7 * 48;
+    totalF = totalPossible - totalB;
+    return {
+      booked: totalB,
+      free: totalF,
+      util: Math.round((totalB / (totalPossible || 1)) * 100),
+      subjCount: Object.entries(subjCount).sort((a, b) => b[1] - a[1]),
+      gradeCount: Object.entries(gradeCount).sort(
+        (a, b) => ALL_GRADES.indexOf(a[0]) - ALL_GRADES.indexOf(b[0]),
+      ),
+      stateCount: Object.entries(stateCount)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8),
+    };
+  }, [teachers]);
+  const teacherLoad = (t) => {
+    let b = 0;
+    ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].forEach((d) => {
+      for (let i = 4; i < 52; i++)
+        if (t[d] && t[d][i] && typeof t[d][i] === "object") b++;
+    });
+    return {
+      booked: b,
+      free: 336 - b,
+      util: Math.round((b / 336) * 100),
+    };
+  };
+  const freeSlotsForSubject = (subj, day = "mon") => {
+    const result = [];
+    teachers.forEach((t) => {
+      if (subj === "all" || t.subjects.includes(subj)) {
+        for (let i = 4; i < 52; i++)
+          if (!t[day][i])
+            result.push({
+              teacher: t.name,
+              code: t.code,
+              time: SUBJ_SLOTS[i - 4],
+              slotIdx: i,
+            });
+      }
+    });
+    return result.slice(0, 30);
+  };
+  const curT = teachers[teacherIdx];
+  const [clipboard, setClipboard] = useState(null);
+  const copyCell = (cell) => {
+    setClipboard({
+      ...cell,
+    });
+    setCellModal(null);
+  };
+  const cancelClipboard = () => setClipboard(null);
+  const pasteCell = (teacher, day, slotIdx) => {
+    if (!clipboard) return;
+    setTeachers(
+      teachers.map((t) =>
+        t.id === teacher.id
+          ? {
+              ...t,
+              [day]: {
+                ...t[day],
+                [slotIdx]: {
+                  ...clipboard,
+                },
+              },
+            }
+          : t,
+      ),
+    );
+  };
+  const markFree = (teacher, day, slotIdx) => {
+    setTeachers(
+      teachers.map((t) =>
+        t.id === teacher.id
+          ? {
+              ...t,
+              [day]: Object.fromEntries(
+                Object.entries(t[day] || {}).filter(
+                  ([k]) => k !== String(slotIdx),
+                ),
+              ),
+            }
+          : t,
+      ),
+    );
+    setCellModal(null);
+  };
+  const editBooking = () => {
+    const { teacher, day, slotIdx, cell } = cellModal;
+    setF({
+      teacherId: teacher.id,
+      day,
+      slotIdx,
+      editing: true,
+      s: cell.s || "",
+      a: cell.a || "",
+      p: cell.p || "",
+      sub: cell.sub || "",
+      gr: cell.gr || "",
+      st: cell.st || "",
+      t: cell.t || "",
+      country: cell.country || "USA",
+      gender: cell.gender || "Any",
+      phone: cell.phone || "",
+      family: cell.family || "",
+      dor: cell.dor || todayPK(),
+    });
+    setCellModal(null);
+    setModal({
+      type: "assign",
+    });
   };
   const openCell = (teacher, day, slotIdx, cell) =>
     setCellModal({
