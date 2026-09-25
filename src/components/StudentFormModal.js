@@ -446,6 +446,12 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
                 schedule: [], // reset schedule when course changes to avoid mismatched teacher rules
                 teacher: "",
                 time: "",
+                specificSubject:
+                  v === "Subject"
+                    ? typeof ALL_SUBJECTS !== "undefined"
+                      ? ALL_SUBJECTS[0]
+                      : "Math"
+                    : "",
               }),
             options: [
               "Quran",
@@ -459,6 +465,24 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
               "Other (Custom)",
             ],
           }),
+          pf.course === "Subject" &&
+            React.createElement(Inp, {
+              label: "Specific Subject *",
+              value:
+                pf.specificSubject ||
+                (typeof ALL_SUBJECTS !== "undefined"
+                  ? ALL_SUBJECTS[0]
+                  : "Math"),
+              onChange: (v) =>
+                setPf({
+                  ...pf,
+                  specificSubject: v,
+                }),
+              options:
+                typeof ALL_SUBJECTS !== "undefined"
+                  ? ALL_SUBJECTS
+                  : ["Math", "English", "Science"],
+            }),
           pf.course === "Other (Custom)" &&
             React.createElement(Inp, {
               label: "Custom Course Name *",
@@ -573,6 +597,24 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
                   t.status !== "quit" &&
                   t.status !== "terminated",
               )
+              .filter((t) => {
+                if (isQuran)
+                  return (
+                    !t.department ||
+                    t.department === "Quran" ||
+                    t.department === "Both"
+                  );
+
+                const isSubjectTeacher =
+                  t.department === "Subject" || t.department === "Both";
+                if (!isSubjectTeacher) return false;
+
+                if (pf.specificSubject) {
+                  const tSubs = t.subjects || [];
+                  return tSubs.includes(pf.specificSubject);
+                }
+                return true;
+              })
               .filter((t) => {
                 return slotsToCheck.every((slot) => {
                   const pak = getPakSlot(slot.day, slot.time);

@@ -1902,19 +1902,26 @@ const TeachMod = ({
               options: ["IBA", "WFH"],
             }),
             React.createElement(Inp, {
-              label: "Teaches Subjects? (e.g. Math, English)",
-              value: form.subjects
-                ? Array.isArray(form.subjects)
-                  ? form.subjects.join(", ")
-                  : form.subjects
-                : "",
+              label: "Department *",
+              value: form.department || "Quran",
               onChange: (v) =>
                 setForm({
                   ...form,
-                  subjects: v ? v.split(",").map((s) => s.trim()) : [],
+                  department: v,
+                  subjects: v === "Quran" ? [] : form.subjects || [],
                 }),
-              placeholder: "Leave blank for Quran-only",
+              options: ["Quran", "Subject", "Both"],
             }),
+            (form.department === "Subject" || form.department === "Both") &&
+              React.createElement(CustomMultiSelect, {
+                label: "Specific Subjects *",
+                value: form.subjects || [],
+                onChange: (v) => setForm({ ...form, subjects: v }),
+                options:
+                  typeof ALL_SUBJECTS !== "undefined"
+                    ? ALL_SUBJECTS
+                    : ["Math", "English", "Science"],
+              }),
             React.createElement(Inp, {
               label: "Team Lead (add new in Settings) *",
               value: form.teamLead || "",

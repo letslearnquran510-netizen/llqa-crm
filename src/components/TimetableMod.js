@@ -496,6 +496,9 @@ const TimetableMod = ({
     .filter(
       (t) =>
         !existingCodes.has(t.code) &&
+        (!t.department ||
+          t.department === "Quran" ||
+          t.department === "Both") &&
         ((t.shift || "").includes(shift) || (!t.shift && shift === "Night")),
     )
     .map((t) => ({

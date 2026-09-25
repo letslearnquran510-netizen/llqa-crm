@@ -279,6 +279,7 @@ const SalesMod = ({
             s: pf.name,
             a: String(parseInt(pf.age) || ""),
             c: courseVal,
+            sub: pf.course === "Subject" ? pf.specificSubject || "Math" : "",
             l: pf.parent || "",
             t: slot.time + " USA",
             country: pf.country || "USA",

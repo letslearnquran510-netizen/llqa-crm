@@ -2,40 +2,49 @@ const SubjectsMod = ({
   teachers: appTeachers,
   setTeachers: setAppTeachers,
 }) => {
-  const teachers = (appTeachers || []).map((t, i) => {
-    const mapped = {
-      ...t,
-      sno: i + 1,
-      subjects: t.subjects || ALL_SUBJECTS,
-    };
-    if (t._ttSchedule) {
-      const daysMap = {
-        Mon: "mon",
-        Tue: "tue",
-        Wed: "wed",
-        Thu: "thu",
-        Fri: "fri",
-        Sat: "sat",
-        Sun: "sun",
+  const teachers = (appTeachers || [])
+    .filter((t) => t.department === "Subject" || t.department === "Both")
+    .map((t, i) => {
+      const mapped = {
+        ...t,
+        sno: i + 1,
+        subjects: t.subjects || ALL_SUBJECTS,
+        mon: {},
+        tue: {},
+        wed: {},
+        thu: {},
+        fri: {},
+        sat: {},
+        sun: {},
       };
-      for (const capDay in daysMap) {
-        if (t._ttSchedule[capDay]) {
-          const lowerDay = daysMap[capDay];
-          mapped[lowerDay] = {};
-          for (const timeStr in t._ttSchedule[capDay]) {
-            const timeVal = t._ttSchedule[capDay][timeStr];
-            if (timeVal && timeVal !== "F") {
-              const idx = SUBJ_SLOTS.indexOf(timeStr);
-              if (idx !== -1) {
-                mapped[lowerDay][idx + 4] = timeVal;
+      if (t._ttSchedule) {
+        const daysMap = {
+          Mon: "mon",
+          Tue: "tue",
+          Wed: "wed",
+          Thu: "thu",
+          Fri: "fri",
+          Sat: "sat",
+          Sun: "sun",
+        };
+        for (const capDay in daysMap) {
+          if (t._ttSchedule[capDay]) {
+            const lowerDay = daysMap[capDay];
+            mapped[lowerDay] = {};
+            for (const timeStr in t._ttSchedule[capDay]) {
+              const timeVal = t._ttSchedule[capDay][timeStr];
+              if (timeVal && timeVal !== "F") {
+                const idx = SUBJ_SLOTS.indexOf(timeStr);
+                if (idx !== -1) {
+                  mapped[lowerDay][idx + 4] = timeVal;
+                }
               }
             }
           }
         }
       }
-    }
-    return mapped;
-  });
+      return mapped;
+    });
 
   const setTeachers = (newTeachers) => {
     if (!setAppTeachers) return;
@@ -2195,7 +2204,18 @@ const SubjectsMod = ({
             [cmp1, setCmp1, "Teacher A"],
             [cmp2, setCmp2, "Teacher B"],
           ].map(([ci, setCi, l], idx) => {
-            const t = teachers[ci];
+            const t = teachers[ci] ||
+              teachers[0] || {
+                subjects: [],
+                rating: 0,
+                mon: {},
+                tue: {},
+                wed: {},
+                thu: {},
+                fri: {},
+                sat: {},
+                sun: {},
+              };
             const ld = teacherLoad(t);
             return React.createElement(
               "div",
@@ -2519,26 +2539,94 @@ const SubjectsMod = ({
           [
             [
               "Subjects Taught",
-              teachers[cmp1].subjects.length,
-              teachers[cmp2].subjects.length,
+              (teachers[cmp1] || teachers[0] || { subjects: [] }).subjects
+                .length,
+              (teachers[cmp2] || teachers[0] || { subjects: [] }).subjects
+                .length,
               c.accent,
             ],
             [
               "Utilization %",
-              teacherLoad(teachers[cmp1]).util,
-              teacherLoad(teachers[cmp2]).util,
+              teacherLoad(
+                teachers[cmp1] ||
+                  teachers[0] || {
+                    mon: {},
+                    tue: {},
+                    wed: {},
+                    thu: {},
+                    fri: {},
+                    sat: {},
+                    sun: {},
+                  },
+              ).util,
+              teacherLoad(
+                teachers[cmp2] ||
+                  teachers[0] || {
+                    mon: {},
+                    tue: {},
+                    wed: {},
+                    thu: {},
+                    fri: {},
+                    sat: {},
+                    sun: {},
+                  },
+              ).util,
               c.purple,
             ],
             [
               "Booked Classes",
-              teacherLoad(teachers[cmp1]).booked,
-              teacherLoad(teachers[cmp2]).booked,
+              teacherLoad(
+                teachers[cmp1] ||
+                  teachers[0] || {
+                    mon: {},
+                    tue: {},
+                    wed: {},
+                    thu: {},
+                    fri: {},
+                    sat: {},
+                    sun: {},
+                  },
+              ).booked,
+              teacherLoad(
+                teachers[cmp2] ||
+                  teachers[0] || {
+                    mon: {},
+                    tue: {},
+                    wed: {},
+                    thu: {},
+                    fri: {},
+                    sat: {},
+                    sun: {},
+                  },
+              ).booked,
               c.success,
             ],
             [
               "Free Slots",
-              teacherLoad(teachers[cmp1]).free,
-              teacherLoad(teachers[cmp2]).free,
+              teacherLoad(
+                teachers[cmp1] ||
+                  teachers[0] || {
+                    mon: {},
+                    tue: {},
+                    wed: {},
+                    thu: {},
+                    fri: {},
+                    sat: {},
+                    sun: {},
+                  },
+              ).free,
+              teacherLoad(
+                teachers[cmp2] ||
+                  teachers[0] || {
+                    mon: {},
+                    tue: {},
+                    wed: {},
+                    thu: {},
+                    fri: {},
+                    sat: {},
+                    sun: {},
+                  },
+              ).free,
               c.warn,
             ],
             [
