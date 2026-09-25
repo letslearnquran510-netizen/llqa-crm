@@ -446,12 +446,7 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
                 schedule: [], // reset schedule when course changes to avoid mismatched teacher rules
                 teacher: "",
                 time: "",
-                specificSubject:
-                  v === "Subject"
-                    ? typeof ALL_SUBJECTS !== "undefined"
-                      ? ALL_SUBJECTS[0]
-                      : "Math"
-                    : "",
+                specificSubject: v === "Subject" ? [] : [],
               }),
             options: [
               "Quran",
@@ -466,13 +461,9 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
             ],
           }),
           pf.course === "Subject" &&
-            React.createElement(Inp, {
-              label: "Specific Subject *",
-              value:
-                pf.specificSubject ||
-                (typeof ALL_SUBJECTS !== "undefined"
-                  ? ALL_SUBJECTS[0]
-                  : "Math"),
+            React.createElement(CustomMultiSelect, {
+              label: "Specific Subjects *",
+              value: pf.specificSubject || [],
               onChange: (v) =>
                 setPf({
                   ...pf,
@@ -482,6 +473,7 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
                 typeof ALL_SUBJECTS !== "undefined"
                   ? ALL_SUBJECTS
                   : ["Math", "English", "Science"],
+              placeholder: "Select subjects...",
             }),
           pf.course === "Other (Custom)" &&
             React.createElement(Inp, {
@@ -609,9 +601,12 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
                   t.department === "Subject" || t.department === "Both";
                 if (!isSubjectTeacher) return false;
 
-                if (pf.specificSubject) {
+                if (
+                  Array.isArray(pf.specificSubject) &&
+                  pf.specificSubject.length > 0
+                ) {
                   const tSubs = t.subjects || [];
-                  return tSubs.includes(pf.specificSubject);
+                  return pf.specificSubject.some((s) => tSubs.includes(s));
                 }
                 return true;
               })
@@ -622,7 +617,13 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
                   return isTeacherFree(t, pak.pakDay, pak.pakSlot);
                 });
               })
-              .map((t) => ({ value: t.name, label: t.name }));
+              .map((t) => {
+                const subs =
+                  !isQuran && t.subjects && t.subjects.length > 0
+                    ? " (" + t.subjects.join(", ") + ")"
+                    : "";
+                return { value: t.name, label: t.name + subs };
+              });
           };
 
           const getDynamicUsaTimes = (selectedDay) => {
