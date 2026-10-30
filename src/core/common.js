@@ -494,6 +494,15 @@ const initFirebase = () => {
   try {
     fb.app = firebase.initializeApp(firebaseConfig);
     fb.db = firebase.firestore();
+    try {
+      // v64.2: a field left undefined no longer makes a whole save fail, and
+      // networks that block streaming fall back to long-polling by themselves.
+      fb.db.settings({
+        ignoreUndefinedProperties: true,
+        experimentalAutoDetectLongPolling: true,
+        merge: true,
+      });
+    } catch (e) {}
     fb.auth = firebase.auth();
     if (firebase.storage) fb.storage = firebase.storage();
     fb.ready = true;
@@ -503,72 +512,6 @@ const initFirebase = () => {
     console.error("Firebase init error:", e);
     return false;
   }
-};
-
-const useFirestoreCollection = (collectionName, fallbackData = []) => {
-  const [data, setData] = useState(() => lsRead(collectionName, fallbackData));
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  useEffect(() => {
-    if (!initFirebase()) {
-      setLoading(false);
-      return;
-    }
-    const unsub = fb.db.collection(collectionName).onSnapshot(
-      (snap) => {
-        const docs = snap.docs.map((d) => ({
-          id: d.id,
-          ...d.data(),
-        }));
-        if (docs.length === 0 && fallbackData.length > 0) {
-          fallbackData.forEach((item) => {
-            fb.db
-              .collection(collectionName)
-              .doc(String(item.id))
-              .set(item)
-              .catch(() => {});
-          });
-          setData(fallbackData);
-          lsWrite(collectionName, fallbackData);
-        } else {
-          setData(docs);
-          lsWrite(collectionName, docs);
-        }
-        setLoading(false);
-      },
-      (err) => {
-        console.error("Firestore error:", err);
-        setError(err);
-        setLoading(false);
-      },
-    );
-    return () => unsub();
-  }, [collectionName]);
-  const setRemote = useMemo(
-    () => async (newDataOrFn) => {
-      const newData =
-        typeof newDataOrFn === "function" ? newDataOrFn(data) : newDataOrFn;
-      setData(newData);
-      lsWrite(collectionName, newData);
-      if (!fb.ready) return;
-      const batch = fb.db.batch();
-      newData.forEach((item) => {
-        const ref = fb.db.collection(collectionName).doc(String(item.id));
-        batch.set(ref, item, {
-          merge: true,
-        });
-      });
-      const newIds = new Set(newData.map((i) => String(i.id)));
-      data.forEach((old) => {
-        if (!newIds.has(String(old.id))) {
-          batch.delete(fb.db.collection(collectionName).doc(String(old.id)));
-        }
-      });
-      await batch.commit().catch((e) => console.error("Batch write:", e));
-    },
-    [data, collectionName],
-  );
-  return [data, setRemote, loading, error];
 };
 
 const LS_KEY = "llqa_crm_v1::";
@@ -590,54 +533,684 @@ const lsWrite = (k, v) => {
   }
 };
 
-const useFirestoreDoc = (path, fallbackData = {}) => {
-  const [data, setData] = useState(() => lsRead(path, fallbackData));
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    if (!initFirebase()) {
-      setLoading(false);
-      return;
-    }
-    const [coll, docId] = path.split("/");
-    const unsub = fb.db
-      .collection(coll)
-      .doc(docId)
-      .onSnapshot((snap) => {
-        if (snap.exists) {
-          setData(snap.data());
-          lsWrite(path, snap.data());
-        } else if (Object.keys(fallbackData).length > 0) {
-          fb.db
-            .collection(coll)
-            .doc(docId)
-            .set(fallbackData)
-            .catch(() => {});
-          setData(fallbackData);
-          lsWrite(path, fallbackData);
-        }
-        setLoading(false);
+/* ============================================================
+   LLQA CLOUD SYNC (v64.2)
+   • The app signs in to Firebase (anonymous sign-in) before it reads
+     or saves; the Firestore rules allow signed-in app users only.
+   • One live listener per list: a save on any computer appears on
+     every other logged-in computer within seconds. A listener that
+     is refused or cut off connects again by itself.
+   • A save sends ONLY the records that changed, in batches below
+     Firebase's 500-writes limit. Until the cloud confirms it, the
+     change is kept on this computer ("pending") and sent again
+     automatically — also after a reload or a lost connection.
+   • An offline or empty cache never replaces this computer's data.
+   • Records that exist only on this computer from before v64.2
+     (when saving to the cloud was failing) are copied once to the
+     separate "_rescue" collection for the admin to review — nothing
+     is merged into the real lists automatically.
+   • LLQASync holds the honest status shown by the badge.
+   ============================================================ */
+const LLQASync = (() => {
+  let st = {
+    mode: "starting", // starting | local | cloud
+    auth: "pending", // pending | ok | failed
+    authError: "",
+    denied: {}, // list -> true while the cloud refuses to read it
+    errors: {}, // list -> other read error
+    live: {}, // list -> true once the cloud has answered
+    pending: 0, // changes waiting on this computer
+    sending: 0, // saves on their way to the cloud
+    writeError: "",
+    rescued: 0,
+  };
+  const subs = new Set();
+  return {
+    get: () => st,
+    set: (patch) => {
+      const p = typeof patch === "function" ? patch(st) : patch;
+      st = { ...st, ...p };
+      subs.forEach((f) => {
+        try {
+          f(st);
+        } catch (e) {}
       });
-    return () => unsub();
-  }, [path]);
-  const setRemote = useMemo(
-    () => async (newDataOrFn) => {
-      const newData =
-        typeof newDataOrFn === "function" ? newDataOrFn(data) : newDataOrFn;
-      setData(newData);
-      lsWrite(path, newData);
-      if (!fb.ready) return;
-      const [coll, docId] = path.split("/");
-      await fb.db
-        .collection(coll)
-        .doc(docId)
-        .set(newData, {
-          merge: true,
-        })
-        .catch((e) => console.error(e));
     },
-    [data, path],
+    sub: (f) => {
+      subs.add(f);
+      return () => subs.delete(f);
+    },
+  };
+})();
+
+let fbAuthTry = null;
+let fbAuthAt = 0;
+const fbSignIn = () => {
+  if (!initFirebase() || !fb.auth) return Promise.resolve(false);
+  if (fbAuthTry && (LLQASync.get().auth !== "failed" || Date.now() - fbAuthAt < 15000))
+    return fbAuthTry;
+  fbAuthAt = Date.now();
+  fbAuthTry = new Promise((resolve) => {
+    let settled = false;
+    let off = null;
+    const done = (ok, err) => {
+      if (settled) return;
+      settled = true;
+      try {
+        if (off) off();
+      } catch (e) {}
+      LLQASync.set(
+        ok
+          ? { auth: "ok", authError: "" }
+          : { auth: "failed", authError: (err && (err.code || err.message)) || "sign-in failed" },
+      );
+      resolve(ok);
+    };
+    try {
+      off = fb.auth.onAuthStateChanged((u) => {
+        if (u) done(true);
+      });
+      fb.auth
+        .signInAnonymously()
+        .then(() => done(true))
+        .catch((e) => done(false, e));
+      setTimeout(() => done(!!fb.auth.currentUser, { code: "auth/timeout" }), 20000);
+    } catch (e) {
+      done(false, e);
+    }
+  });
+  return fbAuthTry;
+};
+
+// Same text for the same content, whatever order the fields are in.
+const llqaStable = (v) => {
+  if (v === null || typeof v !== "object") return v === undefined ? "null" : JSON.stringify(v);
+  if (Array.isArray(v)) return "[" + v.map(llqaStable).join(",") + "]";
+  return (
+    "{" +
+    Object.keys(v)
+      .filter((k) => v[k] !== undefined && typeof v[k] !== "function")
+      .sort()
+      .map((k) => JSON.stringify(k) + ":" + llqaStable(v[k]))
+      .join(",") +
+    "}"
   );
-  return [data, setRemote, loading];
+};
+
+// Changes this computer made that the cloud has not confirmed yet.
+const LLQAPending = (() => {
+  const KEY = "llqa_crm_pending_v1";
+  let all = null;
+  const load = () => {
+    if (all) return all;
+    try {
+      all = JSON.parse(localStorage.getItem(KEY) || "{}") || {};
+    } catch (e) {
+      all = {};
+    }
+    return all;
+  };
+  const count = () =>
+    Object.keys(load()).reduce((n, k) => n + Object.keys(all[k] || {}).length, 0);
+  const save = () => {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(all));
+    } catch (e) {
+      console.warn("Could not keep unsent changes on this computer:", e.message);
+    }
+    LLQASync.set({ pending: count() });
+  };
+  return {
+    get: (name) => {
+      const m = load()[name];
+      return m && Object.keys(m).length ? m : null;
+    },
+    count,
+    add: (name, ops) => {
+      const a = load();
+      const m = (a[name] = a[name] || {});
+      ops.forEach((o) => {
+        m[o.id] = o.doc;
+      });
+      save();
+    },
+    done: (name, ops) => {
+      const a = load();
+      const m = a[name];
+      if (!m) return;
+      ops.forEach((o) => {
+        if (
+          Object.prototype.hasOwnProperty.call(m, o.id) &&
+          llqaStable(m[o.id]) === llqaStable(o.doc)
+        )
+          delete m[o.id];
+      });
+      if (!Object.keys(m).length) delete a[name];
+      save();
+    },
+  };
+})();
+
+const LLQACloud = (() => {
+  const stores = {};
+  const DONE_KEY = "llqa_crm_rescue_done_v1";
+  let device = null;
+  const deviceId = () => {
+    if (device) return device;
+    try {
+      device = localStorage.getItem("llqa_device_id");
+      if (!device) {
+        device =
+          "PC-" +
+          Date.now().toString(36).toUpperCase() +
+          "-" +
+          Math.random().toString(36).slice(2, 6).toUpperCase();
+        localStorage.setItem("llqa_device_id", device);
+      }
+    } catch (e) {
+      device = "PC-UNKNOWN";
+    }
+    return device;
+  };
+  const key = (r) => String(r && r.id);
+  const byId = (list) => {
+    const m = new Map();
+    (list || []).forEach((r) => {
+      if (r && typeof r === "object") m.set(key(r), r);
+    });
+    return m;
+  };
+  // The cloud's records with this computer's unsent changes on top.
+  const overlay = (docs, pend) => {
+    if (!pend) return docs;
+    const m = byId(docs);
+    Object.keys(pend).forEach((id) => {
+      if (pend[id] === null) m.delete(id);
+      else m.set(id, pend[id]);
+    });
+    const out = [];
+    const seen = new Set();
+    (docs || []).forEach((d) => {
+      const k = key(d);
+      if (m.has(k) && !seen.has(k)) {
+        out.push(m.get(k));
+        seen.add(k);
+      }
+    });
+    m.forEach((v, k) => {
+      if (!seen.has(k)) out.push(v);
+    });
+    return out;
+  };
+  // Only what really changed: new or edited records, and removed ones.
+  const diffOps = (prev, next) => {
+    const before = byId(prev);
+    const ops = [];
+    const seen = new Set();
+    (next || []).forEach((r) => {
+      if (!r || typeof r !== "object") return;
+      const k = key(r);
+      if (seen.has(k)) return;
+      seen.add(k);
+      const old = before.get(k);
+      if (!old || llqaStable(old) !== llqaStable(r)) ops.push({ id: k, doc: r });
+    });
+    before.forEach((r, k) => {
+      if (!seen.has(k)) ops.push({ id: k, doc: null });
+    });
+    return ops;
+  };
+  const doneMap = () => {
+    try {
+      return JSON.parse(localStorage.getItem(DONE_KEY) || "{}") || {};
+    } catch (e) {
+      return {};
+    }
+  };
+  const markChecked = (name) => {
+    try {
+      const d = doneMap();
+      d[name] = Date.now();
+      localStorage.setItem(DONE_KEY, JSON.stringify(d));
+    } catch (e) {}
+  };
+  const agent = () =>
+    String((typeof navigator !== "undefined" && navigator.userAgent) || "").slice(0, 160);
+  // When the cloud first worked again (written once by the first computer).
+  // The rescue check only runs in the 14 days after it: a computer that
+  // first opens much later just has an old copy, not unsent work.
+  const RESCUE_DAYS = 14;
+  let restoredP = null;
+  const restoredAt = () => {
+    if (restoredP) return restoredP;
+    restoredP = (async () => {
+      try {
+        await fbSignIn();
+        const ref = fb.db.collection("_meta").doc("sync");
+        const snap = await ref.get();
+        const v = snap && snap.exists && snap.data() && snap.data().restoredAt;
+        if (v) return Number(v);
+        const now = Date.now();
+        await ref.set({ restoredAt: now }, { merge: true });
+        return now;
+      } catch (e) {
+        restoredP = null;
+        return Date.now();
+      }
+    })();
+    return restoredP;
+  };
+  const rescueWindowOpen = () =>
+    restoredAt().then((at) => Date.now() - at <= RESCUE_DAYS * 86400000);
+
+  // Send writes in batches of 400 (Firebase allows at most 500 per batch).
+  const send = async (coll, ops, track) => {
+    if (!ops.length) return true;
+    if (!initFirebase()) return false;
+    await fbSignIn();
+    LLQASync.set((s) => ({ sending: s.sending + 1 }));
+    try {
+      for (let i = 0; i < ops.length; i += 400) {
+        const part = ops.slice(i, i + 400);
+        const b = fb.db.batch();
+        part.forEach((o) => {
+          const ref = fb.db.collection(coll).doc(o.id);
+          if (o.doc === null) b.delete(ref);
+          else b.set(ref, o.doc, { merge: true });
+        });
+        await b.commit();
+        if (track) LLQAPending.done(track, part);
+      }
+      LLQASync.set({ writeError: "" });
+      return true;
+    } catch (e) {
+      console.error("Cloud save failed (" + coll + "):", e);
+      LLQASync.set({ writeError: (e && (e.code || e.message)) || "save failed" });
+      return false;
+    } finally {
+      LLQASync.set((s) => ({ sending: Math.max(0, s.sending - 1) }));
+    }
+  };
+  const rescueSend = (name, found, kindOf) => {
+    const now = Date.now();
+    const dev = deviceId();
+    return send(
+      "_rescue",
+      found.map((f) => ({
+        id: (dev + "__" + name + "__" + (f.r && f.r.id != null ? key(f.r) : "doc"))
+          .replace(/\//g, "_")
+          .slice(0, 600),
+        doc: {
+          device: dev,
+          coll: name,
+          recordId: f.r && f.r.id != null ? key(f.r) : "",
+          kind: kindOf || f.kind,
+          data: f.r,
+          savedAt: now,
+          agent: agent(),
+        },
+      })),
+      null,
+    ).then((ok) => {
+      if (ok) LLQASync.set((s) => ({ rescued: s.rescued + found.length }));
+      return ok;
+    });
+  };
+  const markLive = (name) =>
+    LLQASync.set((st) => {
+      const denied = { ...st.denied };
+      delete denied[name];
+      const errors = { ...st.errors };
+      delete errors[name];
+      return { mode: "cloud", denied, errors, live: { ...st.live, [name]: true } };
+    });
+  const markError = (name, err) => {
+    const code = (err && err.code) || "";
+    LLQASync.set((st) =>
+      code === "permission-denied"
+        ? { denied: { ...st.denied, [name]: true } }
+        : { errors: { ...st.errors, [name]: code || String((err && err.message) || err) } },
+    );
+  };
+
+  // A live list (Firestore collection) shared by every screen.
+  const collection = (name, fallback) => {
+    if (stores[name]) return stores[name];
+    const s = {
+      name,
+      data: overlay(lsRead(name, fallback || []), LLQAPending.get(name)),
+      loading: true,
+      error: null,
+      subs: new Set(),
+      started: false,
+      server: false,
+      tries: 0,
+      busy: 0,
+      timer: null,
+    };
+    stores[name] = s;
+    const local0 = s.data; // this computer's copy before the cloud answers
+    const emit = () =>
+      s.subs.forEach((f) => {
+        try {
+          f();
+        } catch (e) {}
+      });
+    const show = (list) => {
+      s.data = list;
+      lsWrite(name, list);
+      emit();
+    };
+    const sendTracked = async (ops) => {
+      s.busy++;
+      try {
+        return await send(name, ops, name);
+      } finally {
+        s.busy--;
+      }
+    };
+    s.replay = async () => {
+      const pend = LLQAPending.get(name);
+      if (!pend || s.busy) return;
+      await sendTracked(Object.keys(pend).map((id) => ({ id, doc: pend[id] })));
+    };
+    const rescueOnce = (docs) => {
+      if (doneMap()[name]) return;
+      // what is waiting right now is sent anyway — note it before it goes
+      const pendAtStart = { ...(LLQAPending.get(name) || {}) };
+      rescueWindowOpen().then((open) => {
+        if (open) rescueCheck(docs, pendAtStart);
+        else markChecked(name);
+      });
+    };
+    const rescueCheck = (docs, pend) => {
+      const cloud = byId(docs);
+      const found = [];
+      (local0 || []).forEach((r) => {
+        if (!r || typeof r !== "object") return;
+        const k = key(r);
+        if (Object.prototype.hasOwnProperty.call(pend, k)) return; // sent anyway
+        const cr = cloud.get(k);
+        if (!cr) found.push({ kind: "new", r });
+        else if (llqaStable(cr) !== llqaStable(r)) found.push({ kind: "changed", r });
+      });
+      if (!found.length) return markChecked(name);
+      rescueSend(name, found).then((ok) => {
+        if (ok) markChecked(name);
+      });
+    };
+    const onSnap = (snap) => {
+      const fromCache = !!(snap.metadata && snap.metadata.fromCache);
+      if (fromCache && !s.server) return; // never let an offline cache replace this computer's data
+      const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const first = !s.server;
+      if (!fromCache) s.server = true;
+      s.tries = 0;
+      s.loading = false;
+      s.error = null;
+      markLive(name);
+      if (first) {
+        if (docs.length === 0 && (fallback || []).length > 0 && !LLQAPending.get(name)) {
+          send(name, fallback.map((r) => ({ id: key(r), doc: r })), null);
+          show(fallback);
+          return;
+        }
+        rescueOnce(docs);
+      }
+      show(overlay(docs, LLQAPending.get(name)));
+      if (LLQAPending.get(name)) s.replay();
+    };
+    const listen = async () => {
+      s.timer = null;
+      await fbSignIn();
+      try {
+        s.unsub = fb.db.collection(name).onSnapshot(onSnap, onErr);
+      } catch (e) {
+        onErr(e);
+      }
+    };
+    const onErr = (err) => {
+      console.error("Firestore error (" + name + "):", err);
+      s.loading = false;
+      s.error = err;
+      markError(name, err);
+      emit();
+      // 15 s, 30 s, 1 min, 2 min, 4 min, then every 5 min (a refused try can count as a read)
+      const wait = Math.min(300000, 15000 * Math.pow(2, s.tries++));
+      s.timer = setTimeout(listen, wait);
+    };
+    s.reconnect = () => {
+      if (!s.timer) return;
+      clearTimeout(s.timer);
+      s.tries = 0;
+      listen();
+    };
+    s.start = () => {
+      if (s.started) return;
+      s.started = true;
+      if (!initFirebase()) {
+        s.loading = false;
+        LLQASync.set({ mode: "local" });
+        emit();
+        return;
+      }
+      heartbeat();
+      listen();
+    };
+    s.set = async (v) => {
+      const prev = s.data;
+      const next = typeof v === "function" ? v(prev) : v;
+      if (!Array.isArray(next)) {
+        console.error("Save ignored for " + name + ": not a list", next);
+        return;
+      }
+      show(next);
+      if (!initFirebase()) return;
+      const ops = diffOps(prev, next);
+      if (!ops.length) return;
+      LLQAPending.add(name, ops);
+      await sendTracked(ops);
+    };
+    s.subscribe = (f) => {
+      s.subs.add(f);
+      return () => s.subs.delete(f);
+    };
+    return s;
+  };
+
+  // A single live document (settings, attendance history).
+  const doc = (path, fallback) => {
+    const id = "doc:" + path;
+    if (stores[id]) return stores[id];
+    const [coll, docId] = path.split("/");
+    const pendValue = () => {
+      const m = LLQAPending.get(id);
+      return m && Object.prototype.hasOwnProperty.call(m, "value") ? m.value : undefined;
+    };
+    const pv0 = pendValue();
+    const s = {
+      path,
+      data: pv0 !== undefined ? pv0 : lsRead(path, fallback || {}),
+      loading: true,
+      subs: new Set(),
+      started: false,
+      server: false,
+      tries: 0,
+      busy: 0,
+      timer: null,
+    };
+    stores[id] = s;
+    const local0 = s.data;
+    const emit = () =>
+      s.subs.forEach((f) => {
+        try {
+          f();
+        } catch (e) {}
+      });
+    const show = (v) => {
+      s.data = v;
+      lsWrite(path, v);
+      emit();
+    };
+    const sendDoc = async (value) => {
+      if (!initFirebase()) return false;
+      await fbSignIn();
+      s.busy++;
+      LLQASync.set((st) => ({ sending: st.sending + 1 }));
+      try {
+        await fb.db.collection(coll).doc(docId).set(value, { merge: true });
+        LLQAPending.done(id, [{ id: "value", doc: value }]);
+        LLQASync.set({ writeError: "" });
+        return true;
+      } catch (e) {
+        console.error("Cloud save failed (" + path + "):", e);
+        LLQASync.set({ writeError: (e && (e.code || e.message)) || "save failed" });
+        return false;
+      } finally {
+        s.busy--;
+        LLQASync.set((st) => ({ sending: Math.max(0, st.sending - 1) }));
+      }
+    };
+    s.replay = async () => {
+      const v = pendValue();
+      if (v === undefined || s.busy) return;
+      await sendDoc(v);
+    };
+    const hasData = (v) => v && typeof v === "object" && Object.keys(v).length > 0;
+    const onSnap = (snap) => {
+      const fromCache = !!(snap.metadata && snap.metadata.fromCache);
+      if (fromCache && !s.server) return;
+      const first = !s.server;
+      if (!fromCache) s.server = true;
+      s.tries = 0;
+      s.loading = false;
+      markLive(id);
+      const pv = pendValue();
+      if (pv !== undefined) {
+        show(pv);
+        s.replay();
+        return;
+      }
+      if (snap.exists) {
+        const v = snap.data();
+        if (first && !doneMap()[id]) {
+          if (hasData(local0) && llqaStable(local0) !== llqaStable(v))
+            rescueWindowOpen().then((open) => {
+              if (!open) return markChecked(id);
+              rescueSend(path, [{ r: local0 }], "doc").then((ok) => {
+                if (ok) markChecked(id);
+              });
+            });
+          else markChecked(id);
+        }
+        show(v);
+      } else if (hasData(fallback) || hasData(local0)) {
+        // Nothing in the cloud yet: start it from this computer's copy.
+        const seed = hasData(local0) ? local0 : fallback;
+        if (first) markChecked(id);
+        sendDoc(seed);
+        show(seed);
+      } else {
+        emit();
+      }
+    };
+    const listen = async () => {
+      s.timer = null;
+      await fbSignIn();
+      try {
+        s.unsub = fb.db.collection(coll).doc(docId).onSnapshot(onSnap, onErr);
+      } catch (e) {
+        onErr(e);
+      }
+    };
+    const onErr = (err) => {
+      console.error("Firestore error (" + path + "):", err);
+      s.loading = false;
+      markError(id, err);
+      emit();
+      // 15 s, 30 s, 1 min, 2 min, 4 min, then every 5 min (a refused try can count as a read)
+      const wait = Math.min(300000, 15000 * Math.pow(2, s.tries++));
+      s.timer = setTimeout(listen, wait);
+    };
+    s.reconnect = () => {
+      if (!s.timer) return;
+      clearTimeout(s.timer);
+      s.tries = 0;
+      listen();
+    };
+    s.start = () => {
+      if (s.started) return;
+      s.started = true;
+      if (!initFirebase()) {
+        s.loading = false;
+        LLQASync.set({ mode: "local" });
+        emit();
+        return;
+      }
+      heartbeat();
+      listen();
+    };
+    s.set = async (v) => {
+      const next = typeof v === "function" ? v(s.data) : v;
+      show(next);
+      if (!initFirebase()) return;
+      LLQAPending.add(id, [{ id: "value", doc: next }]);
+      await sendDoc(next);
+    };
+    s.subscribe = (f) => {
+      s.subs.add(f);
+      return () => s.subs.delete(f);
+    };
+    return s;
+  };
+
+  // Every minute (and when the internet comes back) send what is waiting.
+  let beat = null;
+  const replayAll = () =>
+    Object.keys(stores).forEach((k) => {
+      const s = stores[k];
+      if (s.server && s.replay) s.replay();
+    });
+  const heartbeat = () => {
+    if (beat) return;
+    beat = setInterval(replayAll, 60000);
+    try {
+      window.addEventListener("online", () => {
+        setTimeout(() => {
+          retryNow();
+        }, 1500);
+      });
+    } catch (e) {}
+  };
+  const retryNow = () => {
+    Object.keys(stores).forEach((k) => {
+      if (stores[k].reconnect) stores[k].reconnect();
+    });
+    replayAll();
+  };
+  return { collection, doc, deviceId, retryNow, stores: () => stores };
+})();
+
+const useFirestoreCollection = (collectionName, fallbackData = []) => {
+  const store = LLQACloud.collection(collectionName, fallbackData);
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const off = store.subscribe(() => bump((n) => n + 1));
+    store.start();
+    return off;
+  }, [collectionName]);
+  return [store.data, store.set, store.loading, store.error];
+};
+
+const useFirestoreDoc = (path, fallbackData = {}) => {
+  const store = LLQACloud.doc(path, fallbackData);
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const off = store.subscribe(() => bump((n) => n + 1));
+    store.start();
+    return off;
+  }, [path]);
+  return [store.data, store.set, store.loading];
 };
 
 const pushAuditLog = async (entry) => {
@@ -649,6 +1222,7 @@ const pushAuditLog = async (entry) => {
     return;
   }
   try {
+    await fbSignIn();
     await fb.db.collection("loginAudit").add({
       ...entry,
       serverTime: firebase.firestore.FieldValue.serverTimestamp(),
@@ -662,23 +1236,27 @@ const useConnectionStatus = () => {
   const [online, setOnline] = useState(
     typeof navigator !== "undefined" ? navigator.onLine : true,
   );
-  const [synced, setSynced] = useState(true);
+  const [sync, setSync] = useState(LLQASync.get());
   useEffect(() => {
     const goOnline = () => setOnline(true);
     const goOffline = () => setOnline(false);
     window.addEventListener("online", goOnline);
     window.addEventListener("offline", goOffline);
+    const off = LLQASync.sub((s) => setSync(s));
     return () => {
       window.removeEventListener("online", goOnline);
       window.removeEventListener("offline", goOffline);
+      off();
     };
   }, []);
   return {
     online,
     fbReady: fb.ready,
-    synced,
+    synced: !sync.pending && !sync.sending,
+    sync,
   };
 };
+
 
 const c = {
   bg: "var(--bg)",
