@@ -525,6 +525,15 @@ const lsRead = (k, fb) => {
   }
 };
 
+// True only when this computer really has its own saved copy (not built-in defaults).
+const lsHas = (k) => {
+  try {
+    return localStorage.getItem(LS_KEY + k) !== null;
+  } catch (e) {
+    return false;
+  }
+};
+
 const lsWrite = (k, v) => {
   try {
     localStorage.setItem(LS_KEY + k, JSON.stringify(v));
@@ -674,6 +683,12 @@ const LLQAPending = (() => {
       });
       save();
     },
+    clear: (name) => {
+      const a = load();
+      if (!a[name]) return;
+      delete a[name];
+      save();
+    },
     done: (name, ops) => {
       const a = load();
       const m = a[name];
@@ -742,9 +757,18 @@ const LLQACloud = (() => {
     });
     return out;
   };
+  // A fingerprint of every record, taken when the data arrives. Changes are
+  // found by comparing with these fingerprints — not with the live objects —
+  // so an edit made directly on a record (before saving) is never missed.
+  const sigOf = (list) => {
+    const m = new Map();
+    (list || []).forEach((r) => {
+      if (r && typeof r === "object") m.set(key(r), llqaStable(r));
+    });
+    return m;
+  };
   // Only what really changed: new or edited records, and removed ones.
-  const diffOps = (prev, next) => {
-    const before = byId(prev);
+  const diffOps = (prevSig, next) => {
     const ops = [];
     const seen = new Set();
     (next || []).forEach((r) => {
@@ -752,13 +776,52 @@ const LLQACloud = (() => {
       const k = key(r);
       if (seen.has(k)) return;
       seen.add(k);
-      const old = before.get(k);
-      if (!old || llqaStable(old) !== llqaStable(r)) ops.push({ id: k, doc: r });
+      if (prevSig.get(k) !== llqaStable(r)) ops.push({ id: k, doc: r });
     });
-    before.forEach((r, k) => {
+    prevSig.forEach((v, k) => {
       if (!seen.has(k)) ops.push({ id: k, doc: null });
     });
     return ops;
+  };
+  // Settings documents: only the fields that changed are sent, so two
+  // computers saving different fields (e.g. two teachers' attendance) never
+  // overwrite each other.
+  const DEL = { __llqaDelete: true };
+  const isDel = (v) => !!(v && typeof v === "object" && v.__llqaDelete === true);
+  const fieldSig = (obj) => {
+    const m = new Map();
+    if (obj && typeof obj === "object")
+      Object.keys(obj).forEach((k) => {
+        if (obj[k] !== undefined) m.set(k, llqaStable(obj[k]));
+      });
+    return m;
+  };
+  const fieldOps = (prevSig, next) => {
+    const ops = [];
+    const b = next && typeof next === "object" ? next : {};
+    Object.keys(b).forEach((k) => {
+      if (b[k] !== undefined && prevSig.get(k) !== llqaStable(b[k])) ops.push({ id: k, doc: b[k] });
+    });
+    prevSig.forEach((v, k) => {
+      if (!(k in b) || b[k] === undefined) ops.push({ id: k, doc: DEL });
+    });
+    return ops;
+  };
+  const applyFields = (base, pend) => {
+    const out = { ...(base && typeof base === "object" ? base : {}) };
+    if (pend)
+      Object.keys(pend).forEach((k) => {
+        if (isDel(pend[k])) delete out[k];
+        else out[k] = pend[k];
+      });
+    return out;
+  };
+  // Lists the automatic background updates may rely on: loaded from the
+  // cloud in this session (or the app runs without a cloud at all).
+  const ready = (name) => {
+    if (!firebaseConfig || LLQASync.get().mode === "local") return true;
+    const s = stores[name];
+    return !!(s && s.server);
   };
   const doneMap = () => {
     try {
@@ -889,7 +952,9 @@ const LLQACloud = (() => {
       timer: null,
     };
     stores[name] = s;
-    const local0 = s.data; // this computer's copy before the cloud answers
+    s.sig = sigOf(s.data);
+    // this computer's own copy before the cloud answers (none on a new computer)
+    const local0 = lsHas(name) ? s.data : [];
     const emit = () =>
       s.subs.forEach((f) => {
         try {
@@ -898,6 +963,7 @@ const LLQACloud = (() => {
       });
     const show = (list) => {
       s.data = list;
+      s.sig = sigOf(list);
       lsWrite(name, list);
       emit();
     };
@@ -998,15 +1064,15 @@ const LLQACloud = (() => {
       listen();
     };
     s.set = async (v) => {
-      const prev = s.data;
-      const next = typeof v === "function" ? v(prev) : v;
+      const prevSig = s.sig;
+      const next = typeof v === "function" ? v(s.data) : v;
       if (!Array.isArray(next)) {
         console.error("Save ignored for " + name + ": not a list", next);
         return;
       }
       show(next);
       if (!initFirebase()) return;
-      const ops = diffOps(prev, next);
+      const ops = diffOps(prevSig, next);
       if (!ops.length) return;
       LLQAPending.add(name, ops);
       await sendTracked(ops);
@@ -1018,19 +1084,21 @@ const LLQACloud = (() => {
     return s;
   };
 
-  // A single live document (settings, attendance history).
+  // A single live document (settings, attendance history). Saves send only
+  // the fields that changed; the waiting fields are kept per field.
   const doc = (path, fallback) => {
     const id = "doc:" + path;
+    const pid = "docp:" + path;
     if (stores[id]) return stores[id];
+    // v64.2 kept the whole document as "waiting"; the rescue check below
+    // covers those edits, so the old entry is cleared instead of re-sent.
+    if (LLQAPending.get(id)) LLQAPending.clear(id);
     const [coll, docId] = path.split("/");
-    const pendValue = () => {
-      const m = LLQAPending.get(id);
-      return m && Object.prototype.hasOwnProperty.call(m, "value") ? m.value : undefined;
-    };
-    const pv0 = pendValue();
+    const base0 = lsRead(path, fallback || {});
+    const own0 = lsHas(path) ? base0 : null; // built-in defaults are not "this computer's data"
     const s = {
       path,
-      data: pv0 !== undefined ? pv0 : lsRead(path, fallback || {}),
+      data: applyFields(base0, LLQAPending.get(pid)),
       loading: true,
       subs: new Set(),
       started: false,
@@ -1039,8 +1107,8 @@ const LLQACloud = (() => {
       busy: 0,
       timer: null,
     };
+    s.sig = fieldSig(s.data);
     stores[id] = s;
-    const local0 = s.data;
     const emit = () =>
       s.subs.forEach((f) => {
         try {
@@ -1049,17 +1117,23 @@ const LLQACloud = (() => {
       });
     const show = (v) => {
       s.data = v;
+      s.sig = fieldSig(v);
       lsWrite(path, v);
       emit();
     };
-    const sendDoc = async (value) => {
+    const sendFields = async (ops) => {
+      if (!ops.length) return true;
       if (!initFirebase()) return false;
       await fbSignIn();
       s.busy++;
       LLQASync.set((st) => ({ sending: st.sending + 1 }));
       try {
-        await fb.db.collection(coll).doc(docId).set(value, { merge: true });
-        LLQAPending.done(id, [{ id: "value", doc: value }]);
+        const patch = {};
+        ops.forEach((o) => {
+          patch[o.id] = isDel(o.doc) ? firebase.firestore.FieldValue.delete() : o.doc;
+        });
+        await fb.db.collection(coll).doc(docId).set(patch, { merge: true });
+        LLQAPending.done(pid, ops);
         LLQASync.set({ writeError: "" });
         return true;
       } catch (e) {
@@ -1072,11 +1146,16 @@ const LLQACloud = (() => {
       }
     };
     s.replay = async () => {
-      const v = pendValue();
-      if (v === undefined || s.busy) return;
-      await sendDoc(v);
+      const pend = LLQAPending.get(pid);
+      if (!pend || s.busy) return;
+      await sendFields(Object.keys(pend).map((k) => ({ id: k, doc: pend[k] })));
     };
     const hasData = (v) => v && typeof v === "object" && Object.keys(v).length > 0;
+    const without = (o, pend) => {
+      const out = { ...(o || {}) };
+      Object.keys(pend || {}).forEach((k) => delete out[k]);
+      return out;
+    };
     const onSnap = (snap) => {
       const fromCache = !!(snap.metadata && snap.metadata.fromCache);
       if (fromCache && !s.server) return;
@@ -1085,34 +1164,34 @@ const LLQACloud = (() => {
       s.tries = 0;
       s.loading = false;
       markLive(id);
-      const pv = pendValue();
-      if (pv !== undefined) {
-        show(pv);
-        s.replay();
-        return;
-      }
+      const pend = LLQAPending.get(pid);
       if (snap.exists) {
-        const v = snap.data();
+        const v = snap.data() || {};
         if (first && !doneMap()[id]) {
-          if (hasData(local0) && llqaStable(local0) !== llqaStable(v))
+          const mine = without(own0, pend);
+          if (own0 && hasData(mine) && llqaStable(mine) !== llqaStable(without(v, pend)))
             rescueWindowOpen().then((open) => {
               if (!open) return markChecked(id);
-              rescueSend(path, [{ r: local0 }], "doc").then((ok) => {
+              rescueSend(path, [{ r: base0 }], "doc").then((ok) => {
                 if (ok) markChecked(id);
               });
             });
           else markChecked(id);
         }
-        show(v);
-      } else if (hasData(fallback) || hasData(local0)) {
+        show(applyFields(v, pend));
+      } else if (hasData(fallback) || hasData(base0) || pend) {
         // Nothing in the cloud yet: start it from this computer's copy.
-        const seed = hasData(local0) ? local0 : fallback;
+        const seed = applyFields(hasData(base0) ? base0 : fallback, pend);
         if (first) markChecked(id);
-        sendDoc(seed);
+        const ops = fieldOps(new Map(), seed);
+        LLQAPending.add(pid, ops);
         show(seed);
+        sendFields(ops);
+        return;
       } else {
         emit();
       }
+      if (pend) s.replay();
     };
     const listen = async () => {
       s.timer = null;
@@ -1151,11 +1230,17 @@ const LLQACloud = (() => {
       listen();
     };
     s.set = async (v) => {
+      const prevSig = s.sig;
       const next = typeof v === "function" ? v(s.data) : v;
+      if (!next || typeof next !== "object" || Array.isArray(next)) {
+        console.error("Save ignored for " + path + ": not a document", next);
+        return;
+      }
+      const ops = fieldOps(prevSig, next);
       show(next);
-      if (!initFirebase()) return;
-      LLQAPending.add(id, [{ id: "value", doc: next }]);
-      await sendDoc(next);
+      if (!ops.length || !initFirebase()) return;
+      LLQAPending.add(pid, ops);
+      await sendFields(ops);
     };
     s.subscribe = (f) => {
       s.subs.add(f);
@@ -1188,7 +1273,7 @@ const LLQACloud = (() => {
     });
     replayAll();
   };
-  return { collection, doc, deviceId, retryNow, stores: () => stores };
+  return { collection, doc, deviceId, retryNow, ready, stores: () => stores };
 })();
 
 const useFirestoreCollection = (collectionName, fallbackData = []) => {
