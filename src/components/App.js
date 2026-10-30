@@ -249,6 +249,8 @@ function App() {
   }, [page]);
   useEffect(() => {
     if (!students) return;
+    // v64.3: only when Students AND Master Data have both arrived from the cloud
+    if (!LLQACloud.ready("students") || !LLQACloud.ready("salesMasterData")) return;
     const CORE = [
       "name",
       "age",
@@ -309,6 +311,8 @@ function App() {
   }, [students, salesMasterData]);
   useEffect(() => {
     if (!students || !students.length) return;
+    // v64.3: only when Students AND Referrals have both arrived from the cloud
+    if (!LLQACloud.ready("students") || !LLQACloud.ready("salesReferrals")) return;
     const wr = students.filter(
       (s) => s.referredBy && String(s.referredBy).trim(),
     );
@@ -348,6 +352,8 @@ function App() {
     if (!user || (user.role !== "teacher" && user.role !== "teamlead")) return;
 
     const sendHeartbeat = () => {
+      // v64.3: never write attendance before it has arrived from the cloud
+      if (!LLQACloud.ready("doc:data/attendanceHistory")) return;
       const today = todayPK();
       const now = new Date();
       const pkNow = new Date(
@@ -400,6 +406,8 @@ function App() {
     if (!user || user.role !== "superadmin") return;
 
     const runDaemon = () => {
+      // v64.3: never write attendance before it has arrived from the cloud
+      if (!LLQACloud.ready("doc:data/attendanceHistory")) return;
       setAttendanceHistory((prev) => {
         if (!prev) return prev;
         const now = new Date();
