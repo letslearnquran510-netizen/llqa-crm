@@ -90,13 +90,32 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers }) => {
       hoursPerWeek: valid.length ? String(valid.length * 0.5) : "",
     });
   };
-  const setRow = (i, patch) =>
-    commit(rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  // A change that makes a row repeat another row's day + time (for example
+  // switching row 2's day to Mon while it holds 1:00 PM) clears that row's
+  // time at once, so the form can never hold the same class twice.
+  const setRow = (i, patch) => {
+    const next = rows.map((r, j) => (j === i ? { ...r, ...patch } : r));
+    const r = next[i];
+    const dup =
+      r && r.day && r.time
+        ? next.findIndex((x, j) => j !== i && x.day === r.day && x.time === r.time)
+        : -1;
+    if (dup >= 0) {
+      next[i] = { ...r, time: "" };
+      commit(
+        next,
+        "⛔ " + r.day + " " + B.timeLabel(r.time) + " is already in row " + (dup + 1) +
+          " — time cleared for row " + (i + 1) + ". Pick another time.",
+      );
+      return;
+    }
+    commit(next);
+  };
   const removeRow = (i) => commit(rows.filter((_, j) => j !== i));
   const addRow = () => {
     const last = rows[rows.length - 1] || {};
     const time = last.time || "";
-    let day = "Mon";
+    let day = null;
     if (last.day) {
       for (let k = 1; k <= 7; k++) {
         const d = B.DAYS[(B.DAYS.indexOf(last.day) + k) % 7];
@@ -108,7 +127,19 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers }) => {
         }
       }
     }
-    commit([...rows, { id: Date.now(), day, time, teacher: isQuran ? master : "" }]);
+    if (day) {
+      commit([...rows, { id: Date.now(), day, time, teacher: isQuran ? master : "" }]);
+      return;
+    }
+    // No other free day at this time: add the row without a time, never a copy.
+    const next = last.day ? B.DAYS[(B.DAYS.indexOf(last.day) + 1) % 7] : "Mon";
+    commit(
+      [...rows, { id: Date.now(), day: next, time: "", teacher: isQuran ? master : "" }],
+      time
+        ? "No other day is free at " + B.timeLabel(time) + (master ? " for " + master : "") +
+            " — choose a day and time for the new row."
+        : "",
+    );
   };
   const PATTERNS = [
     ["Mon–Fri", ["Mon", "Tue", "Wed", "Thu", "Fri"]],
