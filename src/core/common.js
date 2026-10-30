@@ -515,6 +515,9 @@ const initFirebase = () => {
 };
 
 const LS_KEY = "llqa_crm_v1::";
+// Set when this computer wipes its copy after a full reset: from then until
+// the page reloads, nothing is written to this computer or sent to the cloud.
+let llqaFrozen = false;
 
 const lsRead = (k, fb) => {
   try {
@@ -535,6 +538,7 @@ const lsHas = (k) => {
 };
 
 const lsWrite = (k, v) => {
+  if (llqaFrozen) return;
   try {
     localStorage.setItem(LS_KEY + k, JSON.stringify(v));
   } catch (e) {
@@ -662,6 +666,7 @@ const LLQAPending = (() => {
   const count = () =>
     Object.keys(load()).reduce((n, k) => n + Object.keys(all[k] || {}).length, 0);
   const save = () => {
+    if (llqaFrozen) return;
     try {
       localStorage.setItem(KEY, JSON.stringify(all));
     } catch (e) {
@@ -670,6 +675,9 @@ const LLQAPending = (() => {
     LLQASync.set({ pending: count() });
   };
   return {
+    forget: () => {
+      all = {};
+    },
     get: (name) => {
       const m = load()[name];
       return m && Object.keys(m).length ? m : null;
@@ -831,6 +839,7 @@ const LLQACloud = (() => {
     }
   };
   const markChecked = (name) => {
+    if (llqaFrozen) return;
     try {
       const d = doneMap();
       d[name] = Date.now();
@@ -866,11 +875,107 @@ const LLQACloud = (() => {
   const rescueWindowOpen = () =>
     restoredAt().then((at) => Date.now() - at <= RESCUE_DAYS * 86400000);
 
+  // ---------- full reset ("start from zero") ----------
+  // _meta/sync.epoch changes when all CRM data is reset. A computer whose
+  // copy is from before the reset wipes it (lists, waiting changes, rescue
+  // state) and reloads — nothing old is shown, rescued or sent again.
+  // Nothing is read or sent until this check has passed.
+  const EPOCH_KEY = "llqa_crm_epoch_v1";
+  const hadLocalAtStart = (() => {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.indexOf(LS_KEY) === 0 || k === "llqa_crm_pending_v1")) return true;
+      }
+    } catch (e) {}
+    return false;
+  })();
+  let epochOk = false;
+  let epochWaiters = [];
+  let epochWatching = false;
+  const wipeLocal = () => {
+    try {
+      const keys = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.indexOf(LS_KEY) === 0 || k === "llqa_crm_pending_v1" || k === "llqa_crm_rescue_done_v1")) keys.push(k);
+      }
+      keys.forEach((k) => localStorage.removeItem(k));
+    } catch (e) {}
+  };
+  const passEpoch = () => {
+    if (epochOk) return;
+    epochOk = true;
+    const w = epochWaiters;
+    epochWaiters = [];
+    w.forEach((r) => r(true));
+  };
+  const watchEpoch = async () => {
+    if (epochWatching) return;
+    epochWatching = true;
+    await fbSignIn();
+    const onSnap = (snap) => {
+      if (snap.metadata && snap.metadata.fromCache) return;
+      markLive("reset-check");
+      const cloud = (snap.exists && snap.data() && snap.data().epoch) || "";
+      let mine = null;
+      try {
+        mine = localStorage.getItem(EPOCH_KEY);
+      } catch (e) {}
+      if (cloud && mine !== cloud) {
+        if (mine === null && !hadLocalAtStart) {
+          try {
+            localStorage.setItem(EPOCH_KEY, cloud); // a new computer: nothing old here
+          } catch (e) {}
+        } else {
+          llqaFrozen = true;
+          LLQAPending.forget();
+          wipeLocal();
+          try {
+            localStorage.setItem(EPOCH_KEY, cloud);
+          } catch (e) {}
+          console.warn("All CRM data was reset — this computer's old copy was cleared.");
+          try {
+            location.reload();
+          } catch (e) {}
+          return; // never pass: nothing old may be sent before the reload
+        }
+      }
+      passEpoch();
+    };
+    const listenEpoch = async () => {
+      await fbSignIn();
+      try {
+        fb.db
+          .collection("_meta")
+          .doc("sync")
+          .onSnapshot(onSnap, (err) => {
+            markError("reset-check", err);
+            setTimeout(listenEpoch, 30000);
+          });
+      } catch (e) {
+        setTimeout(listenEpoch, 30000);
+      }
+    };
+    listenEpoch();
+  };
+  const epochReady = () => {
+    if (epochOk) return Promise.resolve(true);
+    if (!initFirebase()) {
+      passEpoch();
+      return Promise.resolve(true);
+    }
+    watchEpoch();
+    return new Promise((r) => epochWaiters.push(r));
+  };
+
   // Send writes in batches of 400 (Firebase allows at most 500 per batch).
   const send = async (coll, ops, track) => {
     if (!ops.length) return true;
     if (!initFirebase()) return false;
     await fbSignIn();
+    await epochReady();
+    if (llqaFrozen) return false;
     LLQASync.set((s) => ({ sending: s.sending + 1 }));
     try {
       for (let i = 0; i < ops.length; i += 400) {
@@ -1029,6 +1134,7 @@ const LLQACloud = (() => {
     const listen = async () => {
       s.timer = null;
       await fbSignIn();
+      await epochReady();
       try {
         s.unsub = fb.db.collection(name).onSnapshot(onSnap, onErr);
       } catch (e) {
@@ -1064,6 +1170,7 @@ const LLQACloud = (() => {
       listen();
     };
     s.set = async (v) => {
+      if (llqaFrozen) return;
       const prevSig = s.sig;
       const next = typeof v === "function" ? v(s.data) : v;
       if (!Array.isArray(next)) {
@@ -1125,6 +1232,8 @@ const LLQACloud = (() => {
       if (!ops.length) return true;
       if (!initFirebase()) return false;
       await fbSignIn();
+      await epochReady();
+      if (llqaFrozen) return false;
       s.busy++;
       LLQASync.set((st) => ({ sending: st.sending + 1 }));
       try {
@@ -1196,6 +1305,7 @@ const LLQACloud = (() => {
     const listen = async () => {
       s.timer = null;
       await fbSignIn();
+      await epochReady();
       try {
         s.unsub = fb.db.collection(coll).doc(docId).onSnapshot(onSnap, onErr);
       } catch (e) {
@@ -1230,6 +1340,7 @@ const LLQACloud = (() => {
       listen();
     };
     s.set = async (v) => {
+      if (llqaFrozen) return;
       const prevSig = s.sig;
       const next = typeof v === "function" ? v(s.data) : v;
       if (!next || typeof next !== "object" || Array.isArray(next)) {
@@ -1273,7 +1384,7 @@ const LLQACloud = (() => {
     });
     replayAll();
   };
-  return { collection, doc, deviceId, retryNow, ready, stores: () => stores };
+  return { collection, doc, deviceId, retryNow, ready, epochReady, stores: () => stores };
 })();
 
 const useFirestoreCollection = (collectionName, fallbackData = []) => {
@@ -1308,6 +1419,7 @@ const pushAuditLog = async (entry) => {
   }
   try {
     await fbSignIn();
+    await LLQACloud.epochReady();
     await fb.db.collection("loginAudit").add({
       ...entry,
       serverTime: firebase.firestore.FieldValue.serverTimestamp(),
