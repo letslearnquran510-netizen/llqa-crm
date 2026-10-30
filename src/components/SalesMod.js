@@ -76,6 +76,37 @@ const SalesMod = ({
   };
   const saveEdit = () => {
     const id = editForm.id;
+    const before =
+      current.find((s) => String(s.id) === String(id)) ||
+      (modal && modal.data) ||
+      {};
+    const cells = LLQABooking.studentCells(teachers || [], before);
+    const moved =
+      String(editForm.teacher || "") !== String(before.teacher || "") ||
+      String(editForm.time || "") !== String(before.time || "");
+    if (
+      cells.length &&
+      moved &&
+      !confirm(
+        "You changed the teacher or class time for " +
+          (editForm.name || before.name) +
+          ".\n\nThis updates the student record only. The Timetable still has these classes:\n" +
+          LLQABooking.cellsText(cells) +
+          "\n\nUse Class Shifting to move the actual classes.\n\nSave the record change anyway?",
+      )
+    )
+      return;
+    let freeSlots = false;
+    if (editForm.status === "quit" && before.status !== "quit" && cells.length) {
+      freeSlots = confirm(
+        (editForm.name || before.name) +
+          " is now marked Quit.\n\nFree their " +
+          cells.length +
+          " timetable slot(s) so new students can book them?\n\n" +
+          LLQABooking.cellsText(cells) +
+          "\n\nOK = free the slots  ·  Cancel = keep them booked",
+      );
+    }
     upsertSalesMaster([
       {
         ...editForm,
@@ -95,6 +126,19 @@ const SalesMod = ({
         }),
       );
     }
+    if (cells.length && setTeachers && teachers) {
+      if (freeSlots) setTeachers(LLQABooking.release(teachers, cells));
+      else if (
+        ["name", "parent", "age", "course", "country", "state", "phone"].some(
+          (k) =>
+            String(editForm[k] == null ? "" : editForm[k]) !==
+            String(before[k] == null ? "" : before[k]),
+        )
+      )
+        setTeachers(
+          LLQABooking.updateCells(teachers, cells, { ...before, ...editForm }),
+        );
+    }
     setModal(null);
   };
   const oDelete = (rec) =>
@@ -104,6 +148,10 @@ const SalesMod = ({
     });
   const doDelete = () => {
     const id = modal.data.id;
+    const stu = current.find((s) => String(s.id) === String(id)) || modal.data;
+    const cells = LLQABooking.studentCells(teachers || [], stu);
+    if (cells.length && setTeachers && teachers)
+      setTeachers(LLQABooking.release(teachers, cells));
     setStudents(students.filter((s) => String(s.id) !== String(id)));
     setModal(null);
   };
@@ -128,6 +176,35 @@ const SalesMod = ({
       currency: "USD",
       notes: "",
       family: "",
+    });
+    setModal({
+      type: "addNew",
+    });
+  };
+  // v64: turn a referral into a student in one step (form pre-filled).
+  const oEnrollRef = (r) => {
+    setPf({
+      name: r.studentName || "",
+      age: "",
+      gender: "",
+      parent: "",
+      country: r.country || "USA",
+      state: r.state || "",
+      course: r.course || "Quran",
+      teacher: "",
+      fee: "paid",
+      time: "",
+      dor: todayPK(),
+      phone: r.contact || "",
+      email: "",
+      hoursPerWeek: "",
+      classType: "Regular",
+      fee_amount: "",
+      currency: "USD",
+      notes: r.notes || "",
+      family: "",
+      referredBy: r.referredBy || "",
+      _refId: r.id,
     });
     setModal({
       type: "addNew",
@@ -222,105 +299,82 @@ const SalesMod = ({
       trial: "trial",
       trialStart: pf.dor || todayPK(),
     };
-    setStudents([...current, newStudent]);
-
-    if (pf.schedule && pf.schedule.length > 0 && setTeachers && teachers) {
-      try {
-        let updatedTeachers = [...teachers];
-        const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
-        let skippedSlots = [];
-        for (const slot of pf.schedule) {
-          if (
-            !slot.teacher ||
-            slot.teacher === "Unassigned" ||
-            !slot.time ||
-            !slot.day
-          ) {
-            skippedSlots.push(slot.day + " " + (slot.time || "No Time"));
-            continue;
-          }
-
-          const targetTeacher = updatedTeachers.find(
-            (t) => t.name === slot.teacher,
-          );
-          if (!targetTeacher) {
-            skippedSlots.push(
-              slot.day + " " + (slot.time || "") + " (Teacher not found)",
-            );
-            continue;
-          }
-
-          const parsed = parseUSTime(slot.time);
-          const tz = detectTZ(pf.state || "", slot.time);
-          if (!parsed || !tz) continue;
-
-          const diffMin =
-            tzOffsetMinutes("Asia/Karachi", new Date()) -
-            tzOffsetMinutes(tz, new Date());
-          let totalMin = parsed.hour * 60 + parsed.minute + diffMin;
-          let dayIdx = DAYS.indexOf(slot.day);
-
-          if (totalMin >= 1440) {
-            dayIdx = (dayIdx + 1) % 7;
-            totalMin -= 1440;
-          } else if (totalMin < 0) {
-            dayIdx = (dayIdx - 1 + 7) % 7;
-            totalMin += 1440;
-          }
-
-          const pakH = Math.floor(totalMin / 60);
-          const pakM = Math.floor((totalMin % 60) / 30) * 30;
-          const slotStr =
-            String(pakH).padStart(2, "0") + ":" + String(pakM).padStart(2, "0");
-          const pakDay = DAYS[dayIdx];
-
-          const newBooking = {
-            s: pf.name,
-            a: String(parseInt(pf.age) || ""),
-            c: courseVal,
-            sub:
-              pf.course === "Subject"
-                ? Array.isArray(pf.specificSubject) &&
-                  pf.specificSubject.length > 0
-                  ? pf.specificSubject.join(", ")
-                  : "Subject"
-                : "",
-            l: pf.parent || "",
-            t: slot.time + " USA",
-            country: pf.country || "USA",
-            state: pf.state || "",
-            gender: pf.gender || "Any",
-            phone: pf.phone || "",
-            family: pf.family || "",
-            f: [],
-          };
-
-          updatedTeachers = updatedTeachers.map((t) => {
-            if (t.id !== targetTeacher.id) return t;
-            const sch = t._ttSchedule
-              ? JSON.parse(JSON.stringify(t._ttSchedule))
-              : {};
-            if (!sch[pakDay]) sch[pakDay] = {};
-            sch[pakDay][slotStr] = newBooking;
-            return { ...t, _ttSchedule: sch };
-          });
-        }
-
-        setTeachers(updatedTeachers);
-        if (skippedSlots.length > 0) {
-          alert(
-            "Student saved successfully!\n\nHowever, the following slots were NOT booked in the Timetable because no Teacher was selected (or the Teacher was hidden because the time falls outside their Shift):\n\n" +
-              skippedSlots.join("\n") +
-              "\n\nPlease ensure you select a Teacher that is available during the converted PKT times.",
-          );
-        }
-      } catch (e) {
-        console.error("Auto-booking failed:", e);
-      }
+    // v64: every slot is checked and booked through LLQABooking —
+    // all-or-nothing, on the student's day, never on top of another student.
+    const isQuranCourse = pf.course !== "Subject";
+    const rowsAll = Array.isArray(pf.schedule) ? pf.schedule : [];
+    const pl = LLQABooking.plan({
+      rows: rowsAll,
+      country: pf.country,
+      state: pf.state,
+      teachers: teachers || [],
+      isQuran: isQuranCourse,
+      master: isQuranCourse ? (rowsAll[0] && rowsAll[0].teacher) || "" : "",
+    });
+    if (pl.problems.length) {
+      alert(
+        "Student NOT saved — please fix the class schedule first:\n\n• " +
+          pl.problems.join("\n• "),
+      );
+      return;
     }
-
+    const subLabel =
+      pf.course === "Subject"
+        ? Array.isArray(pf.specificSubject) && pf.specificSubject.length > 0
+          ? pf.specificSubject.join(", ")
+          : "Subject"
+        : "";
+    const stu = {
+      ...newStudent,
+      // never reuse the id of a removed student (Sales Master Data) or of a
+      // booking still in the Timetable
+      id: LLQABooking.nextStudentId([current, master], teachers),
+      teacher: pl.items.length ? pl.items[0].teacher : newStudent.teacher,
+      time: pl.items.length
+        ? pl.items.map((it) => it.day + "|" + it.time).join(", ")
+        : newStudent.time,
+      hoursPerWeek: pl.items.length
+        ? String(pl.items.length * 0.5)
+        : newStudent.hoursPerWeek,
+      schedule: pl.items.map((it) => ({
+        day: it.day,
+        time: it.time,
+        teacher: it.teacher,
+        pktDay: it.pktDay,
+        pktSlot: it.slot,
+      })),
+      tz: pl.tz || "",
+      parentId: newStudent.parentId || LLQABooking.newParentId(current),
+    };
+    let nextTeachers = null;
+    if (pl.items.length) {
+      if (!setTeachers || !teachers) {
+        alert("Student NOT saved — the Timetable is still loading. Please try again in a moment.");
+        return;
+      }
+      const res = LLQABooking.book(teachers, pl.items, { ...stu, sub: subLabel });
+      if (!res.ok) {
+        alert(
+          "Student NOT saved — the Timetable changed while the form was open:\n\n• " +
+            res.problems.join("\n• "),
+        );
+        return;
+      }
+      nextTeachers = res.teachers;
+    }
+    setStudents([...current, stu]);
+    if (nextTeachers) setTeachers(nextTeachers);
+    if (pf._refId && setSalesReferrals) {
+      setSalesReferrals(
+        refs.map((r) =>
+          r.id === pf._refId
+            ? { ...r, status: "Enrolled", studentId: stu.id, enrolledDate: todayPK() }
+            : r,
+        ),
+      );
+    }
     setModal(null);
+    alert(LLQABooking.bookingSummary(stu.name, pl.items, stu.parentId));
   };
   const REF_STATUSES = [
     "New",
@@ -1041,6 +1095,25 @@ const SalesMod = ({
                         whiteSpace: "nowrap",
                       },
                     },
+                    !r.studentId &&
+                      r.status !== "Enrolled" &&
+                      React.createElement(
+                        "button",
+                        {
+                          onClick: () => oEnrollRef(r),
+                          title: "Enroll as a student (Add Student opens pre-filled)",
+                          style: {
+                            background: "none",
+                            border: "none",
+                            cursor: "pointer",
+                            padding: 3,
+                            color: c.success,
+                          },
+                        },
+                        React.createElement(UserPlus, {
+                          size: 14,
+                        }),
+                      ),
                     React.createElement(
                       "button",
                       {
@@ -1081,8 +1154,227 @@ const SalesMod = ({
         ),
       ),
     );
+  // v64: Booking Health — compares every student's saved class times with the
+  // Timetable and repairs the safe problems in one click.
+  const renderHealth = () => {
+    const B = LLQABooking;
+    const H = B.healthFor(teachers, students, salesMasterData);
+    const ql = (search || "").toLowerCase();
+    const match = (x) =>
+      !ql ||
+      [x.stu && x.stu.name, x.stu && x.stu.parent, x.teacher, x.problem, x.label].some(
+        (v) => String(v || "").toLowerCase().includes(ql),
+      );
+    const action = H.issues.filter(
+      (x) => x.kind !== "info" && x.kind !== "extra" && x.kind !== "clock" && match(x),
+    );
+    const info = H.issues.filter((x) => (x.kind === "info" || x.kind === "extra") && match(x));
+    const clock = H.issues.filter((x) => x.kind === "clock" && match(x));
+    const fixable = action.filter((x) => x.fix);
+    const n = (k) => H.issues.filter((x) => x.kind === k).length;
+    const runFixes = (list) => {
+      if (!list.length || !setTeachers || !teachers) return;
+      if (
+        !confirm(
+          "Apply " + list.length + " fix" + (list.length === 1 ? "" : "es") + " to the Timetable?\n\n" +
+            list.slice(0, 12).map((x) => "• " + ((x.stu && x.stu.name) || "?") + " — " + x.problem).join("\n") +
+            (list.length > 12 ? "\n… and " + (list.length - 12) + " more" : ""),
+        )
+      )
+        return;
+      const res = B.applyFixes(teachers, list.map((x) => x.fix));
+      setTeachers(res.teachers);
+      alert(
+        "✓ " + res.done + " fix" + (res.done === 1 ? "" : "es") + " applied to the Timetable." +
+          (res.skipped.length ? "\n\nSkipped (the Timetable changed meanwhile):\n• " + res.skipped.join("\n• ") : ""),
+      );
+    };
+    const KIND = {
+      missing: ["Not booked", c.warn],
+      wrongday: ["Wrong day", c.danger],
+      clash: ["Clash", c.danger],
+      quit: ["Quit — still booked", c.purple],
+      removed: ["Removed — still booked", c.purple],
+    };
+    return React.createElement(
+      "div",
+      null,
+      React.createElement(
+        "div",
+        {
+          style: {
+            padding: "10px 12px",
+            background: c.accentBg,
+            border: "1px solid " + c.accent + "33",
+            borderRadius: 8,
+            color: c.textSec,
+            fontSize: 11,
+            lineHeight: 1.6,
+            marginBottom: 12,
+          },
+        },
+        "Checks every student's saved class days and times against the Timetable: classes never booked, classes on the wrong day, clashes with another student, and slots still held by students who quit or were removed. Safe fixes only book free slots or free slots that belong to that same student — nothing else is touched.",
+      ),
+      React.createElement(
+        "div",
+        { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+        React.createElement(SC, { icon: Users, label: "Students checked", value: H.checked, color: c.accent }),
+        React.createElement(SC, { icon: Check, label: "All correct", value: H.okCount, color: c.success }),
+        React.createElement(SC, { icon: Calendar, label: "Not booked", value: n("missing"), color: c.warn }),
+        React.createElement(SC, { icon: AlertTriangle, label: "Wrong day / clash", value: n("wrongday") + n("clash"), color: c.danger }),
+        React.createElement(SC, { icon: UserX, label: "Left but holding slots", value: n("quit") + n("removed"), color: c.purple }),
+      ),
+      action.length === 0
+        ? React.createElement(
+            "div",
+            {
+              style: {
+                padding: 22,
+                textAlign: "center",
+                color: c.success,
+                background: c.successBg,
+                borderRadius: 10,
+                fontSize: 13,
+                fontWeight: 600,
+                marginBottom: 12,
+              },
+            },
+            H.checked
+              ? "✓ Every checked student's classes match the Timetable."
+              : "No students with saved class times to check yet.",
+          )
+        : React.createElement(
+            "div",
+            null,
+            React.createElement(
+              "div",
+              { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 } },
+              React.createElement(
+                "div",
+                { style: { color: c.textSec, fontSize: 12 } },
+                action.length + " problem" + (action.length === 1 ? "" : "s") + " found · " + fixable.length + " can be fixed automatically",
+              ),
+              fixable.length > 0 &&
+                React.createElement(
+                  Btn,
+                  { icon: Check, onClick: () => runFixes(fixable) },
+                  "Fix " + fixable.length + " safe issue" + (fixable.length === 1 ? "" : "s"),
+                ),
+            ),
+            React.createElement(
+              "div",
+              { style: { overflowX: "auto", border: "1px solid " + c.border, borderRadius: 10, marginBottom: 12 } },
+              React.createElement(
+                "table",
+                { style: { width: "100%", borderCollapse: "collapse", fontSize: 12 } },
+                React.createElement(
+                  "thead",
+                  null,
+                  React.createElement(
+                    "tr",
+                    null,
+                    ["Student", "Teacher", "Class", "Problem", ""].map((h, i) =>
+                      React.createElement("th", { key: i, style: thStyle }, h),
+                    ),
+                  ),
+                ),
+                React.createElement(
+                  "tbody",
+                  null,
+                  action.map((x, i) => {
+                    const k = KIND[x.kind] || [x.kind, c.textSec];
+                    return React.createElement(
+                      "tr",
+                      { key: i, style: { borderBottom: "1px solid " + c.border } },
+                      React.createElement(
+                        "td",
+                        { style: { ...tdStyle, color: c.text, fontWeight: 600 } },
+                        (x.stu && x.stu.name) || "?",
+                        React.createElement(
+                          "div",
+                          { style: { color: c.textMuted, fontSize: 10, fontWeight: 400 } },
+                          (x.stu && x.stu.parent) || "",
+                        ),
+                      ),
+                      React.createElement("td", { style: { ...tdStyle, color: c.textSec } }, x.teacher || "—"),
+                      React.createElement("td", { style: { ...tdStyle, color: c.textSec, fontSize: 11 } }, x.label || ""),
+                      React.createElement(
+                        "td",
+                        { style: tdStyle },
+                        React.createElement("span", { style: { color: k[1], fontWeight: 700, fontSize: 11 } }, k[0]),
+                        React.createElement(
+                          "div",
+                          { style: { color: c.textSec, fontSize: 11 } },
+                          x.problem + (x.note ? " — " + x.note : ""),
+                        ),
+                      ),
+                      React.createElement(
+                        "td",
+                        { style: { ...tdStyle, whiteSpace: "nowrap" } },
+                        x.fix
+                          ? React.createElement(
+                              Btn,
+                              { variant: "outline", onClick: () => runFixes([x]) },
+                              x.fix.type === "free" ? "Free slots" : x.fix.type === "move" ? "Move" : "Book",
+                            )
+                          : React.createElement("span", { style: { color: c.textMuted, fontSize: 11 } }, "Fix in Timetable"),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+            ),
+          ),
+      clock.length > 0 &&
+        React.createElement(
+          "details",
+          {
+            style: {
+              color: c.textSec,
+              fontSize: 11,
+              marginBottom: 12,
+              padding: "8px 12px",
+              background: c.accentBg,
+              border: "1px solid " + c.accent + "33",
+              borderRadius: 8,
+            },
+          },
+          React.createElement(
+            "summary",
+            { style: { cursor: "pointer", color: c.accent, fontWeight: 600, lineHeight: 1.5 } },
+            "🕐 " + clock.length + " class" + (clock.length === 1 ? " is" : "es are") +
+              " still on the Pakistan time from before the student's clock change, so the family's local time has moved. Tell these families, or move the classes in Class Shifting.",
+          ),
+          clock.map((x, i) =>
+            React.createElement(
+              "div",
+              { key: i, style: { padding: "4px 0", borderBottom: "1px solid " + c.border } },
+              ((x.stu && x.stu.name) || "?") + " (" + (x.teacher || "?") + ") — " + x.label + " — " + x.problem,
+            ),
+          ),
+        ),
+      info.length > 0 &&
+        React.createElement(
+          "details",
+          { style: { color: c.textSec, fontSize: 11, marginBottom: 12 } },
+          React.createElement(
+            "summary",
+            { style: { cursor: "pointer", marginBottom: 6 } },
+            info.length + " note" + (info.length === 1 ? "" : "s") + " that can't be checked automatically (older records, extra classes added in the Timetable)",
+          ),
+          info.map((x, i) =>
+            React.createElement(
+              "div",
+              { key: i, style: { padding: "4px 0", borderBottom: "1px solid " + c.border } },
+              ((x.stu && x.stu.name) || "?") + " — " + (x.label ? x.label + " — " : "") + x.problem,
+            ),
+          ),
+        ),
+    );
+  };
   const isMaster = tab === "master";
   const isRefs = tab === "references";
+  const isHealth = tab === "health";
   const studentRows = isMaster ? filteredMaster : filteredCurrent;
   return React.createElement(
     "div",
@@ -1208,6 +1500,7 @@ const SalesMod = ({
         ["master", "Sales Master Data"],
         ["current", "Current Students List"],
         ["references", "References"],
+        ["health", "Booking Health"],
       ].map(([k, l]) =>
         React.createElement(
           "button",
@@ -1587,7 +1880,11 @@ const SalesMod = ({
           ),
         ),
     ),
-    isRefs ? renderRefTable() : renderStudentTable(studentRows, isMaster),
+    isHealth
+      ? renderHealth()
+      : isRefs
+        ? renderRefTable()
+        : renderStudentTable(studentRows, isMaster),
     modal &&
       modal.type === "addNew" &&
       React.createElement(StudentFormModal, {
@@ -2171,6 +2468,36 @@ const SalesMod = ({
             ),
             " from the current students list?",
           ),
+          (() => {
+            const dc = LLQABooking.studentCells(
+              teachers || [],
+              current.find((s) => String(s.id) === String(modal.data.id)) || modal.data,
+            );
+            return dc.length
+              ? React.createElement(
+                  "div",
+                  {
+                    style: {
+                      padding: "8px 12px",
+                      background: c.successBg,
+                      border: "1px solid " + c.success + "44",
+                      borderRadius: 8,
+                      marginBottom: 10,
+                      textAlign: "left",
+                      color: c.success,
+                      fontSize: 11,
+                      lineHeight: 1.5,
+                    },
+                  },
+                  "\u2713 " + dc.length + " timetable slot" + (dc.length === 1 ? "" : "s") + " will be freed automatically:",
+                  React.createElement(
+                    "div",
+                    { style: { whiteSpace: "pre-line", color: c.textSec, marginTop: 4 } },
+                    LLQABooking.cellsText(dc),
+                  ),
+                )
+              : null;
+          })(),
           React.createElement(
             "div",
             {

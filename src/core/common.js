@@ -78,6 +78,45 @@ const STATE_TZ = {
   "british columbia": "America/Vancouver",
   manitoba: "America/Winnipeg",
   saskatchewan: "America/Regina",
+  // v64: places the Add Student form offers but had no timezone
+  "district of columbia": "America/New_York",
+  "new brunswick": "America/Moncton",
+  "nova scotia": "America/Halifax",
+  "prince edward island": "America/Halifax",
+  newfoundland: "America/St_Johns",
+  yukon: "America/Whitehorse",
+  "northwest territories": "America/Edmonton",
+  nunavut: "America/Iqaluit",
+  england: "Europe/London",
+  scotland: "Europe/London",
+  wales: "Europe/London",
+  "northern ireland": "Europe/London",
+  "united kingdom": "Europe/London",
+  london: "Europe/London",
+  manchester: "Europe/London",
+  birmingham: "Europe/London",
+  liverpool: "Europe/London",
+  leeds: "Europe/London",
+  glasgow: "Europe/London",
+  edinburgh: "Europe/London",
+  bristol: "Europe/London",
+  sheffield: "Europe/London",
+  cardiff: "Europe/London",
+  belfast: "Europe/London",
+  "abu dhabi": "Asia/Dubai",
+  dubai: "Asia/Dubai",
+  sharjah: "Asia/Dubai",
+  ajman: "Asia/Dubai",
+  "umm al quwain": "Asia/Dubai",
+  "ras al khaimah": "Asia/Dubai",
+  fujairah: "Asia/Dubai",
+  "new south wales": "Australia/Sydney",
+  queensland: "Australia/Brisbane",
+  "western australia": "Australia/Perth",
+  "south australia": "Australia/Adelaide",
+  tasmania: "Australia/Hobart",
+  "australian capital territory": "Australia/Sydney",
+  "northern territory": "Australia/Darwin",
 };
 
 const COUNTRY_STATES = {
@@ -192,9 +231,12 @@ const detectTZ = (stateOrLoc, timeStr) => {
   const s = String(stateOrLoc || "")
     .toLowerCase()
     .trim();
+  // v64: longest match wins, so "New South Wales" is not read as "Wales"
+  let best = null;
   for (const k in STATE_TZ) {
-    if (s.includes(k)) return STATE_TZ[k];
+    if (s.includes(k) && (!best || k.length > best.length)) best = k;
   }
+  if (best) return STATE_TZ[best];
   const t = String(timeStr || "").toLowerCase();
   if (/\b(ca|cst|cdt)\b/.test(t) && !/usa/.test(t)) return "America/Toronto";
   if (/\busa\b|\b(am|pm)\b/.test(t)) return "America/New_York";
@@ -2276,12 +2318,14 @@ const CustomSelect = ({
             {
               key: o.value,
               onClick: () => {
+                if (o.disabled) return;
                 onChange(o.value);
                 setOpen(false);
               },
               style: {
                 padding: "8px 12px",
-                cursor: "pointer",
+                cursor: o.disabled ? "not-allowed" : "pointer",
+                opacity: o.disabled ? 0.45 : 1,
                 fontSize: 12,
                 color: String(o.value) === String(value) ? c.accent : c.text,
                 background:
@@ -2290,7 +2334,7 @@ const CustomSelect = ({
                 alignItems: "center",
               },
               onMouseEnter: (e) => {
-                if (String(o.value) !== String(value))
+                if (!o.disabled && String(o.value) !== String(value))
                   e.currentTarget.style.background = c.bgHover;
               },
               onMouseLeave: (e) => {
@@ -2457,3 +2501,775 @@ const CustomMultiSelect = ({
       ),
   );
 };
+
+
+/* ============================================================
+   LLQA BOOKING ENGINE (v64) — one set of rules for every
+   Add Student booking: Sales tab, Students tab, Booking Health.
+   • Timetable rows are the STUDENT'S day. A Florida student at
+     Mon 5:00 PM sits in the Mon row at 02:00 PKT (the Timetable
+     shows it as "PK 2:00 AM (+1d)").
+   • Empty cells and "F" are free, "N" is No Class, a cell with a
+     student is booked — the same way the Timetable grid shows them.
+   • A booking only happens if EVERY slot is free at save time
+     (all-or-nothing), so two students can never share a slot.
+   ============================================================ */
+const LLQABooking = (() => {
+  const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const SHIFTS = ["Morning", "Evening", "Night", "Weekend"];
+  const pad = (n) => String(n).padStart(2, "0");
+  const norm = (v) => String(v == null ? "" : v).trim().toLowerCase();
+  const rowDaysOf = (sh) =>
+    sh === "Weekend" ? ["Sat", "Sun"] : ["Mon", "Tue", "Wed", "Thu", "Fri"];
+  const copy = (o) => JSON.parse(JSON.stringify(o || {}));
+
+  /* ---------- timezones ---------- */
+  const COUNTRY_TZ = {
+    uk: "Europe/London",
+    "united kingdom": "Europe/London",
+    uae: "Asia/Dubai",
+    "united arab emirates": "Asia/Dubai",
+  };
+  const REGION_TZ = {
+    canada: {
+      "new brunswick": "America/Moncton",
+      "nova scotia": "America/Halifax",
+      "prince edward island": "America/Halifax",
+      "newfoundland and labrador": "America/St_Johns",
+      yukon: "America/Whitehorse",
+      "northwest territories": "America/Edmonton",
+      nunavut: "America/Iqaluit",
+    },
+    australia: {
+      "new south wales": "Australia/Sydney",
+      victoria: "Australia/Melbourne",
+      queensland: "Australia/Brisbane",
+      "western australia": "Australia/Perth",
+      "south australia": "Australia/Adelaide",
+      tasmania: "Australia/Hobart",
+      "australian capital territory": "Australia/Sydney",
+      "northern territory": "Australia/Darwin",
+    },
+  };
+  const timezoneFor = (country, state) => {
+    const c = norm(country);
+    const s = norm(state);
+    if (COUNTRY_TZ[c]) return COUNTRY_TZ[c];
+    const region = REGION_TZ[c];
+    if (region && s && region[s]) return region[s];
+    if (!s) return null;
+    return detectTZ(state, "") || null;
+  };
+
+  /* ---------- time conversion (student time -> PKT slot) ---------- */
+  // Same answer as tzOffsetMinutes(), but the formatter is built once per
+  // timezone and each minute is remembered (checking hundreds of students
+  // would otherwise build thousands of formatters).
+  const fmtCache = {};
+  const offCache = new Map();
+  const offsetAt = (tz, d) => {
+    const t = d ? d.getTime() : Date.now();
+    const key = tz + "|" + Math.floor(t / 60000);
+    const hit = offCache.get(key);
+    if (hit !== undefined) return hit;
+    let v = 0;
+    try {
+      const f =
+        fmtCache[tz] ||
+        (fmtCache[tz] = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "shortOffset" }));
+      const part = f.formatToParts(new Date(t)).find((p) => p.type === "timeZoneName");
+      const m = ((part && part.value) || "").match(/GMT([+-]\d+)(?::(\d+))?/);
+      v = m ? parseInt(m[1], 10) * 60 + (m[1].startsWith("-") ? -1 : 1) * parseInt(m[2] || "0", 10) : 0;
+    } catch (e) {
+      v = 0;
+    }
+    if (offCache.size > 20000) offCache.clear();
+    offCache.set(key, v);
+    return v;
+  };
+  const toPkt = (day, time, tz, refDate) => {
+    if (!day || !time || !tz || DAYS.indexOf(day) < 0) return null;
+    const p = parseUSTime(time);
+    if (!p) return null;
+    const ref = refDate || new Date();
+    const diff = offsetAt("Asia/Karachi", ref) - offsetAt(tz, ref);
+    const total = p.hour * 60 + p.minute + diff;
+    const dayShift = Math.floor(total / 1440);
+    const w = ((total % 1440) + 1440) % 1440;
+    const slot =
+      pad(Math.floor(w / 60)) + ":" + pad(Math.floor((w % 60) / 30) * 30);
+    const pktDay = DAYS[(((DAYS.indexOf(day) + dayShift) % 7) + 7) % 7];
+    return { rowDay: day, slot, pktDay, dayShift };
+  };
+  const fmt12 = (slot) => {
+    const [h, m] = String(slot).split(":").map(Number);
+    const per = h >= 12 ? "PM" : "AM";
+    let dh = h % 12;
+    if (dh === 0) dh = 12;
+    return pad(dh) + ":" + pad(m) + " " + per;
+  };
+  const pktLabel = (pk) =>
+    pk
+      ? fmt12(pk.slot) +
+        " PKT" +
+        (pk.dayShift === 1 ? " (+1d)" : pk.dayShift === -1 ? " (-1d)" : "")
+      : "";
+  const TIMES = (() => {
+    const out = [];
+    for (let h = 0; h < 24; h++)
+      for (const m of [0, 30]) {
+        const per = h >= 12 ? "PM" : "AM";
+        let dh = h % 12;
+        if (dh === 0) dh = 12;
+        out.push(pad(dh) + pad(m) + " " + per);
+      }
+    return out;
+  })();
+  const timeLabel = (t) => {
+    const p = parseUSTime(t);
+    return p ? fmt12(pad(p.hour) + ":" + pad(p.minute)) : String(t || "");
+  };
+  // Next clock change (DST) for a timezone within the next 60 days, to the
+  // minute (a day-by-day scan alone can report the following day).
+  const clockChange = (tz, from) => {
+    if (!tz) return null;
+    const start = from || new Date();
+    const base = offsetAt(tz, start);
+    for (let d = 1; d <= 60; d++) {
+      const t = new Date(start.getTime() + d * 86400000);
+      const off = offsetAt(tz, t);
+      if (off !== base) {
+        let lo = t.getTime() - 86400000;
+        let hi = t.getTime();
+        while (hi - lo > 60000) {
+          const mid = Math.floor((lo + hi) / 2);
+          if (offsetAt(tz, new Date(mid)) === base) lo = mid;
+          else hi = mid;
+        }
+        // clocks change on a whole minute: the only one inside (lo, hi]
+        const m = Math.floor(hi / 60000) * 60000;
+        return { date: new Date(m > lo ? m : hi), before: base, after: off };
+      }
+    }
+    return null;
+  };
+  // Every Pakistan slot a class can sit on: today's conversion first, then the
+  // one from the other side of the student's clock change. Pakistan has no
+  // DST, so a class booked before a change stays on its old slot until moved.
+  const pktOptions = (day, time, tz, now) => {
+    const ref = now || new Date();
+    const y = ref.getUTCFullYear();
+    const out = [];
+    [ref, new Date(Date.UTC(y, 0, 15, 12)), new Date(Date.UTC(y, 6, 15, 12))].forEach((d) => {
+      const pk = toPkt(day, time, tz, d);
+      if (pk && !out.some((o) => o.slot === pk.slot)) out.push(pk);
+    });
+    return out;
+  };
+  const slotMinutes = (pk) => {
+    const [h, m] = String(pk.slot).split(":").map(Number);
+    return pk.dayShift * 1440 + h * 60 + m;
+  };
+
+  /* ---------- teachers and cells ---------- */
+  const shiftsOf = (t) =>
+    String((t && t.shift) || "Night")
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => s && TT_DATA[s] && Array.isArray(TT_DATA[s].slots));
+  const baseOf = (t) => {
+    if (!t) return null;
+    for (const sh of SHIFTS) {
+      const list = (TT_DATA[sh] && TT_DATA[sh].teachers) || [];
+      const f = list.find(
+        (x) => (t.code && x.code === t.code) || (t.name && x.name === t.name),
+      );
+      if (f) return f.schedule || {};
+    }
+    return null;
+  };
+  const rawCell = (t, day, slot) => {
+    const ov = t && t._ttSchedule;
+    if (ov && ov[day] && ov[day][slot] !== undefined) return ov[day][slot];
+    const base = baseOf(t);
+    return base && base[day] ? base[day][slot] : undefined;
+  };
+  const isActive = (t) =>
+    !!t &&
+    t.status !== "resigned" &&
+    t.status !== "quit" &&
+    t.status !== "terminated";
+  const inShift = (t, day, slot) =>
+    shiftsOf(t).some(
+      (sh) => rowDaysOf(sh).includes(day) && TT_DATA[sh].slots.includes(slot),
+    );
+  const slotInfo = (t, day, slot) => {
+    if (!t) return { state: "noteacher" };
+    if (!isActive(t)) return { state: "inactive" };
+    if (!inShift(t, day, slot)) return { state: "offshift" };
+    const v = rawCell(t, day, slot);
+    if (v === undefined || v === null || v === "" || v === "F")
+      return { state: "free" };
+    if (typeof v === "object" && v.s) return { state: "booked", who: v.s, cell: v };
+    if (v === "N") return { state: "noclass" };
+    return { state: "blocked" };
+  };
+  const reasonText = (info) =>
+    ({
+      booked: "already booked (" + (info && info.who) + ")",
+      offshift: "outside this teacher's shift",
+      noclass: "marked No Class in the Timetable",
+      blocked: "not available in the Timetable",
+      inactive: "teacher is not active",
+      noteacher: "teacher not found",
+    })[info && info.state] || "not available";
+  const countLoad = (t) => {
+    let booked = 0;
+    let free = 0;
+    shiftsOf(t).forEach((sh) =>
+      rowDaysOf(sh).forEach((d) =>
+        TT_DATA[sh].slots.forEach((s) => {
+          const st = slotInfo(t, d, s).state;
+          if (st === "booked") booked++;
+          else if (st === "free") free++;
+        }),
+      ),
+    );
+    return { booked, free };
+  };
+  const rankTeachers = (teachers, items, opts) => {
+    const o = opts || {};
+    return (teachers || [])
+      .filter((t) => isActive(t) && shiftsOf(t).length > 0)
+      .filter((t) => !o.filter || o.filter(t))
+      .filter((t) =>
+        (items || []).every(
+          (it) => slotInfo(t, it.rowDay, it.slot).state === "free",
+        ),
+      )
+      .map((t) => ({ t, load: countLoad(t) }))
+      .sort(
+        (a, b) =>
+          a.load.booked - b.load.booked ||
+          b.load.free - a.load.free ||
+          String(a.t.name).localeCompare(String(b.t.name)),
+      );
+  };
+
+  /* ---------- students ---------- */
+  // Strict match: student id first, else same name AND same parent.
+  const sameStudent = (cell, stu) => {
+    if (!cell || typeof cell !== "object" || !cell.s || !stu) return false;
+    if (cell.sid != null && cell.sid !== "" && stu.id != null)
+      return String(cell.sid) === String(stu.id);
+    if (norm(cell.s) !== norm(stu.name)) return false;
+    const cl = norm(cell.l);
+    const pl = norm(stu.parent);
+    return !cl || cl === pl;
+  };
+  // Every booked cell in the Timetable, in teacher → day → slot order.
+  const eachBooked = (teachers, fn) => {
+    (teachers || []).forEach((t) => {
+      if (!t) return;
+      const ov = t._ttSchedule || {};
+      const base = baseOf(t) || {};
+      const days = new Set([...Object.keys(ov), ...Object.keys(base)]);
+      days.forEach((d) => {
+        const slots = new Set([
+          ...Object.keys(ov[d] || {}),
+          ...Object.keys(base[d] || {}),
+        ]);
+        slots.forEach((s) => {
+          const v = rawCell(t, d, s);
+          if (v && typeof v === "object" && v.s)
+            fn({ teacherId: t.id, teacher: t.name, day: d, slot: s, cell: v });
+        });
+      });
+    });
+  };
+  const studentCells = (teachers, stu) => {
+    const out = [];
+    if (!stu) return out;
+    eachBooked(teachers, (c) => {
+      if (sameStudent(c.cell, stu)) out.push(c);
+    });
+    return out;
+  };
+  // Same result as studentCells, but indexed once for checking many students.
+  const indexCells = (teachers) => {
+    const list = [];
+    const bySid = new Map();
+    const byName = new Map();
+    const add = (m, k, c) => {
+      const a = m.get(k);
+      if (a) a.push(c);
+      else m.set(k, [c]);
+    };
+    eachBooked(teachers, (c) => {
+      c.n = list.length;
+      list.push(c);
+      if (c.cell.sid != null && c.cell.sid !== "") add(bySid, String(c.cell.sid), c);
+      add(byName, norm(c.cell.s), c);
+    });
+    return { list, bySid, byName };
+  };
+  const cellsFromIndex = (ix, stu) => {
+    if (!stu) return [];
+    const pool =
+      stu.id == null
+        ? ix.list
+        : [...(ix.bySid.get(String(stu.id)) || []), ...(ix.byName.get(norm(stu.name)) || [])];
+    const seen = new Set();
+    return pool
+      .filter((c) => {
+        if (seen.has(c.n) || !sameStudent(c.cell, stu)) return false;
+        seen.add(c.n);
+        return true;
+      })
+      .sort((a, b) => a.n - b.n)
+      .map(({ n, ...c }) => c);
+  };
+  const cellsText = (cells) =>
+    (cells || [])
+      .map((c) => c.day + " " + fmt12(c.slot) + " PKT (" + c.teacher + ")")
+      .join("\n");
+  const timeSuffix = (country) => {
+    const c = norm(country);
+    return !c || c === "usa" ? " USA" : c === "canada" ? " CA" : "";
+  };
+  const makeCell = (stu, it) => ({
+    s: stu.name || "",
+    a: String(parseInt(stu.age) || ""),
+    c: stu.course || "",
+    sub: stu.sub || "",
+    l: stu.parent || "",
+    t: it.time + timeSuffix(stu.country),
+    country: stu.country || "USA",
+    state: stu.state || "",
+    gender: stu.gender || "Any",
+    phone: stu.phone || "",
+    family: stu.family || "",
+    f: [],
+    sid: stu.id,
+    day: it.day,
+  });
+  const seedSchedule = (t) => {
+    if (baseOf(t)) return {};
+    const sch = {};
+    shiftsOf(t).forEach((sh) =>
+      rowDaysOf(sh).forEach((d) => {
+        sch[d] = sch[d] || {};
+        TT_DATA[sh].slots.forEach((s) => {
+          if (sch[d][s] === undefined) sch[d][s] = "F";
+        });
+      }),
+    );
+    return sch;
+  };
+
+  /* ---------- plan: check a form schedule before saving ---------- */
+  const plan = ({ rows, country, state, teachers, isQuran, master }) => {
+    const tz = timezoneFor(country, state);
+    const timed = (rows || []).filter((r) => r && r.day && r.time);
+    const problems = [];
+    const items = [];
+    if (timed.length && !tz)
+      problems.push(
+        'No timezone for "' + (state || country || "?") + '" — pick the State / Province again.',
+      );
+    const seen = {};
+    const cellsUsed = {};
+    timed.forEach((r, i) => {
+      const label = r.day + " " + timeLabel(r.time);
+      const key = r.day + "|" + r.time;
+      if (seen[key]) {
+        problems.push(label + " is picked twice (rows " + seen[key] + " and " + (i + 1) + ").");
+        return;
+      }
+      seen[key] = i + 1;
+      if (!tz) return;
+      const pk = toPkt(r.day, r.time, tz);
+      if (!pk) {
+        problems.push(label + ": time not understood.");
+        return;
+      }
+      const tName = isQuran ? master : r.teacher;
+      if (!tName || tName === "Unassigned") {
+        problems.push(label + ": pick a teacher, or clear the time to save without a class.");
+        return;
+      }
+      const t = (teachers || []).find((x) => x.name === tName);
+      const info = slotInfo(t, pk.rowDay, pk.slot);
+      if (info.state !== "free") {
+        problems.push(label + " (" + pktLabel(pk) + ") with " + tName + ": " + reasonText(info) + ".");
+        return;
+      }
+      const ck = t.id + "|" + pk.rowDay + "|" + pk.slot;
+      if (cellsUsed[ck]) {
+        problems.push(label + " lands on the same timetable slot as row " + cellsUsed[ck] + ".");
+        return;
+      }
+      cellsUsed[ck] = i + 1;
+      items.push({
+        teacherId: t.id,
+        teacher: t.name,
+        day: r.day,
+        time: r.time,
+        rowDay: pk.rowDay,
+        slot: pk.slot,
+        pktDay: pk.pktDay,
+        dayShift: pk.dayShift,
+      });
+    });
+    return { tz, items, problems, timedCount: timed.length };
+  };
+
+  /* ---------- book / release / update ---------- */
+  const book = (teachers, items, stu) => {
+    const problems = [];
+    const taken = {};
+    (items || []).forEach((it) => {
+      const t = (teachers || []).find((x) => x.id === it.teacherId);
+      const k = it.teacherId + "|" + it.rowDay + "|" + it.slot;
+      if (taken[k]) problems.push(it.day + " " + timeLabel(it.time) + " is in the list twice.");
+      taken[k] = true;
+      const info = slotInfo(t, it.rowDay, it.slot);
+      if (info.state !== "free")
+        problems.push(it.day + " " + timeLabel(it.time) + " with " + it.teacher + ": " + reasonText(info) + ".");
+    });
+    if (problems.length) return { ok: false, problems, teachers };
+    const next = (teachers || []).map((t) => {
+      const mine = items.filter((it) => it.teacherId === t.id);
+      if (!mine.length) return t;
+      const sch = t._ttSchedule ? copy(t._ttSchedule) : seedSchedule(t);
+      mine.forEach((it) => {
+        if (!sch[it.rowDay]) sch[it.rowDay] = {};
+        sch[it.rowDay][it.slot] = makeCell(stu, it);
+      });
+      return { ...t, _ttSchedule: sch };
+    });
+    return { ok: true, teachers: next, problems: [] };
+  };
+  const release = (teachers, cells) => {
+    const byT = {};
+    (cells || []).forEach((c) => {
+      (byT[c.teacherId] = byT[c.teacherId] || []).push(c);
+    });
+    return (teachers || []).map((t) => {
+      const mine = byT[t.id];
+      if (!mine) return t;
+      const sch = t._ttSchedule ? copy(t._ttSchedule) : {};
+      mine.forEach((c) => {
+        if (!sch[c.day]) sch[c.day] = {};
+        sch[c.day][c.slot] = "F";
+      });
+      return { ...t, _ttSchedule: sch };
+    });
+  };
+  // Keep timetable cells in step when a student's details change.
+  const updateCells = (teachers, cells, stu) => {
+    const byT = {};
+    (cells || []).forEach((c) => {
+      (byT[c.teacherId] = byT[c.teacherId] || []).push(c);
+    });
+    return (teachers || []).map((t) => {
+      const mine = byT[t.id];
+      if (!mine) return t;
+      const sch = t._ttSchedule ? copy(t._ttSchedule) : {};
+      mine.forEach((c) => {
+        if (!sch[c.day]) sch[c.day] = {};
+        sch[c.day][c.slot] = {
+          ...c.cell,
+          s: stu.name || c.cell.s,
+          a: String(parseInt(stu.age) || c.cell.a || ""),
+          c: stu.course || c.cell.c,
+          l: stu.parent || c.cell.l,
+          country: stu.country || c.cell.country,
+          state: stu.state || c.cell.state,
+          phone: stu.phone || c.cell.phone || "",
+          sid: stu.id,
+        };
+      });
+      return { ...t, _ttSchedule: sch };
+    });
+  };
+  // A student id never used before: not by a current student, not by a
+  // removed one kept in Sales Master Data, not by a booking still in the
+  // Timetable. Reusing a removed student's id merges the new student into the
+  // old record (and its invoices, progress and parent notes).
+  const nextStudentId = (lists, teachers) => {
+    let max = 0;
+    const see = (v) => {
+      const n = parseInt(v, 10);
+      if (n > max) max = n;
+    };
+    (lists || []).forEach((list) =>
+      (Array.isArray(list) ? list : []).forEach((s) => s && see(s.id)),
+    );
+    (teachers || []).forEach((t) => {
+      const sch = t && t._ttSchedule;
+      if (!sch || typeof sch !== "object") return;
+      Object.keys(sch).forEach((d) => {
+        const row = sch[d];
+        if (!row || typeof row !== "object") return;
+        Object.keys(row).forEach((k) => {
+          const v = row[k];
+          if (v && typeof v === "object" && v.sid != null) see(v.sid);
+        });
+      });
+    });
+    return max + 1;
+  };
+  const newParentId = (students) => {
+    const used = new Set(
+      (students || [])
+        .map((s) => String((s && s.parentId) || "").toUpperCase())
+        .filter(Boolean),
+    );
+    const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    for (let n = 0; n < 2000; n++) {
+      let id = "P-";
+      for (let i = 0; i < 5; i++) id += A[Math.floor(Math.random() * A.length)];
+      if (!used.has(id)) return id;
+    }
+    return "P-" + Date.now().toString(36).toUpperCase().slice(-6);
+  };
+
+  /* ---------- booking health check ---------- */
+  const scheduleOf = (stu) => {
+    if (Array.isArray(stu.schedule) && stu.schedule.length)
+      return stu.schedule
+        .filter((r) => r && r.day && r.time)
+        .map((r) => ({ day: r.day, time: r.time, teacher: r.teacher || stu.teacher }));
+    return String(stu.time || "")
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => {
+        const i = p.indexOf("|");
+        return i > 0
+          ? { day: p.slice(0, i).trim(), time: p.slice(i + 1).trim(), teacher: stu.teacher }
+          : { day: "", time: p, teacher: stu.teacher };
+      });
+  };
+  const health = (teachers, students, removed, now) => {
+    const issues = [];
+    let checked = 0;
+    let okCount = 0;
+    const ix = indexCells(teachers);
+    (students || []).forEach((stu) => {
+      if (!stu) return;
+      const cells = cellsFromIndex(ix, stu);
+      if (stu.status === "quit") {
+        if (cells.length)
+          issues.push({
+            kind: "quit", stu, teacher: cells[0].teacher,
+            label: cells.length + " slot(s): " + cells.map((c) => c.day + " " + fmt12(c.slot)).join(", "),
+            problem: "Quit, but still holds timetable slots",
+            fix: { type: "free", cells, stu },
+          });
+        return;
+      }
+      const sched = scheduleOf(stu);
+      if (!sched.length || !stu.teacher || stu.teacher === "Unassigned") return;
+      checked++;
+      const tz = timezoneFor(stu.country, stu.state);
+      const used = new Set();
+      const missing = [];
+      let studentOk = true;
+      sched.forEach((r) => {
+        const base = { stu, teacher: r.teacher, label: (r.day || "?") + " " + timeLabel(r.time) };
+        if (!r.day) {
+          issues.push({ ...base, kind: "info", problem: "Saved time has no class day — can't check" });
+          studentOk = false;
+          return;
+        }
+        const opts = tz ? pktOptions(r.day, r.time, tz, now) : [];
+        const pk = opts[0] || null;
+        if (!pk) {
+          issues.push({ ...base, kind: "info", problem: tz ? "Class time not understood" : 'No timezone for "' + (stu.state || stu.country || "?") + '"' });
+          studentOk = false;
+          return;
+        }
+        const t = (teachers || []).find((x) => x.name === r.teacher);
+        if (!t) {
+          issues.push({ ...base, kind: "info", problem: 'Teacher "' + r.teacher + '" not found' });
+          studentOk = false;
+          return;
+        }
+        base.label += " → " + r.day + " " + pktLabel(pk);
+        let hit = null;
+        let hitAt = 0;
+        opts.some((o, k) => {
+          hit = cells.find((c) => !used.has(c) && c.teacherId === t.id && c.day === o.rowDay && c.slot === o.slot);
+          hitAt = k;
+          return !!hit;
+        });
+        if (hit) {
+          used.add(hit);
+          if (hitAt > 0) {
+            // Booked on the slot from before the student's clock change: still
+            // a real booking, but the family's local time has moved.
+            const shift = slotMinutes(opts[hitAt]) - slotMinutes(pk);
+            const p = parseUSTime(r.time);
+            const lm = p.hour * 60 + p.minute + shift;
+            const dd = Math.floor(lm / 1440);
+            const w = ((lm % 1440) + 1440) % 1440;
+            const localDay = DAYS[(((DAYS.indexOf(r.day) + dd) % 7) + 7) % 7];
+            const mins = Math.abs(shift);
+            const amount = mins % 60 === 0 ? mins / 60 + " hour" + (mins === 60 ? "" : "s") : mins + " min";
+            issues.push({
+              kind: "clock", stu, teacher: t.name,
+              label: r.day + " " + timeLabel(r.time) + " → booked " + r.day + " " + pktLabel(opts[hitAt]),
+              problem:
+                "Clocks changed: this slot is now " + localDay + " " + fmt12(pad(Math.floor(w / 60)) + ":" + pad(w % 60)) +
+                " for the family (" + amount + (shift < 0 ? " earlier" : " later") +
+                "). Keeping " + timeLabel(r.time) + " needs " + pktLabel(pk) + ".",
+            });
+          }
+          return;
+        }
+        const old = opts.find((o) => {
+          const v = rawCell(t, o.rowDay, o.slot);
+          return v && typeof v === "object" && norm(v.s) === norm(stu.name);
+        });
+        if (old) return; // older entry, same name
+        missing.push({ base, r, pk, opts, t });
+      });
+      const extras = cells.filter((c) => !used.has(c));
+      missing.forEach(({ base, r, pk, opts, t }) => {
+        studentOk = false;
+        // Nearest day first; on each day try today's slot, then the slot from
+        // before the clock change (an old wrong-day booking keeps its slot).
+        const order = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6];
+        let from = null;
+        let target = pk;
+        for (const k of order) {
+          for (const o of opts) {
+            const d = DAYS[(((DAYS.indexOf(o.rowDay) + k) % 7) + 7) % 7];
+            from = extras.find((c) => !used.has(c) && c.teacherId === t.id && c.slot === o.slot && c.day === d);
+            if (from) {
+              target = o;
+              break;
+            }
+          }
+          if (from) break;
+        }
+        const info = slotInfo(t, target.rowDay, target.slot);
+        const it = { teacherId: t.id, teacher: t.name, day: r.day, time: r.time, rowDay: target.rowDay, slot: target.slot };
+        if (from) {
+          used.add(from);
+          issues.push({
+            ...base, kind: "wrongday",
+            problem: "Booked on " + from.day + " instead of " + target.rowDay,
+            fix: info.state === "free" ? { type: "move", from, it, stu } : null,
+            note: info.state === "free" ? "" : target.rowDay + " " + fmt12(target.slot) + " is " + reasonText(info),
+          });
+        } else if (info.state === "free") {
+          issues.push({ ...base, kind: "missing", problem: "Not booked in the Timetable", fix: { type: "book", it, stu } });
+        } else {
+          issues.push({ ...base, kind: "clash", problem: "Slot " + reasonText(info) });
+        }
+      });
+      extras
+        .filter((c) => !used.has(c))
+        .forEach((c) => {
+          issues.push({
+            kind: "extra", stu, teacher: c.teacher,
+            label: c.day + " " + fmt12(c.slot) + " PKT",
+            problem: "In the Timetable but not in the student's saved schedule",
+          });
+        });
+      if (studentOk) okCount++;
+    });
+    (removed || []).forEach((m) => {
+      if (!m) return;
+      const cells = cellsFromIndex(ix, m);
+      if (cells.length)
+        issues.push({
+          kind: "removed", stu: m, teacher: cells[0].teacher,
+          label: cells.length + " slot(s): " + cells.map((c) => c.day + " " + fmt12(c.slot)).join(", "),
+          problem: "Removed from the system, but still holds timetable slots",
+          fix: { type: "free", cells, stu: m },
+        });
+    });
+    return { checked, okCount, issues };
+  };
+  // Booking Health for the Sales tab: re-checked only when the Timetable,
+  // the students or the master data change (or the minute rolls over), so
+  // typing in the search box doesn't repeat the whole check.
+  let lastHealth = null;
+  const healthFor = (teachers, students, master) => {
+    const minute = Math.floor(Date.now() / 60000);
+    const h = lastHealth;
+    if (h && h.t === teachers && h.s === students && h.m === master && h.min === minute) return h.res;
+    const res = health(
+      teachers || [],
+      students || [],
+      (master || []).filter((m) => m && m._inSystem === false),
+    );
+    lastHealth = { t: teachers, s: students, m: master, min: minute, res };
+    return res;
+  };
+  const applyFixes = (teachers, fixes) => {
+    let ts = teachers || [];
+    let done = 0;
+    const skipped = [];
+    (fixes || []).forEach((f) => {
+      const name = (f.stu && f.stu.name) || "?";
+      if (f.type === "book") {
+        const res = book(ts, [f.it], f.stu);
+        if (res.ok) {
+          ts = res.teachers;
+          done++;
+        } else skipped.push(name + ": " + res.problems.join("; "));
+      } else if (f.type === "move") {
+        const t = ts.find((x) => x.id === f.from.teacherId);
+        if (!sameStudent(rawCell(t, f.from.day, f.from.slot), f.stu)) {
+          skipped.push(name + ": class already moved");
+          return;
+        }
+        const freed = release(ts, [f.from]);
+        const res = book(freed, [f.it], f.stu);
+        if (res.ok) {
+          ts = res.teachers;
+          done++;
+        } else skipped.push(name + ": " + res.problems.join("; "));
+      } else if (f.type === "free") {
+        const still = f.cells.filter((c) => {
+          const t = ts.find((x) => x.id === c.teacherId);
+          return sameStudent(rawCell(t, c.day, c.slot), f.stu);
+        });
+        if (still.length) {
+          ts = release(ts, still);
+          done++;
+        }
+      }
+    });
+    return { teachers: ts, done, skipped };
+  };
+
+  // Message shown after a successful save.
+  const bookingSummary = (name, items, parentId) => {
+    const lines = (items || []).map(
+      (it) =>
+        "• " + it.day + " " + timeLabel(it.time) + " → " +
+        pktLabel({ slot: it.slot, dayShift: it.dayShift }) + " with " + it.teacher,
+    );
+    return (
+      "✓ " + name + " saved." +
+      (lines.length
+        ? "\n\nBooked " + lines.length + " class" + (lines.length === 1 ? "" : "es") + " in the Timetable:\n" + lines.join("\n")
+        : "\n\nNo class time chosen yet — nothing booked in the Timetable.") +
+      (parentId ? "\n\nParent Portal ID: " + parentId + " (share it with the parent)" : "")
+    );
+  };
+
+  return {
+    DAYS, TIMES, timezoneFor, toPkt, pktOptions, pktLabel, fmt12, timeLabel, clockChange,
+    shiftsOf, slotInfo, reasonText, countLoad, rankTeachers,
+    sameStudent, studentCells, cellsText, plan, book, release, updateCells,
+    nextStudentId, newParentId, scheduleOf, health, healthFor, applyFixes, bookingSummary,
+    offsetAt, indexCells, cellsFromIndex,
+  };
+})();
