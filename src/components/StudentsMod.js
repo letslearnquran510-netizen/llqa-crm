@@ -528,113 +528,102 @@ const StudentsMod = ({
       setModal(null);
       return;
     }
-    const newId = Math.max(0, ...sts.map((s) => s.id)) + 1;
-    setSts([
-      ...sts,
-      {
-        id: newId,
-        name: pf.name,
-        age: parseInt(pf.age) || 0,
-        gender: pf.gender || "",
-        parent: pf.parent,
-        family: pf.family || "",
-        country: pf.country || "USA",
-        state: pf.state || "",
-        course: pf.course,
-        teacher: pf.teacher || "Unassigned",
-        fee: pf.fee || "trial",
-        time: pf.time || "",
-        dor: pf.dor,
-        phone: pf.phone || "",
-        email: pf.email || "",
-        hoursPerWeek: pf.hoursPerWeek || "",
-        classType: pf.classType || "Regular",
-        fee_amount: pf.fee_amount || "",
-        currency: pf.currency || "USD",
-        status: "active",
-        page: 0,
-        qaida: 0,
-        attended: 0,
-        totalClasses: 0,
-        attendance: 100,
-        lastLesson: "",
-        lastDate: "",
-        lB: "Good",
-        lP: "Satisfactory",
-        lH: "Not Assigned",
-        lR: "N/A",
-        lT: "N/A",
-        notes: pf.notes || "",
-        referredBy: pf.referredBy || "",
-      },
-    ]);
-    if (
-      pf.teacher &&
-      pf.teacher !== "Unassigned" &&
-      pf.time &&
-      setAppTeachers &&
-      appTeachers
-    ) {
-      try {
-        const targetTeacher = appTeachers.find((t) => t.name === pf.teacher);
-        if (targetTeacher) {
-          let bookDay = "Mon";
-          let usaTime = pf.time;
-          if (pf.time.indexOf("|") >= 0) {
-            const parts = pf.time.split("|");
-            bookDay = parts[0];
-            usaTime = parts[1];
-          }
-          const parsed = parseUSTime(usaTime);
-          const tz = detectTZ(pf.state || "", usaTime);
-          if (parsed && tz) {
-            const refDate = new Date();
-            const diffMin =
-              tzOffsetMinutes("Asia/Karachi", refDate) -
-              tzOffsetMinutes(tz, refDate);
-            const totalMin = parsed.hour * 60 + parsed.minute + diffMin;
-            const wrapped = ((totalMin % 1440) + 1440) % 1440;
-            const pakH = Math.floor(wrapped / 60);
-            const pakM = Math.floor((wrapped % 60) / 30) * 30;
-            const slotStr =
-              String(pakH).padStart(2, "0") +
-              ":" +
-              String(pakM).padStart(2, "0");
-            const newBooking = {
-              s: pf.name,
-              a: String(parseInt(pf.age) || ""),
-              c: pf.course,
-              l: pf.parent || "",
-              t: usaTime + " USA",
-              country: pf.country || "USA",
-              state: pf.state || "",
-              gender: pf.gender || "Any",
-              phone: pf.phone || "",
-              family: pf.family || "",
-              f: [],
-            };
-            setAppTeachers(
-              appTeachers.map((t) => {
-                if (t.id !== targetTeacher.id) return t;
-                const sch = t._ttSchedule
-                  ? JSON.parse(JSON.stringify(t._ttSchedule))
-                  : {};
-                if (!sch[bookDay]) sch[bookDay] = {};
-                sch[bookDay][slotStr] = newBooking;
-                return {
-                  ...t,
-                  _ttSchedule: sch,
-                };
-              }),
-            );
-            pf.time = usaTime + " USA · " + bookDay;
-          }
-        }
-      } catch (e) {
-        console.error("Auto-booking failed:", e);
-      }
+    // v64: the shared Add Student form books through LLQABooking — every
+    // slot (not just the first), on the student's day, never on top of
+    // another student. Nothing is saved if any slot is taken.
+    // Never reuse an id: also count removed students (Sales Master Data) and
+    // bookings still in the Timetable. This tab doesn't receive those lists
+    // as props, so it reads the copies the app keeps in sync on this device.
+    const newId = LLQABooking.nextStudentId(
+      [sts, lsRead("students", []), lsRead("salesMasterData", [])],
+      appTeachers,
+    );
+    const isQuranCourse = pf.course !== "Subject";
+    const rowsAll = Array.isArray(pf.schedule) ? pf.schedule : [];
+    const pl = LLQABooking.plan({
+      rows: rowsAll,
+      country: pf.country,
+      state: pf.state,
+      teachers: appTeachers || [],
+      isQuran: isQuranCourse,
+      master: isQuranCourse ? (rowsAll[0] && rowsAll[0].teacher) || "" : "",
+    });
+    if (pl.problems.length) {
+      alert(
+        "Student NOT saved — please fix the class schedule first:\n\n• " +
+          pl.problems.join("\n• "),
+      );
+      return;
     }
+    const newStudent = {
+      id: newId,
+      name: pf.name,
+      age: parseInt(pf.age) || 0,
+      gender: pf.gender || "",
+      parent: pf.parent,
+      family: pf.family || "",
+      country: pf.country || "USA",
+      state: pf.state || "",
+      course: pf.course,
+      teacher: pl.items.length ? pl.items[0].teacher : pf.teacher || "Unassigned",
+      fee: pf.fee || "trial",
+      time: pl.items.length
+        ? pl.items.map((it) => it.day + "|" + it.time).join(", ")
+        : pf.time || "",
+      dor: pf.dor,
+      phone: pf.phone || "",
+      email: pf.email || "",
+      hoursPerWeek: pl.items.length
+        ? String(pl.items.length * 0.5)
+        : pf.hoursPerWeek || "",
+      classType: pf.classType || "Regular",
+      fee_amount: pf.fee_amount || "",
+      currency: pf.currency || "USD",
+      status: "active",
+      page: 0,
+      qaida: 0,
+      attended: 0,
+      totalClasses: 0,
+      attendance: 100,
+      lastLesson: "",
+      lastDate: "",
+      lB: "Good",
+      lP: "Satisfactory",
+      lH: "Not Assigned",
+      lR: "N/A",
+      lT: "N/A",
+      notes: pf.notes || "",
+      referredBy: pf.referredBy || "",
+      schedule: pl.items.map((it) => ({
+        day: it.day,
+        time: it.time,
+        teacher: it.teacher,
+        pktDay: it.pktDay,
+        pktSlot: it.slot,
+      })),
+      tz: pl.tz || "",
+      parentId: LLQABooking.newParentId(sts),
+    };
+    let nextTeachers = null;
+    if (pl.items.length) {
+      if (!setAppTeachers || !appTeachers) {
+        alert("Student NOT saved — the Timetable is still loading. Please try again in a moment.");
+        return;
+      }
+      const res = LLQABooking.book(appTeachers, pl.items, newStudent);
+      if (!res.ok) {
+        alert(
+          "Student NOT saved — the Timetable changed while the form was open:\n\n• " +
+            res.problems.join("\n• "),
+        );
+        return;
+      }
+      nextTeachers = res.teachers;
+    }
+    setSts([...sts, newStudent]);
+    if (nextTeachers) setAppTeachers(nextTeachers);
     setModal(null);
+    alert(LLQABooking.bookingSummary(newStudent.name, pl.items, newStudent.parentId));
   };
   const delStudent = (id) => {
     if (confirm("Delete this student?")) setSts(sts.filter((s) => s.id !== id));
