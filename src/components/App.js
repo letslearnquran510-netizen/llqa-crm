@@ -1336,7 +1336,7 @@ function App() {
               gap: 10,
             },
           },
-          React.createElement(ConnectionBadge, null),
+          React.createElement(ConnectionBadge, { user: user }),
           React.createElement(
             "span",
             {
