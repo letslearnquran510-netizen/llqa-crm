@@ -8,7 +8,8 @@ const SalesMod = ({
   salesReferrals,
   setSalesReferrals,
 }) => {
-  const [tab, setTab] = useState("master");
+  const [tab, setTab] = useState(() => llqaTakeTab("sales", "master"));
+  useEffect(() => llqaOnTab("sales", setTab), []); // v65: open on a tab from the Dashboard
   const [search, setSearch] = useState("");
   const [fStatus, setFStatus] = useState("all");
   const [fTeacher, setFTeacher] = useState("all");
@@ -92,6 +93,12 @@ const SalesMod = ({
     const inT = llqaInTrial(ef);
     ef.trial = inT ? "trial" : "";
     if (inT && !ef.trialStart) ef.trialStart = todayPK();
+    // v65: a trial that becomes paid is a conversion (for the Trial Pipeline)
+    if (!inT && llqaInTrial(before) && ef.fee === "paid" && !ef.convertedAt) {
+      ef.convertedAt = todayPK();
+      ef.trialOutcome = "converted";
+    }
+    if (inT) ef.trialTarget = llqaTrialTarget(ef);
     const cells = LLQABooking.studentCells(teachers || [], before);
     const moved =
       String(ef.teacher || "") !== String(before.teacher || "") ||
@@ -139,7 +146,11 @@ const SalesMod = ({
       );
     }
     if (cells.length && setTeachers && teachers) {
-      if (freeSlots) setTeachers(LLQABooking.release(teachers, cells));
+      if (freeSlots) {
+        const freed = LLQABooking.release(teachers, cells);
+        setTeachers(freed);
+        llqaWaitCheck(teachers, freed); // v65: tell the admin if a waiting family fits
+      }
       else if (
         ["name", "parent", "age", "course", "country", "state", "phone", "gender", "family", "specificSubject"].some(
           (k) =>
@@ -161,8 +172,11 @@ const SalesMod = ({
     const id = modal.data.id;
     const stu = current.find((s) => String(s.id) === String(id)) || modal.data;
     const cells = LLQABooking.studentCells(teachers || [], stu);
-    if (cells.length && setTeachers && teachers)
-      setTeachers(LLQABooking.release(teachers, cells));
+    if (cells.length && setTeachers && teachers) {
+      const freed = LLQABooking.release(teachers, cells);
+      setTeachers(freed);
+      llqaWaitCheck(teachers, freed); // v65: tell the admin if a waiting family fits
+    }
     setStudents(students.filter((s) => String(s.id) !== String(id)));
     setModal(null);
   };
@@ -358,6 +372,8 @@ const SalesMod = ({
       specificSubject:
         pf.course === "Subject" && Array.isArray(pf.specificSubject) ? pf.specificSubject : [],
       parentId: newStudent.parentId || LLQABooking.newParentId(current),
+      // v65: how many trial classes before the fee (default 3)
+      trialTarget: llqaInTrial(pf) ? llqaTrialTarget(pf) : "",
     };
     let nextTeachers = null;
     if (pl.items.length) {
@@ -376,6 +392,8 @@ const SalesMod = ({
       nextTeachers = res.teachers;
     }
     setStudents([...current, stu]);
+    // v65: booked from the waitlist → mark that entry booked
+    if (pf._waitId) llqaWaitDone(pf._waitId, stu.id);
     if (nextTeachers) setTeachers(nextTeachers);
     if (pf._refId && setSalesReferrals) {
       setSalesReferrals(
@@ -388,6 +406,14 @@ const SalesMod = ({
     }
     setModal(null);
     alert(LLQABooking.bookingSummary(stu.name, pl.items, stu.parentId));
+    // v65: one click to send the welcome message (class times + Parent ID)
+    llqaToast({
+      kind: "welcome",
+      key: "welcome-" + stu.id,
+      studentId: stu.id,
+      student: stu,
+      text: "✓ " + stu.name + " added. Send the welcome message with the class times and Parent ID?",
+    });
   };
   const REF_STATUSES = [
     "New",
@@ -1512,8 +1538,13 @@ const SalesMod = ({
       [
         ["master", "Sales Master Data"],
         ["current", "Current Students List"],
+        // v65 tabs (number = needs action)
+        ["pipeline", "🧪 Trial Pipeline" + (llqaTabBadge("pipeline") ? " · " + llqaTabBadge("pipeline") : "")],
+        ["contacts", "💬 Contacts & Messages"],
+        ["waitlist", "⏳ Waitlist" + (llqaTabBadge("waitlist") ? " · " + llqaTabBadge("waitlist") + " free" : "")],
         ["references", "References"],
         ["health", "Booking Health"],
+        ["clock", "🕐 Clock Changes" + (llqaTabBadge("clock") ? " · " + llqaTabBadge("clock") : "")],
       ].map(([k, l]) =>
         React.createElement(
           "button",
@@ -1739,6 +1770,7 @@ const SalesMod = ({
           " once they join, then add them as a full student from the other tabs.",
         ),
       ),
+    !LLQA_SALES_TABS[tab] && // v65: the new tabs have their own search
     React.createElement(
       "div",
       {
@@ -1893,7 +1925,21 @@ const SalesMod = ({
           ),
         ),
     ),
-    isHealth
+    LLQA_SALES_TABS[tab]
+      ? React.createElement(LLQASalesTab, {
+          tab,
+          students: current,
+          teachers,
+          setTeachers,
+          setStudents,
+          upsertSalesMaster,
+          salesMasterData: master,
+          openAdd: (p) => {
+            setPf(p);
+            setModal({ type: "addNew" });
+          },
+        })
+      : isHealth
       ? renderHealth()
       : isRefs
         ? renderRefTable()
@@ -2120,6 +2166,11 @@ const SalesMod = ({
                 gap: 8,
               },
             },
+            // v65: message the family / move the classes from here
+            llqaCanManage() &&
+              React.createElement(Btn, { variant: "outline", onClick: () => { const id = modal.data.id; const st = modal.data; setModal(null); llqaOpen("message", { studentId: id, student: st }); } }, "💬 Message"),
+            llqaCanManage() && current.some((x) => String(x.id) === String(modal.data.id)) &&
+              React.createElement(Btn, { variant: "outline", onClick: () => { const id = modal.data.id; setModal(null); llqaOpen("reschedule", { studentId: id }); } }, "📅 Change classes"),
             React.createElement(
               Btn,
               {
@@ -2354,6 +2405,15 @@ const SalesMod = ({
             React.createElement(Inp, { label: "Fee Amount", value: editForm.fee_amount || "", onChange: (v) => setEditForm({ ...editForm, fee_amount: v }), type: "number" }),
             React.createElement(Inp, { label: "Currency", value: editForm.currency || "USD", onChange: (v) => setEditForm({ ...editForm, currency: v }), options: ["USD", "CAD", "GBP", "EUR", "AED", "PKR"] }),
             React.createElement(Inp, { label: "Referred By", value: editForm.referredBy || "", onChange: (v) => setEditForm({ ...editForm, referredBy: v }) }),
+            editForm.fee === "trial" &&
+              React.createElement(Inp, { label: "Trial classes before the fee", type: "number", value: String(editForm.trialTarget || 3), onChange: (v) => setEditForm({ ...editForm, trialTarget: Math.max(1, Math.min(20, parseInt(v, 10) || 3)) }) }),
+            // v65: move classes properly (frees old slots, books new ones)
+            current.some((x) => String(x.id) === String(editForm.id)) &&
+              React.createElement(
+                "div",
+                { style: { gridColumn: "1 / -1", marginBottom: 10 } },
+                React.createElement(Btn, { variant: "outline", onClick: () => { const id = editForm.id; setModal(null); llqaOpen("reschedule", { studentId: id }); } }, "📅 Change class days / times / teacher"),
+              ),
             editForm.course === "Subject" &&
               React.createElement(Inp, { label: "Subjects (comma separated)", value: Array.isArray(editForm.specificSubject) ? editForm.specificSubject.join(", ") : editForm.specificSubject || "", onChange: (v) => setEditForm({ ...editForm, specificSubject: v }) }),
           ),

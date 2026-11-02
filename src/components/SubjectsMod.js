@@ -1477,9 +1477,9 @@ const SubjectsMod = ({
                               padding: "4px",
                               border:
                                 "1px solid " +
-                                (hasClipboard && !isBooked ? c.warn : c.border),
+                                (isBooked && llqaTrialStage(cell) ? llqaTrialStage(cell).bd : hasClipboard && !isBooked ? c.warn : c.border),
                               background: isBooked
-                                ? rColor(cell.sub) + "15"
+                                ? (llqaTrialStage(cell) || {}).bg || rColor(cell.sub) + "15"
                                 : hasClipboard && !isBooked
                                   ? c.warnBg
                                   : c.bgCard,
@@ -1892,9 +1892,9 @@ const SubjectsMod = ({
                             : openAssign(t, selDay, slotIdx),
                         style: {
                           padding: "3px",
-                          border: "1px solid " + c.border,
+                          border: "1px solid " + (isBooked && llqaTrialStage(cell) ? llqaTrialStage(cell).bd : c.border),
                           background: isBooked
-                            ? rColor(cell.sub) + "15"
+                            ? (llqaTrialStage(cell) || {}).bg || rColor(cell.sub) + "15"
                             : c.bgCard,
                           cursor: "pointer",
                           verticalAlign: "top",

@@ -1,6 +1,7 @@
 /* Smart Schedule Builder (v64) — every choice is checked live against the
    Timetable through LLQABooking, so a taken or duplicate slot can't be picked. */
-const LLQAScheduleBuilder = ({ pf, setPf, appTeachers }) => {
+// v65: own = the student being rescheduled (their classes count as free).
+const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
   const B = LLQABooking;
   const [notice, setNotice] = useState("");
   const tz = B.timezoneFor(pf.country, pf.state);
@@ -33,10 +34,27 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers }) => {
         "📅 Classes",
       ),
       React.createElement(LLQAClassList, { s: pf }),
+      llqaCanManage()
+        ? React.createElement(
+            "button",
+            {
+              type: "button",
+              onClick: () =>
+                llqaOpen("reschedule", {
+                  studentId: pf.editingId,
+                  // keep this form in step, so saving it doesn't undo the move
+                  onDone: (u) =>
+                    setPf({ ...pf, schedule: u.schedule, time: u.time, teacher: u.teacher, hoursPerWeek: u.hoursPerWeek, tz: u.tz }),
+                }),
+              style: { marginTop: 4, padding: "8px 14px", borderRadius: 8, border: "1px solid " + c.accent, background: c.accentBg, color: c.accent, fontSize: 12, fontWeight: 700, cursor: "pointer" },
+            },
+            "📅 Change classes (day, time or teacher)",
+          )
+        : null,
       box(
         c.accentBg,
         c.accent,
-        "To change class days, times or the teacher, use Class Shifting — it moves the classes in the Timetable too. Everything else can be edited here.",
+        "Change classes moves them in the Timetable in one step: the old slots are freed and the new ones booked. Everything else can be edited here.",
       ),
     );
   }
@@ -66,7 +84,7 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers }) => {
   const conv = (r) => (r && r.day && r.time ? B.toPkt(r.day, r.time, tz) : null);
   const isFreeFor = (name, r) => {
     const pk = conv(r);
-    return !pk || B.slotInfo(findT(name), pk.rowDay, pk.slot).state === "free";
+    return !pk || B.slotInfo(findT(name), pk.rowDay, pk.slot, own).state === "free";
   };
 
   // Every change goes through commit(): it keeps the old fields the rest of
@@ -182,7 +200,7 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers }) => {
     const pk = B.toPkt(day, tm, tz);
     return pk
       ? teachers.filter(
-          (t) => deptOk(t) && B.slotInfo(t, pk.rowDay, pk.slot).state === "free",
+          (t) => deptOk(t) && B.slotInfo(t, pk.rowDay, pk.slot, own).state === "free",
         ).length
       : 0;
   };
@@ -196,7 +214,7 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers }) => {
         return { value: tm, label: label + "  ·  already in row " + (dup + 1), disabled: true };
       const tName = isQuran ? master : r.teacher;
       if (tName) {
-        const info = B.slotInfo(findT(tName), pk.rowDay, pk.slot);
+        const info = B.slotInfo(findT(tName), pk.rowDay, pk.slot, own);
         if (info.state !== "free")
           return {
             value: tm,
@@ -229,14 +247,14 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers }) => {
     if (dup >= 0) return { col: c.danger, text: where + " · ⛔ same as row " + (dup + 1) };
     const tName = isQuran ? master : r.teacher;
     if (!tName) return { col: c.warn, text: where + " · pick a teacher" };
-    const info = B.slotInfo(findT(tName), pk.rowDay, pk.slot);
+    const info = B.slotInfo(findT(tName), pk.rowDay, pk.slot, own);
     return info.state === "free"
       ? { col: c.success, text: where + " · ✓ free with " + tName }
       : { col: c.danger, text: where + " · ⛔ " + B.reasonText(info) };
   };
 
   const items = rows.map(conv).filter(Boolean);
-  const ranked = isQuran ? B.rankTeachers(teachers, items, { filter: deptOk }) : [];
+  const ranked = isQuran ? B.rankTeachers(teachers, items, { filter: deptOk, own }) : [];
   const noShift = teachers.filter(
     (t) =>
       t.status !== "resigned" &&
@@ -257,13 +275,13 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers }) => {
     commit(
       rows.map((r) => {
         const pk = conv(r);
-        const best = pk ? B.rankTeachers(teachers, [pk], { filter: deptOk })[0] : null;
+        const best = pk ? B.rankTeachers(teachers, [pk], { filter: deptOk, own })[0] : null;
         return best ? { ...r, teacher: best.t.name } : r;
       }),
       "✨ Best free teacher picked for each slot.",
     );
   };
-  const pl = B.plan({ rows, country: pf.country, state: pf.state, teachers, isQuran, master });
+  const pl = B.plan({ rows, country: pf.country, state: pf.state, teachers, isQuran, master, own });
   const valid = rows.filter((r) => r.day && r.time);
   const cc = valid.length ? B.clockChange(tz) : null;
   let dstText = "";
@@ -334,7 +352,7 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers }) => {
       const pk = conv(r);
       const rowTeachers =
         !isQuran && pk
-          ? B.rankTeachers(teachers, [pk], { filter: deptOk }).map((x, k) => ({
+          ? B.rankTeachers(teachers, [pk], { filter: deptOk, own }).map((x, k) => ({
               value: x.t.name,
               label: (k === 0 ? "★ " : "") + x.t.name + " — " + x.load.booked + " booked",
             }))
@@ -369,6 +387,50 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers }) => {
           ),
         ),
         React.createElement("div", { style: { color: st.col, fontSize: 11, marginTop: -4, marginBottom: 2 } }, st.text),
+        // v65: nobody free at this time → closest free times + waitlist
+        pk && r.day && r.time && freeCount(r.day, r.time) === 0
+          ? (() => {
+              const sug = B.nearestFree({
+                day: r.day,
+                time: r.time,
+                tz,
+                teachers,
+                filter: deptOk,
+                own,
+                take: 5,
+                avoid: rows.filter((x, j) => j !== i),
+              });
+              return React.createElement(
+                "div",
+                { style: { marginTop: 6, padding: "8px 10px", background: c.bgDeep, borderRadius: 8 } },
+                React.createElement(
+                  "div",
+                  { style: { color: c.textSec, fontSize: 11, marginBottom: 6 } },
+                  sug.length
+                    ? "No teacher is free at " + r.day + " " + B.timeLabel(r.time) + ". Closest free times:"
+                    : "No teacher is free at " + r.day + " " + B.timeLabel(r.time) + " or within 3 hours.",
+                ),
+                React.createElement(
+                  "div",
+                  { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+                  sug.map((sg, k) =>
+                    chip(
+                      (sg.day !== r.day ? sg.day + " " : "") + B.timeLabel(sg.time) + " · " + sg.teacher,
+                      () => setRow(i, { day: sg.day, time: sg.time, teacher: isQuran ? sg.teacher : sg.teacher }),
+                      false,
+                    ),
+                  ),
+                  llqaCanManage()
+                    ? chip(
+                        "⏳ Waitlist " + r.day + " " + B.timeLabel(r.time),
+                        () => setNotice(llqaAddWaitlist(pf, r, own)),
+                        false,
+                      )
+                    : null,
+                ),
+              );
+            })()
+          : null,
       );
     }),
     isQuran &&
@@ -908,6 +970,7 @@ const StudentFormModal = ({ pf, setPf, sts, appTeachers, onSave, onClose }) =>
             }),
           type: "date",
         }),
+        React.createElement(LLQAEnrollToggle, { pf, setPf }), // v65
         React.createElement(Inp, {
           label: "Fee Status",
           value: pf.fee || "",

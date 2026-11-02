@@ -119,6 +119,7 @@ const StudentsMod = ({
       dt,
       pf.att || "Present",
     );
+    llqaAfterCount(sts.find((s) => s.id === sid) || modal.data, _cnt); // v65: trial done → fee message
     setSts(
       sts.map((s) =>
         s.id === sid
@@ -247,6 +248,7 @@ const StudentsMod = ({
     // marked again corrects the counters instead of counting twice
     const today = todayPK();
     const _cnt = llqaCountClass(sts.find((s) => s.id === id) || { id }, dailyProgress, today, st);
+    llqaAfterCount(sts.find((s) => s.id === id), _cnt); // v65: trial done → fee message
     setSts(
       sts.map((s) =>
         s.id === id
@@ -455,6 +457,16 @@ const StudentsMod = ({
                 trialStart: llqaInTrial({ fee: pf.fee || s.fee, classType: pf.classType || s.classType })
                   ? s.trialStart || pf.trialStart || todayPK()
                   : s.trialStart || "",
+                // v65: trial target, and trial → paid counts as a conversion
+                trialTarget: pf.trialTarget || s.trialTarget || "",
+                convertedAt:
+                  llqaInTrial(s) && (pf.fee || s.fee) === "paid" && !llqaInTrial({ fee: pf.fee || s.fee, classType: pf.classType || s.classType })
+                    ? s.convertedAt || todayPK()
+                    : s.convertedAt || "",
+                trialOutcome:
+                  llqaInTrial(s) && (pf.fee || s.fee) === "paid" && !llqaInTrial({ fee: pf.fee || s.fee, classType: pf.classType || s.classType })
+                    ? "converted"
+                    : s.trialOutcome || "",
               }
             : s,
         ),
@@ -625,6 +637,8 @@ const StudentsMod = ({
       })),
       tz: pl.tz || "",
       parentId: LLQABooking.newParentId(sts),
+      // v65: how many trial classes before the fee (default 3)
+      trialTarget: llqaInTrial(pf) ? llqaTrialTarget(pf) : "",
     };
     let nextTeachers = null;
     if (pl.items.length) {
@@ -649,6 +663,14 @@ const StudentsMod = ({
     if (nextTeachers) setAppTeachers(nextTeachers);
     setModal(null);
     alert(LLQABooking.bookingSummary(newStudent.name, pl.items, newStudent.parentId));
+    // v65: one click to send the welcome message (class times + Parent ID)
+    llqaToast({
+      kind: "welcome",
+      key: "welcome-" + newStudent.id,
+      studentId: newStudent.id,
+      student: newStudent,
+      text: "✓ " + newStudent.name + " added. Send the welcome message with the class times and Parent ID?",
+    });
   };
   const delStudent = (id) => {
     if (confirm("Delete this student?")) setSts(sts.filter((s) => s.id !== id));
@@ -683,6 +705,8 @@ const StudentsMod = ({
       tz: s.tz || "",
       parentId: s.parentId || "",
       trialStart: s.trialStart || "",
+      trialTarget: s.trialTarget || "",
+      convertedAt: s.convertedAt || "",
     });
     setModal({
       type: "addNew",

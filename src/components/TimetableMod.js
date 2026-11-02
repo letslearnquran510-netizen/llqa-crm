@@ -8,30 +8,8 @@ const TimetableMod = ({
   setDailyProgress,
   arPayments,
 }) => {
-  const ttStage = (cell) => {
-    if (!cell || !cell.s) return null;
-    // v64.5: by student id when the booking has one (two students can share a
-    // name); on trial = Fee Status "trial" or Class Type "Trial", until paid
-    const _st =
-      cell.sid != null && cell.sid !== ""
-        ? (students || []).find((x) => String(x.id) === String(cell.sid))
-        : (students || []).find((x) => x.name === cell.s && llqaInTrial(x));
-    if (!_st || !llqaInTrial(_st)) return null;
-    const _pr = _st.attended || 0;
-    const _paid =
-      _st.fee === "paid" ||
-      (arPayments || []).some((p) => String(p.studentId) === String(_st.id));
-    if (_paid) return null;
-    if (_pr >= 3)
-      return {
-        bg: "color-mix(in srgb, var(--warn) 35%, transparent)",
-        bd: c.warn,
-      };
-    return {
-      bg: "color-mix(in srgb, var(--danger) 35%, transparent)",
-      bd: c.danger,
-    };
-  };
+  // v65: one trial rule for the Timetable and Subjects screens (trial classes per student)
+  const ttStage = (cell) => llqaTrialStage(cell, students, arPayments);
   const [logProgressModal, setLogProgressModal] = useState(null);
   const [progressForm, setProgressForm] = useState({
     attended: "present",
@@ -43,7 +21,8 @@ const TimetableMod = ({
     notes: "",
   });
   const [shift, setShift] = useState("Night");
-  const [mode, setMode] = useState("individual");
+  const [mode, setMode] = useState(() => llqaTakeTab("timetable", "individual"));
+  useEffect(() => llqaOnTab("timetable", setMode), []); // v65
   const [teacherIdx, setTeacherIdx] = useState(0);
   const [search, setSearch] = useState("");
   const [selectedDay, setSelectedDay] = useState("Mon");
@@ -828,9 +807,10 @@ const TimetableMod = ({
         ["overview", "All Teachers Overview"],
         ["smartfinder", "Smart Finder"],
         ["analytics", "Analytics"],
+        ["today", "📋 Today's Classes"], // v65
       ]
         .filter(
-          (tb) => !(user && user.role === "teacher") || tb[0] === "individual",
+          (tb) => !(user && user.role === "teacher") || tb[0] === "individual" || tb[0] === "today",
         )
         .map(([k, l]) =>
           React.createElement(
@@ -2659,6 +2639,8 @@ const TimetableMod = ({
         ),
       ),
     mode === "smartfinder" && React.createElement(SmartFinder, null),
+    mode === "today" &&
+      React.createElement(LLQATodayClasses, { teachers: appTeachers, students, dailyProgress, arPayments }),
     quickBook &&
       React.createElement(
         "div",
@@ -3835,6 +3817,11 @@ const TimetableMod = ({
                 },
                 "\u270D Log Today\u0027s Class",
               ),
+              // v65: move this student's classes / message the family
+              llqaCanManage() && cellModal.cell.sid != null && cellModal.cell.sid !== "" &&
+                React.createElement(Btn, { variant: "outline", onClick: () => { const id = cellModal.cell.sid; setCellModal(null); llqaOpen("reschedule", { studentId: id }); } }, "📅 Change classes"),
+              llqaCanManage() && cellModal.cell.sid != null && cellModal.cell.sid !== "" &&
+                React.createElement(Btn, { variant: "outline", onClick: () => { const id = cellModal.cell.sid; setCellModal(null); llqaOpen("message", { studentId: id }); } }, "💬 Message"),
               React.createElement(
                 Btn,
                 {
