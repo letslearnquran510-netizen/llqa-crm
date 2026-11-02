@@ -113,6 +113,7 @@ const LLQA_LIST_NAMES = {
   hrInterviews: "HR interviews", hrHiring: "HR hiring", shifts: "Shifts", customRoles: "Custom roles", loginAudit: "Login log",
   "data/attendanceHistory": "Attendance history", "settings/portalAccess": "Portal access settings", "settings/preferences": "App settings",
   waitlist: "Waitlist", messageLog: "Message log", "settings/messaging": "Message templates", "settings/automation": "Automation settings",
+  covers: "Leave cover", parentRequests: "Parent requests", "settings/calendar": "Holidays calendar",
 };
 const llqaListName = (k) => LLQA_LIST_NAMES[k] || k;
 

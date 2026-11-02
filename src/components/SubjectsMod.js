@@ -1608,7 +1608,7 @@ const SubjectsMod = ({
                                           fontWeight: 500,
                                         },
                                       },
-                                      cell.t,
+                                      llqaCellTime(cell.t), // v66
                                     )
                                   : null,
                               )
@@ -3193,7 +3193,7 @@ const SubjectsMod = ({
                   SUBJ_SLOTS[cellModal.slotIdx - 4] +
                   " PKT",
               ],
-              ["USA Time", cellModal.cell.t || "—"],
+              ["USA Time", llqaCellTime(cellModal.cell.t) || "—"],
               [
                 "Pakistan Time",
                 (() => {

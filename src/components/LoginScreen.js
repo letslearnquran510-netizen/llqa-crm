@@ -5,13 +5,13 @@ const LoginScreen = ({
   customRoles,
   students,
 }) => {
-  const [parentIdInput, setParentIdInput] = useState("");
+  const [parentIdInput, setParentIdInput] = useState(() => llqaLinkParent()); // v66: from an approval link
   const customRolesList = customRoles || [];
   const [customRoleName, setCustomRoleName] = useState(
     customRolesList[0] ? customRolesList[0].name : "",
   );
   const [customUserName, setCustomUserName] = useState("");
-  const [step, setStep] = useState("role");
+  const [step, setStep] = useState(() => (llqaLinkParent() ? "parent" : "role"));
   const [pwd, setPwd] = useState("");
   const [tlName, setTlName] = useState("Qazi Junaid");
   const [teacherId, setTeacherId] = useState(teachers[0]?.id || 1);
@@ -89,6 +89,17 @@ const LoginScreen = ({
     }
     return null;
   };
+  // v66: approval links sign the parent in once their record has loaded
+  useEffect(() => {
+    const pid = llqaLinkParent();
+    if (!pid || LLQAApp.linkTried) return;
+    if (!(students || []).some((s) => String(s.parentId || "").toUpperCase() === pid)) return;
+    LLQAApp.linkTried = true;
+    const u = buildUser("parent");
+    if (!u) return;
+    pushAuditLog({ user: u.name, role: "parent", action: "login (approval link)", status: "success" });
+    onLogin(u);
+  }, [students]);
   const tryLogin = (role) => {
     setError("");
     if (role === "superadmin") {

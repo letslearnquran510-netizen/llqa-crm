@@ -1129,7 +1129,7 @@ const TeachMod = ({
                         React.createElement(
                           "button",
                           {
-                            onClick: () =>
+                            onClick: () => {
                               setLeaves(
                                 leaves.map((x) =>
                                   x.id === l.id
@@ -1139,7 +1139,9 @@ const TeachMod = ({
                                       }
                                     : x,
                                 ),
-                              ),
+                              );
+                              llqaLeaveApproved({ ...l, status: "approved" }); // v66
+                            },
                             style: {
                               background: "none",
                               border: "none",
@@ -1930,7 +1932,8 @@ const TeachMod = ({
                   ...form,
                   teamLead: v,
                 }),
-              options: ["ALL", ...(teamLeads || []).map((tl) => tl.name)],
+              // v66: the saved value is always in the list, so what you see is what is saved
+              options: [...new Set(["ALL", ...(teamLeads || []).map((tl) => tl.name), ...(form.teamLead ? [form.teamLead] : [])])],
             }),
             React.createElement(Inp, {
               label: "Status *",

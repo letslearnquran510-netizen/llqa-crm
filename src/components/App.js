@@ -197,6 +197,10 @@ function App() {
   const [messageLog, setMessageLog] = useFirestoreCollection("messageLog", []);
   const [messaging, setMessaging] = useFirestoreDoc("settings/messaging", {});
   const [automation, setAutomation] = useFirestoreDoc("settings/automation", {});
+  // v66: leave cover, parent requests, holidays calendar
+  const [covers, setCovers] = useFirestoreCollection("covers", []);
+  const [parentRequests, setParentRequests] = useFirestoreCollection("parentRequests", []);
+  const [calendar, setCalendar] = useFirestoreDoc("settings/calendar", {});
   const upsertSalesMaster = (records) => {
     if (!records || records.length === 0) return;
     setSalesMasterData((prev) => {
@@ -690,7 +694,7 @@ function App() {
         setStudents(_mb(students, typeof a === "function" ? a(scStudents) : a))
     : setStudents;
   // v65: what the automation screens and pop-ups read
-  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation });
+  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads });
   const render = () => {
     switch (page) {
       case "dashboard":
