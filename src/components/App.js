@@ -196,6 +196,7 @@ function App() {
   const [waitlist, setWaitlist] = useFirestoreCollection("waitlist", []);
   const [messageLog, setMessageLog] = useFirestoreCollection("messageLog", []);
   const [messaging, setMessaging] = useFirestoreDoc("settings/messaging", {});
+  const [automation, setAutomation] = useFirestoreDoc("settings/automation", {});
   const upsertSalesMaster = (records) => {
     if (!records || records.length === 0) return;
     setSalesMasterData((prev) => {
@@ -689,7 +690,7 @@ function App() {
         setStudents(_mb(students, typeof a === "function" ? a(scStudents) : a))
     : setStudents;
   // v65: what the automation screens and pop-ups read
-  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging });
+  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation });
   const render = () => {
     switch (page) {
       case "dashboard":

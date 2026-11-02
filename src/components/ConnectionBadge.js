@@ -112,7 +112,7 @@ const LLQA_LIST_NAMES = {
   qcViolations: "QC violations", trainingPrograms: "Training", procInventory: "Inventory", procPurchases: "Purchases",
   hrInterviews: "HR interviews", hrHiring: "HR hiring", shifts: "Shifts", customRoles: "Custom roles", loginAudit: "Login log",
   "data/attendanceHistory": "Attendance history", "settings/portalAccess": "Portal access settings", "settings/preferences": "App settings",
-  waitlist: "Waitlist", messageLog: "Message log", "settings/messaging": "Message templates",
+  waitlist: "Waitlist", messageLog: "Message log", "settings/messaging": "Message templates", "settings/automation": "Automation settings",
 };
 const llqaListName = (k) => LLQA_LIST_NAMES[k] || k;
 

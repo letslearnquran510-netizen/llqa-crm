@@ -236,7 +236,12 @@ const LLQA_TEMPLATES = [
     "Assalamu Alaikum {parent}, after the clock change {student}'s class is now at {newTime} your time (same teacher). If you'd prefer to keep the old time, reply and we'll move it."],
   ["slotFree", "Waitlist — time free",
     "Assalamu Alaikum {parent}, good news: the class time you asked for is now available — {wantTime} ({zone} time). Reply to confirm and we'll book it for {student}."],
+  ["clockKept", "Clock change — time kept",
+    "Assalamu Alaikum {parent}, the clocks have changed — {student}'s class stays at your usual time ({zone} time):\n{schedule}\nJazakAllah Khair!"],
   ["custom", "Custom message", "Assalamu Alaikum {parent},\n\n"],
+  // to teachers (not shown in the family message list)
+  ["teacherMoves", "Teachers — moved classes",
+    "Assalamu Alaikum {name}, the clocks changed for some families, so these classes move to keep the families' usual time:\n{moves}\n\nYour Timetable already shows the new times. JazakAllah Khair!", "staff"],
 ];
 const llqaTplName = (k) => (LLQA_TEMPLATES.find((x) => x[0] === k) || [k, k])[1];
 const llqaTplText = (k, messaging) => {
@@ -582,6 +587,189 @@ const llqaClockReport = (students, teachers, now) => {
   return out;
 };
 
+/* ---------- clock changes: fix everything in one step (v65.1) ---------- */
+// Moves every class whose family time drifted (a change already happened)
+// to the Pakistan slot that keeps the family's usual time. All students move
+// together, so chains work (A moves into B's old slot while B moves on). A
+// student moves only if all their drifted classes can; the rest are left for
+// a decision (the new slot is taken, outside the shift, or wanted twice).
+const llqaClockFix = (entries, teachers) => {
+  const B = LLQABooking;
+  let cand = (entries || [])
+    .map((e) => ({ e, rows: (e.rows || []).filter((x) => x.kind === "moved") }))
+    .filter((x) => x.rows.length);
+  const skipped = [];
+  let freed = teachers || [];
+  for (let round = 0; round < 200; round++) {
+    freed = B.release(teachers || [], cand.flatMap((x) => x.rows.map((r) => r.cell)));
+    const want = new Map();
+    const bad = new Map();
+    cand.forEach((x, i) => {
+      x.rows.forEach((r) => {
+        const t = freed.find((tt) => tt.id === r.cell.teacherId);
+        const info = B.slotInfo(t, r.needPk.rowDay, r.needPk.slot);
+        const k = r.cell.teacherId + "|" + r.needPk.rowDay + "|" + r.needPk.slot;
+        if (info.state !== "free") {
+          if (!bad.has(i)) bad.set(i, B.fmt12(r.needSlot) + " PKT is " + B.reasonText(info));
+        } else if (want.has(k) && want.get(k) !== i) {
+          const why = "two classes need " + B.fmt12(r.needSlot) + " PKT with " + r.cell.teacher;
+          bad.set(i, why);
+          bad.set(want.get(k), why);
+        } else want.set(k, i);
+      });
+    });
+    if (!bad.size) break;
+    cand.forEach((x, i) => {
+      if (bad.has(i)) skipped.push({ s: x.e.s, why: bad.get(i) });
+    });
+    cand = cand.filter((_, i) => !bad.has(i));
+  }
+  const rowsAll = cand.flatMap((x) => x.rows);
+  const next = !rowsAll.length
+    ? teachers || []
+    : freed.map((t) => {
+        const mine = rowsAll.filter((r) => r.cell.teacherId === t.id);
+        if (!mine.length) return t;
+        const sch = JSON.parse(JSON.stringify(t._ttSchedule || {}));
+        mine.forEach((r) => {
+          if (!sch[r.needPk.rowDay]) sch[r.needPk.rowDay] = {};
+          sch[r.needPk.rowDay][r.needPk.slot] = { ...r.cell.cell }; // same class, new Pakistan slot
+        });
+        return { ...t, _ttSchedule: sch };
+      });
+  const moved = cand.map((x) => ({
+    s: x.e.s,
+    zone: x.e.zone,
+    rows: x.rows.map((r) => ({
+      ri: r.ri,
+      day: r.row.day,
+      time: r.row.time,
+      teacherId: r.cell.teacherId,
+      teacher: r.cell.teacher,
+      from: r.row.pktSlot,
+      fromDay: r.row.pktDay || "",
+      to: r.needPk.slot,
+      toDay: r.needPk.pktDay,
+    })),
+  }));
+  return { teachers: next, moved, skipped };
+};
+const llqaRunSig = (run) =>
+  run ? JSON.stringify([(run.moved || []).map((m) => m.sid), (run.skipped || []).map((k) => k.sid + ":" + k.why)]) : "";
+// Applies the fix and keeps a record of it (settings/automation.lastRun).
+const llqaClockApply = (entries, opt) => {
+  const ctx = LLQAApp.ctx;
+  const o = opt || {};
+  const before = ctx.teachers || [];
+  const res = llqaClockFix(entries, before);
+  if (res.moved.length) {
+    ctx.setTeachers(res.teachers);
+    const byId = new Map(res.moved.map((m) => [String(m.s.id), m]));
+    const fixSched = (x) => {
+      const m = byId.get(String(x.id));
+      if (!m || !Array.isArray(x.schedule)) return x;
+      return {
+        ...x,
+        schedule: x.schedule.map((r, i) => {
+          const mv = m.rows.find((y) => y.ri === i);
+          return mv ? { ...r, pktSlot: mv.to, pktDay: mv.toDay } : r;
+        }),
+      };
+    };
+    ctx.setStudents((prev) => (prev || []).map(fixSched));
+    if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster(res.moved.map((m) => fixSched(m.s)));
+    llqaWaitCheck(before, res.teachers);
+  }
+  const u = ctx.user || {};
+  const run = {
+    at: new Date().toISOString(),
+    by: u.name || u.role || "",
+    auto: !!o.auto,
+    moved: res.moved.map((m) => ({ sid: m.s.id, name: m.s.name || "", zone: m.zone || "", rows: m.rows })),
+    skipped: res.skipped.map((k) => ({ sid: k.s.id, name: k.s.name || "", why: k.why })),
+  };
+  const last = ctx.automation && ctx.automation.lastRun;
+  // nothing new (same students still waiting for a decision): don't re-save
+  if (!run.moved.length && llqaRunSig(run) === llqaRunSig(last && { moved: [], skipped: last.skipped })) return { ...run, same: true };
+  if ((run.moved.length || run.skipped.length) && typeof ctx.setAutomation === "function")
+    ctx.setAutomation({ ...(ctx.automation || {}), lastRun: run });
+  return run;
+};
+const llqaRunText = (run) => {
+  if (!run) return "";
+  const n = (run.moved || []).reduce((a, m) => a + m.rows.length, 0);
+  const zones = [...new Set((run.moved || []).map((m) => m.zone).filter(Boolean))].join(", ");
+  return (
+    (n ? "Moved " + n + " class" + (n === 1 ? "" : "es") + " for " + run.moved.length + " student" + (run.moved.length === 1 ? "" : "s") + (zones ? " (" + zones + ")" : "") + " so families keep their usual time." : "No class could move by itself.") +
+    ((run.skipped || []).length ? " " + run.skipped.length + " need a decision (the new time is taken)." : "")
+  );
+};
+// One WhatsApp per teacher listing their moved classes (old → new PKT).
+const llqaTeacherMoveItems = (run) => {
+  const ctx = LLQAApp.ctx;
+  const B = LLQABooking;
+  const byT = new Map();
+  (run && run.moved ? run.moved : []).forEach((m) =>
+    m.rows.forEach((r) => {
+      const k = String(r.teacherId);
+      if (!byT.has(k)) byT.set(k, []);
+      byT.get(k).push("• " + m.name + " (" + r.day + " " + B.timeLabel(r.time) + " family time): " + (r.fromDay ? r.fromDay + " " : "") + B.fmt12(r.from) + " → " + (r.toDay ? r.toDay + " " : "") + B.fmt12(r.to) + " PKT");
+    }),
+  );
+  return [...byT.entries()].map(([tid, lines]) => {
+    const t = (ctx.teachers || []).find((x) => String(x.id) === tid) || {};
+    return {
+      student: { name: t.name || "Teacher", parent: t.name || "", phone: t.phone || "", country: "Pakistan" },
+      template: "teacherMoves",
+      extra: { name: t.name || "", moves: lines.join("\n") },
+    };
+  });
+};
+const llqaFamilyKeptItems = (run) => (run && run.moved ? run.moved : []).map((m) => ({ studentId: m.sid, template: "clockKept" }));
+// Automatic fixing (on unless turned off): only for the admin side, only on
+// cloud data fully loaded with nothing waiting to send, and only when there
+// is something new to do.
+const llqaClockAutoRun = () => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user || !llqaCanManage()) return null;
+  if ((ctx.automation || {}).clockAuto === false) return null;
+  try {
+    if (typeof LLQACloud !== "undefined" && LLQACloud.ready && (!LLQACloud.ready("students") || !LLQACloud.ready("teachers") || !LLQACloud.ready("doc:settings/automation"))) return null;
+    const st = typeof LLQASync !== "undefined" && LLQASync.get ? LLQASync.get() : null;
+    if (st && st.mode === "cloud" && (st.pending || st.sending)) return null;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return null;
+  } catch (e) {
+    return null;
+  }
+  const rep = llqaClockReport(ctx.students, ctx.teachers).filter((r) => r.rows.some((x) => x.kind === "moved"));
+  if (!rep.length) return null;
+  const run = llqaClockApply(rep, { auto: true });
+  if (run && !run.same && (run.moved.length || run.skipped.length))
+    llqaToast({ kind: "clockFixed", key: "clockFixed", run, text: "🕐 Clocks changed. " + llqaRunText(run) });
+  return run;
+};
+// A week before a change: remind the admin once per session.
+const llqaClockSoon = (now) => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user || !llqaCanManage()) return null;
+  const n = now || new Date();
+  const soon = llqaClockReport(ctx.students, ctx.teachers, n).filter(
+    (r) => r.next && r.rows.some((x) => x.kind === "upcoming") && r.next.date.getTime() - n.getTime() < 7 * 86400000,
+  );
+  if (!soon.length) return null;
+  const first = soon.map((r) => r.next.date).sort((a, b) => a - b)[0];
+  const zones = [...new Set(soon.map((r) => r.zone))].join(", ");
+  const auto = (ctx.automation || {}).clockAuto !== false;
+  return {
+    kind: "clockSoon",
+    key: "clockSoon",
+    text:
+      "🕐 Clocks change on " + first.toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short" }) + " (" + zones + "): " +
+      soon.length + " student" + (soon.length === 1 ? "" : "s") + " affected. " +
+      (auto ? "Automatic fixing is on — their classes move after the change so families keep their time." : "Automatic fixing is off — fix them in Sales → Clock Changes after the change."),
+  };
+};
+
 /* ============================================================
    v65 — Part 2: pop-ups (message, send queue, reschedule, convert,
    quit, log class), notices, and the Add Student enrollment choice.
@@ -743,7 +931,7 @@ const LLQAMessageModal = ({ studentId, student, template, extra, onClose }) => {
       React.createElement(
         "div",
         { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 } },
-        LLQA_TEMPLATES.map(([k, name]) =>
+        LLQA_TEMPLATES.filter((x) => !x[3] || x[0] === tpl).map(([k, name]) =>
           llqaMini(name, () => pick(k), { key: k, tone: tpl === k ? "accent" : undefined, solid: tpl === k }),
         ),
       ),
@@ -809,7 +997,7 @@ const LLQASendQueue = ({ items, title, onClose }) => {
   const next = () => setI(i + 1);
   return llqaShell(
     "💬 " + (title || "Send messages") + " — " + (i + 1) + " of " + list.length,
-    (s.parent || "") + (s.name ? " · " + s.name : "") + " · " + llqaTplName(it.template),
+    [s.parent, s.name && s.name !== s.parent ? s.name : "", llqaTplName(it.template)].filter(Boolean).join(" · "),
     React.createElement(
       "div",
       null,
@@ -1104,6 +1292,26 @@ const LLQAToasts = () =>
                 llqaOpen("message", { studentId: t.studentId, student: t.student, template: "newTimes" });
               }, { key: "mv", tone: "success" })
             : null,
+          t.kind === "clockFixed"
+            ? [
+                (t.run && t.run.moved && t.run.moved.length)
+                  ? llqaMini("💬 Tell teachers", () => {
+                      llqaDismiss(t.id);
+                      llqaOpen("queue", { title: "Moved classes — teachers", items: llqaTeacherMoveItems(t.run) });
+                    }, { key: "tt", tone: "success" })
+                  : null,
+                llqaMini("Review", () => {
+                  llqaDismiss(t.id);
+                  llqaGo("sales", "clock");
+                }, { key: "rv", tone: "accent" }),
+              ]
+            : null,
+          t.kind === "clockSoon"
+            ? llqaMini("Clock Changes", () => {
+                llqaDismiss(t.id);
+                llqaGo("sales", "clock");
+              }, { key: "cs", tone: "accent" })
+            : null,
           t.kind === "waitlist"
             ? llqaMini("Open Waitlist", () => {
                 llqaDismiss(t.id);
@@ -1116,6 +1324,19 @@ const LLQAToasts = () =>
     ),
   );
 
+/* ---------- automatic clock-change fixing (runs while the CRM is open) ---------- */
+const llqaClockTick = (state) => {
+  try {
+    llqaClockAutoRun();
+    if (!state.soon) {
+      const soon = llqaClockSoon();
+      if (soon) {
+        state.soon = true;
+        llqaToast(soon);
+      }
+    }
+  } catch (e) {}
+};
 /* ---------- host: renders whichever pop-up is open ---------- */
 const LLQAHost = () => {
   const [, bump] = useState(0);
@@ -1123,6 +1344,16 @@ const LLQAHost = () => {
     const f = () => bump((n) => n + 1);
     LLQAUI.subs.add(f);
     return () => LLQAUI.subs.delete(f);
+  }, []);
+  useEffect(() => {
+    // first check once the cloud data has settled, then every 5 minutes
+    const state = { soon: false };
+    const first = setTimeout(() => llqaClockTick(state), 15000);
+    const again = setInterval(() => llqaClockTick(state), 5 * 60 * 1000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(again);
+    };
   }, []);
   const m = LLQAUI.modal;
   const k = m && m.kind;
@@ -1791,30 +2022,6 @@ const llqaChangeLabel = (cc, tz) => {
     return cc.date.toDateString();
   }
 };
-// Keep the family's time: move the affected classes to the Pakistan slot
-// that matches it now. All of a student's moves happen together.
-const llqaClockMove = (entry) => {
-  const ctx = LLQAApp.ctx;
-  const B = LLQABooking;
-  const s = entry.s;
-  const moving = entry.rows.filter((x) => x.kind === "moved");
-  if (!moving.length) return "";
-  const items = moving.map((x) => ({
-    teacherId: x.cell.teacherId, teacher: x.cell.teacher, day: x.row.day, time: x.row.time,
-    rowDay: x.needPk.rowDay, slot: x.needPk.slot, pktDay: x.needPk.pktDay, dayShift: x.needPk.dayShift,
-  }));
-  const res = B.rebook(ctx.teachers || [], moving.map((x) => x.cell), items, { ...s, sub: s.course === "Subject" ? llqaSubjects(s) || "Subject" : "" });
-  if (!res.ok) return res.problems.join(" · ");
-  ctx.setTeachers(res.teachers);
-  const sched = s.schedule.map((r, i) => {
-    const mv = moving.find((x) => x.ri === i);
-    return mv ? { ...r, pktSlot: mv.needPk.slot, pktDay: mv.needPk.pktDay } : r;
-  });
-  ctx.setStudents((prev) => (prev || []).map((x) => (String(x.id) === String(s.id) ? { ...x, schedule: sched } : x)));
-  if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster([{ ...s, schedule: sched }]);
-  llqaWaitCheck(ctx.teachers || [], res.teachers);
-  return "";
-};
 // Keep the Pakistan time: the family's class time changes instead.
 const llqaClockKeep = (entry) => {
   const ctx = LLQAApp.ctx;
@@ -1851,6 +2058,22 @@ const LLQAClockTab = (props) => {
   const report = llqaClockReport(ctx.students, ctx.teachers);
   const moved = report.filter((r) => r.rows.some((x) => x.kind === "moved"));
   const upcoming = report.filter((r) => r.rows.some((x) => x.kind === "upcoming"));
+  const automation = ctx.automation || {};
+  const auto = automation.clockAuto !== false;
+  const last = automation.lastRun || null;
+  const manage = llqaCanManage();
+  const setAuto = (on) => {
+    if (typeof ctx.setAutomation === "function") ctx.setAutomation({ ...automation, clockAuto: on });
+  };
+  // one click: every family keeps its usual time (all students together)
+  const fix = (list) => {
+    const run = llqaClockApply(list, { auto: false });
+    setMsg(
+      run.moved.length
+        ? "✓ " + llqaRunText(run)
+        : "Nothing could move: " + run.skipped.map((k) => k.name + " — " + k.why).join(" | "),
+    );
+  };
   const zones = {};
   (ctx.students || []).forEach((s) => {
     if (!s || s.status === "quit") return;
@@ -1879,22 +2102,12 @@ const LLQAClockTab = (props) => {
     x.kind === "moved"
       ? x.row.day + " " + B.timeLabel(x.row.time) + " (family) was booked at " + B.fmt12(x.row.pktSlot) + " PKT, which is now " + x.famNow + " for them. Keeping " + B.timeLabel(x.row.time) + " needs " + B.fmt12(x.needSlot) + " PKT — " + (x.free ? "✓ free with " + x.cell.teacher : "✗ " + x.why)
       : x.row.day + " " + B.timeLabel(x.row.time) + " (family) at " + B.fmt12(x.row.pktSlot) + " PKT becomes " + x.famAfter + " for them. Keeping " + B.timeLabel(x.row.time) + " will need " + B.fmt12(x.needSlot) + " PKT — " + (x.free ? "✓ free now" : "✗ " + x.why);
-  const movable = moved.filter((e) => e.rows.filter((x) => x.kind === "moved").every((x) => x.free));
-  const moveAll = () => {
-    const errs = [];
-    // one student at a time, each on the latest Timetable
-    movable.forEach((e) => {
-      const err = llqaClockMove(e);
-      if (err) errs.push(e.s.name + ": " + err);
-    });
-    setMsg(errs.length ? "Some classes couldn't move: " + errs.join(" | ") : "✓ Moved " + movable.length + " student(s) — families keep their usual time.");
-  };
+  const movedClasses = moved.reduce((a, e) => a + e.rows.filter((x) => x.kind === "moved").length, 0);
   const section = (title, sub, list, kind) =>
     llqaCard([
       llqaH(title, sub),
       ...list.map((e) => {
         const mine = e.rows.filter((x) => x.kind === kind);
-        const allFree = mine.every((x) => x.free);
         const first = mine[0];
         const extra =
           kind === "moved" ? { newTime: first.famNow } : { changeDate: llqaChangeLabel(e.next, e.tz), newTime: first.famAfter };
@@ -1906,35 +2119,92 @@ const LLQAClockTab = (props) => {
           React.createElement(
             "div",
             { style: { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 } },
-            kind === "moved"
+            kind === "moved" && manage
               ? [
-                  llqaMini("Keep family time — move class", () => setMsg(llqaClockMove(e) || "✓ " + e.s.name + "'s class moved."), { key: "mv", tone: "success", disabled: !allFree, title: allFree ? "" : "The needed slot is busy" }),
+                  llqaMini("Keep family time — move class", () => fix([e]), { key: "mv", tone: "success" }),
                   llqaMini("Keep Pakistan time", () => {
                     llqaClockKeep(e);
                     setMsg("✓ " + e.s.name + "'s family time updated to " + first.famNow + ".");
                   }, { key: "kp" }),
+                  llqaMini("📅 Other time / teacher", () => llqaOpen("reschedule", { studentId: e.s.id }), { key: "rs" }),
                 ]
               : null,
-            llqaMini("💬 Tell the family", () => llqaOpen("message", { studentId: e.s.id, template: kind === "moved" ? "clockChanged" : "clockChange", extra }), { key: "m", disabled: !llqaPhone(e.s.phone, e.s.country) }),
+            manage
+              ? llqaMini("💬 Tell the family", () => llqaOpen("message", { studentId: e.s.id, template: kind === "moved" ? "clockChanged" : "clockChange", extra }), { key: "m", disabled: !llqaPhone(e.s.phone, e.s.country) })
+              : null,
           ),
         );
       }),
     ]);
+  const lastWhen = last
+    ? (() => {
+        try {
+          return new Date(last.at).toLocaleString("en-GB", { timeZone: "Asia/Karachi", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) + " PKT";
+        } catch (e) {
+          return last.at;
+        }
+      })()
+    : "";
+  const teacherItems = last ? llqaTeacherMoveItems(last) : [];
   return React.createElement(
     "div",
     null,
+    llqaCard(
+      React.createElement(
+        "div",
+        { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" } },
+        React.createElement(
+          "div",
+          { style: { flex: "1 1 400px" } },
+          React.createElement("div", { style: { color: c.text, fontSize: 14, fontWeight: 700 } }, "🤖 Automatic fixing — " + (auto ? "ON" : "OFF")),
+          React.createElement(
+            "div",
+            { style: { color: c.textSec, fontSize: 11, marginTop: 3, lineHeight: 1.5 } },
+            auto
+              ? "After every clock change (USA, Canada, UK, Europe, Australia…), each family's classes move by themselves so the family keeps its usual time — only when the same teacher is free at the new Pakistan time. It runs the first time an admin opens the CRM after the change, then shows what moved, with a button to message the teachers. A week before a change you get a reminder."
+              : "Classes are not moved by themselves. After a clock change, use “Fix all now” below — or turn this on.",
+          ),
+        ),
+        manage ? llqaMini(auto ? "Turn off" : "Turn on", () => setAuto(!auto), { big: true, tone: "success", solid: !auto }) : null,
+      ),
+      { border: auto ? c.success + "66" : c.border },
+    ),
     React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } }, zoneCards.length ? zoneCards : llqaStat("Families", 0, "no students with a time zone yet")),
     msg ? llqaCard(React.createElement("div", { style: { color: /^✓/.test(msg) ? c.success : c.warn, fontSize: 12 } }, msg)) : null,
+    last
+      ? llqaCard([
+          llqaH("Last fix: " + lastWhen + (last.auto ? " · automatic" : last.by ? " · by " + last.by : ""), llqaRunText(last)),
+          ...(last.skipped || []).map((k, i) =>
+            React.createElement("div", { key: "sk" + i, style: { color: c.warn, fontSize: 11, marginBottom: 3 } }, "• " + k.name + " — " + k.why),
+          ),
+          React.createElement(
+            "div",
+            { key: "b", style: { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 6 } },
+            manage && teacherItems.length
+              ? llqaMini("💬 Tell teachers (" + teacherItems.length + ")", () => llqaOpen("queue", { title: "Moved classes — teachers", items: teacherItems }), { key: "t", tone: "success", big: true })
+              : null,
+            manage && (last.moved || []).length
+              ? llqaMini("💬 Confirm to families (" + last.moved.length + ") — optional", () => llqaOpen("queue", { title: "Time kept — families", items: llqaFamilyKeptItems(last) }), { key: "f", big: true })
+              : null,
+          ),
+        ])
+      : null,
     moved.length
       ? React.createElement(
           "div",
           null,
-          movable.length > 1 ? React.createElement("div", { style: { marginBottom: 8 } }, llqaMini("✓ Keep family time for all " + movable.length + " (move classes)", moveAll, { big: true, solid: true, tone: "success" })) : null,
-          section("⚠ Clocks already changed — " + moved.length + " student(s)", "Pakistan has no clock change, so these classes stayed on their Pakistan slot and the family's time moved. Move the class to keep the family's usual time, or keep the Pakistan time and tell the family.", moved, "moved"),
+          manage
+            ? React.createElement(
+                "div",
+                { style: { marginBottom: 8 } },
+                llqaMini("✓ Fix all now — keep every family's usual time (" + movedClasses + " class" + (movedClasses === 1 ? "" : "es") + ")", () => fix(moved), { big: true, solid: true, tone: "success" }),
+              )
+            : null,
+          section("⚠ Clocks already changed — " + moved.length + " student(s)", "Pakistan has no clock change, so these classes stayed on their Pakistan slot and the family's time moved. “Fix all now” moves them all at once (chains included); anything whose new slot is taken is listed for a decision.", moved, "moved"),
         )
       : null,
     upcoming.length
-      ? section("🕐 Coming up — " + upcoming.length + " student(s)", "Tell families now. After the change these move to the list above, where one click moves the class.", upcoming, "upcoming")
+      ? section("🕐 Coming up — " + upcoming.length + " student(s)", auto ? "Automatic fixing is on: these move by themselves after the change. You can tell the families now." : "After the change these move to the list above, where one click fixes them all.", upcoming, "upcoming")
       : null,
     !moved.length && !upcoming.length
       ? llqaCard(React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "✓ Every booked class matches the family's time, and no change in the next 8 months affects them."))
@@ -2146,7 +2416,8 @@ const LLQADashCards = (props) => {
       "🕐",
       "Clock changes",
       movedN + up.length,
-      movedN ? movedN + " need a decision now" : firstUp ? up.length + " before " + firstUp.date.toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "nothing coming up",
+      (movedN ? movedN + " to fix now" : firstUp ? up.length + " before " + firstUp.date.toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "nothing coming up") +
+        ((ctx.automation || {}).clockAuto !== false ? " · auto ✓" : " · auto off"),
       movedN ? c.danger : null,
       () => llqaGo("sales", "clock"),
     ),
