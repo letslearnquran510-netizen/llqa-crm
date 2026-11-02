@@ -145,7 +145,7 @@ const StudentDetailC = ({ s, onClose, onP, pp, bc, teacherFeedback }) =>
                         gap: 2,
                       },
                     },
-                    React.createElement("span", null, s.time || "N/A"),
+                    React.createElement("span", null, llqaTimeText(s.time) || "N/A"),
                     React.createElement(
                       "span",
                       {
@@ -171,7 +171,7 @@ const StudentDetailC = ({ s, onClose, onP, pp, bc, teacherFeedback }) =>
                       _pk,
                     ),
                   )
-                : s.time || "N/A";
+                : llqaTimeText(s.time) || "N/A";
             })(),
             Clock,
           ],
@@ -233,6 +233,7 @@ const StudentDetailC = ({ s, onClose, onP, pp, bc, teacherFeedback }) =>
           ),
         ),
       ),
+      React.createElement(LLQAStudentAllDetails, { s: s }),
       React.createElement(
         "h4",
         {

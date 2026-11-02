@@ -10,10 +10,13 @@ const TimetableMod = ({
 }) => {
   const ttStage = (cell) => {
     if (!cell || !cell.s) return null;
-    const _st = (students || []).find(
-      (x) => x.name === cell.s && (x.trial || x.fee === "trial"),
-    );
-    if (!_st) return null;
+    // v64.5: by student id when the booking has one (two students can share a
+    // name); on trial = Fee Status "trial" or Class Type "Trial", until paid
+    const _st =
+      cell.sid != null && cell.sid !== ""
+        ? (students || []).find((x) => String(x.id) === String(cell.sid))
+        : (students || []).find((x) => x.name === cell.s && llqaInTrial(x));
+    if (!_st || !llqaInTrial(_st)) return null;
     const _pr = _st.attended || 0;
     const _paid =
       _st.fee === "paid" ||
@@ -565,6 +568,7 @@ const TimetableMod = ({
     let booked = 0,
       free = 0,
       noClass = 0;
+    const uniq = new Set(); // v64.5: each student once
     const perTeacher = teachers.map((t) => {
       let tb = 0,
         tf = 0;
@@ -580,6 +584,11 @@ const TimetableMod = ({
           } else if (cell && cell.s) {
             booked++;
             tb++;
+            uniq.add(
+              cell.sid != null && cell.sid !== ""
+                ? "id:" + cell.sid
+                : "n:" + String(cell.s).trim().toLowerCase() + "|" + String(cell.l || "").trim().toLowerCase(),
+            );
           }
         });
       });
@@ -593,6 +602,7 @@ const TimetableMod = ({
     });
     return {
       booked,
+      students: uniq.size,
       free,
       noClass,
       perTeacher,
@@ -725,7 +735,14 @@ const TimetableMod = ({
           },
           sh,
           " (",
-          st.teachers.length,
+          // v64.5: teachers added in the CRM count too (same rule as the list)
+          st.teachers.length +
+            (appTeachers || []).filter(
+              (t) =>
+                !st.teachers.some((b) => b.code === t.code) &&
+                (!t.department || t.department === "Quran" || t.department === "Both") &&
+                ((t.shift || "").includes(sh) || (!t.shift && sh === "Night")),
+            ).length,
           ")",
           React.createElement(
             "span",
@@ -788,7 +805,7 @@ const TimetableMod = ({
       React.createElement(SC, {
         icon: GraduationCap,
         label: "Unique Students",
-        value: shiftStats.booked,
+        value: shiftStats.students,
         sub: "Across " + teachers.length + " teachers",
         color: c.cyan,
       }),
@@ -1678,7 +1695,7 @@ const TimetableMod = ({
                                   fontWeight: 500,
                                 },
                               },
-                              cell.c,
+                              cell.c + (cell.sub ? " · " + cell.sub : ""),
                             ),
                             cell.s === "Self" && cell.l
                               ? React.createElement(
@@ -2068,7 +2085,7 @@ const TimetableMod = ({
                             }
                           },
                           title: isBooked
-                            ? cell.s + " (" + cell.a + ") - " + cell.c
+                            ? cell.s + " (" + cell.a + ") - " + cell.c + (cell.sub ? " · " + cell.sub : "")
                             : isFree
                               ? "Click to book this slot"
                               : "",
@@ -3320,6 +3337,32 @@ const TimetableMod = ({
           ),
         ),
       ),
+    // v64.5: the "Log Today's Class" form (the button existed, the form never showed)
+    logProgressModal &&
+      React.createElement(LLQALogClassModal, {
+        info: logProgressModal,
+        form: progressForm,
+        setForm: setProgressForm,
+        students: students,
+        dailyProgress: dailyProgress,
+        onClose: () => setLogProgressModal(null),
+        onSave: () => {
+          const err = llqaLogClass({
+            students,
+            setStudents,
+            dailyProgress,
+            setDailyProgress,
+            studentId: logProgressModal.studentId,
+            teacherName: logProgressModal.teacherName,
+            form: progressForm,
+          });
+          if (err) {
+            alert(err);
+            return;
+          }
+          setLogProgressModal(null);
+        },
+      }),
     cellModal &&
       React.createElement(
         "div",
@@ -3564,7 +3607,7 @@ const TimetableMod = ({
                 cellModal.cell.s +
                   (cellModal.cell.a ? " (" + cellModal.cell.a + "y)" : ""),
               ],
-              ["Course", cellModal.cell.c],
+              ["Course", cellModal.cell.c + (cellModal.cell.sub ? " · " + cellModal.cell.sub : "")],
               cellModal.cell.family
                 ? ["Family Group", cellModal.cell.family]
                 : null,
@@ -3748,18 +3791,25 @@ const TimetableMod = ({
                   variant: "outline",
                   icon: CheckCircle,
                   onClick: () => {
-                    const stu = (students || []).find(
-                      (s) =>
-                        (s.name || "").toLowerCase().trim() ===
-                        (cellModal.cell.s || "").toLowerCase().trim(),
-                    );
+                    // v64.5: the student by id when the booking has one
+                    const stu =
+                      cellModal.cell.sid != null && cellModal.cell.sid !== ""
+                        ? (students || []).find((s) => String(s.id) === String(cellModal.cell.sid))
+                        : (students || []).find(
+                            (s) =>
+                              (s.name || "").toLowerCase().trim() ===
+                              (cellModal.cell.s || "").toLowerCase().trim(),
+                          );
                     setProgressForm({
                       attended: "present",
                       lesson: (stu && stu.lastLesson) || "",
                       pages: "",
-                      behavior: "Good",
-                      performance: "Satisfactory",
-                      homework: "Completed",
+                      // v64.5: start from the student's last values, like Log Progress
+                      behavior: (stu && stu.lB) || "Good",
+                      performance: (stu && stu.lP) || "Satisfactory",
+                      homework: (stu && stu.lH) || "Not Assigned",
+                      recitation: (stu && stu.lR) || "N/A",
+                      tajweed: (stu && stu.lT) || "N/A",
                       notes: "",
                     });
                     setLogProgressModal({

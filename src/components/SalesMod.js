@@ -80,16 +80,28 @@ const SalesMod = ({
       current.find((s) => String(s.id) === String(id)) ||
       (modal && modal.data) ||
       {};
+    // v64.5: subjects typed as "Math, English" are kept as a list; a student
+    // who becomes a trial gets a trial start date (kept after converting).
+    const ef = { ...editForm };
+    if (typeof ef.specificSubject === "string")
+      ef.specificSubject = ef.specificSubject
+        .split(",")
+        .map((x) => x.trim())
+        .filter(Boolean);
+    if (ef.course !== "Subject") ef.specificSubject = [];
+    const inT = llqaInTrial(ef);
+    ef.trial = inT ? "trial" : "";
+    if (inT && !ef.trialStart) ef.trialStart = todayPK();
     const cells = LLQABooking.studentCells(teachers || [], before);
     const moved =
-      String(editForm.teacher || "") !== String(before.teacher || "") ||
-      String(editForm.time || "") !== String(before.time || "");
+      String(ef.teacher || "") !== String(before.teacher || "") ||
+      String(ef.time || "") !== String(before.time || "");
     if (
       cells.length &&
       moved &&
       !confirm(
         "You changed the teacher or class time for " +
-          (editForm.name || before.name) +
+          (ef.name || before.name) +
           ".\n\nThis updates the student record only. The Timetable still has these classes:\n" +
           LLQABooking.cellsText(cells) +
           "\n\nUse Class Shifting to move the actual classes.\n\nSave the record change anyway?",
@@ -97,9 +109,9 @@ const SalesMod = ({
     )
       return;
     let freeSlots = false;
-    if (editForm.status === "quit" && before.status !== "quit" && cells.length) {
+    if (ef.status === "quit" && before.status !== "quit" && cells.length) {
       freeSlots = confirm(
-        (editForm.name || before.name) +
+        (ef.name || before.name) +
           " is now marked Quit.\n\nFree their " +
           cells.length +
           " timetable slot(s) so new students can book them?\n\n" +
@@ -109,7 +121,7 @@ const SalesMod = ({
     }
     upsertSalesMaster([
       {
-        ...editForm,
+        ...ef,
       },
     ]);
     if (current.find((s) => String(s.id) === String(id))) {
@@ -118,7 +130,7 @@ const SalesMod = ({
           if (String(s.id) !== String(id)) return s;
           const merged = {
             ...s,
-            ...editForm,
+            ...ef,
           };
           delete merged._inSystem;
           delete merged._removedDate;
@@ -129,14 +141,13 @@ const SalesMod = ({
     if (cells.length && setTeachers && teachers) {
       if (freeSlots) setTeachers(LLQABooking.release(teachers, cells));
       else if (
-        ["name", "parent", "age", "course", "country", "state", "phone"].some(
+        ["name", "parent", "age", "course", "country", "state", "phone", "gender", "family", "specificSubject"].some(
           (k) =>
-            String(editForm[k] == null ? "" : editForm[k]) !==
-            String(before[k] == null ? "" : before[k]),
+            llqaStable(ef[k] == null ? "" : ef[k]) !== llqaStable(before[k] == null ? "" : before[k]),
         )
       )
         setTeachers(
-          LLQABooking.updateCells(teachers, cells, { ...before, ...editForm }),
+          LLQABooking.updateCells(teachers, cells, { ...before, ...ef }),
         );
     }
     setModal(null);
@@ -165,7 +176,7 @@ const SalesMod = ({
       state: "",
       course: "Quran",
       teacher: "",
-      fee: "paid",
+      fee: "trial", // v64.5: Sales enrolls trial students (choose "paid" for a direct enrollment)
       time: "",
       dor: todayPK(),
       phone: "",
@@ -192,7 +203,7 @@ const SalesMod = ({
       state: r.state || "",
       course: r.course || "Quran",
       teacher: "",
-      fee: "paid",
+      fee: "trial",
       time: "",
       dor: todayPK(),
       phone: r.contact || "",
@@ -296,8 +307,8 @@ const SalesMod = ({
       lT: "N/A",
       notes: pf.notes || "",
       referredBy: pf.referredBy || "",
-      trial: "trial",
-      trialStart: pf.dor || todayPK(),
+      trial: llqaInTrial(pf) ? "trial" : "",
+      trialStart: llqaInTrial(pf) ? pf.dor || todayPK() : "",
     };
     // v64: every slot is checked and booked through LLQABooking —
     // all-or-nothing, on the student's day, never on top of another student.
@@ -344,6 +355,8 @@ const SalesMod = ({
         pktSlot: it.slot,
       })),
       tz: pl.tz || "",
+      specificSubject:
+        pf.course === "Subject" && Array.isArray(pf.specificSubject) ? pf.specificSubject : [],
       parentId: newStudent.parentId || LLQABooking.newParentId(current),
     };
     let nextTeachers = null;
@@ -785,7 +798,7 @@ const SalesMod = ({
                             color: c.textSec,
                           },
                         },
-                        r.time || "\u2014",
+                        llqaTimeText(r.time) || "\u2014",
                       ),
                   isMstr
                     ? React.createElement(
@@ -2023,25 +2036,7 @@ const SalesMod = ({
                 marginBottom: 16,
               },
             },
-            [
-              ["Parent", modal.data.parent],
-              ["Course", modal.data.course],
-              ["Teacher", modal.data.teacher],
-              ["Country", modal.data.country],
-              ["State", modal.data.state],
-              ["Class Time", modal.data.time],
-              ["Enrolled", modal.data.dor],
-              ["Fee", modal.data.fee],
-              ["Status", modal.data.status],
-              ["Age", modal.data.age],
-              ["Phone", modal.data.phone],
-              [
-                "Attendance",
-                modal.data.attendance != null
-                  ? modal.data.attendance + "%"
-                  : "\u2014",
-              ],
-            ].map(([l, v]) =>
+            llqaStudentRows(modal.data).map(([l, v]) =>
               React.createElement(
                 "div",
                 {
@@ -2114,6 +2109,8 @@ const SalesMod = ({
                 modal.data.lastLesson,
               ),
             ),
+          React.createElement(LLQANotes, { s: modal.data }),
+          React.createElement(LLQAClassList, { s: modal.data }),
           React.createElement(
             "div",
             {
@@ -2325,7 +2322,7 @@ const SalesMod = ({
                   ...editForm,
                   fee: v,
                 }),
-              options: ["paid", "overdue", "n/a"],
+              options: ["trial", "paid", "partial", "overdue", "n/a"],
             }),
             React.createElement(Inp, {
               label: "Age",
@@ -2347,6 +2344,18 @@ const SalesMod = ({
                 }),
               type: "date",
             }),
+            // v64.5: every field of the Add Student form can be edited here
+            React.createElement(Inp, { label: "Phone / WhatsApp", value: editForm.phone || "", onChange: (v) => setEditForm({ ...editForm, phone: v }) }),
+            React.createElement(Inp, { label: "Email", value: editForm.email || "", onChange: (v) => setEditForm({ ...editForm, email: v }) }),
+            React.createElement(Inp, { label: "Gender", value: editForm.gender || "", onChange: (v) => setEditForm({ ...editForm, gender: v }), options: ["", "Male", "Female"] }),
+            React.createElement(Inp, { label: "Family Group", value: editForm.family || "", onChange: (v) => setEditForm({ ...editForm, family: v }) }),
+            React.createElement(Inp, { label: "Class Type", value: editForm.classType || "Regular", onChange: (v) => setEditForm({ ...editForm, classType: v }), options: ["Regular", "Trial", "Premium", "Saudi", "Group"] }),
+            React.createElement(Inp, { label: "Hours per Week", value: editForm.hoursPerWeek || "", onChange: (v) => setEditForm({ ...editForm, hoursPerWeek: v }) }),
+            React.createElement(Inp, { label: "Fee Amount", value: editForm.fee_amount || "", onChange: (v) => setEditForm({ ...editForm, fee_amount: v }), type: "number" }),
+            React.createElement(Inp, { label: "Currency", value: editForm.currency || "USD", onChange: (v) => setEditForm({ ...editForm, currency: v }), options: ["USD", "CAD", "GBP", "EUR", "AED", "PKR"] }),
+            React.createElement(Inp, { label: "Referred By", value: editForm.referredBy || "", onChange: (v) => setEditForm({ ...editForm, referredBy: v }) }),
+            editForm.course === "Subject" &&
+              React.createElement(Inp, { label: "Subjects (comma separated)", value: Array.isArray(editForm.specificSubject) ? editForm.specificSubject.join(", ") : editForm.specificSubject || "", onChange: (v) => setEditForm({ ...editForm, specificSubject: v }) }),
           ),
           React.createElement(Inp, {
             label: "Notes",
