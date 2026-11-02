@@ -21,6 +21,25 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers }) => {
       },
       kids,
     );
+  // v64.5: editing an existing student shows the classes but doesn't change
+  // them here — Class Shifting moves classes and keeps the Timetable right.
+  if (pf.editingId) {
+    return React.createElement(
+      "div",
+      { style: { marginTop: 16 } },
+      React.createElement(
+        "div",
+        { style: { color: c.text, fontSize: 13, fontWeight: 700, marginBottom: 8 } },
+        "📅 Classes",
+      ),
+      React.createElement(LLQAClassList, { s: pf }),
+      box(
+        c.accentBg,
+        c.accent,
+        "To change class days, times or the teacher, use Class Shifting — it moves the classes in the Timetable too. Everything else can be edited here.",
+      ),
+    );
+  }
   if (!tz) {
     return box(
       c.warnBg,

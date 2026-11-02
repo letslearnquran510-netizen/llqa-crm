@@ -112,6 +112,13 @@ const StudentsMod = ({
         String(_spNow.getMonth() + 1).padStart(2, "0") +
         "-" +
         String(_spNow.getDate()).padStart(2, "0");
+    // v64.5: logging the same day again corrects the counters (no double count)
+    const _cnt = llqaCountClass(
+      sts.find((s) => s.id === sid) || modal.data,
+      dailyProgress,
+      dt,
+      pf.att || "Present",
+    );
     setSts(
       sts.map((s) =>
         s.id === sid
@@ -121,12 +128,9 @@ const StudentsMod = ({
               lastDate: dt,
               page: pf.page ? parseInt(pf.page) : s.page,
               qaida: s.qaida > 0 && pf.page ? parseInt(pf.page) : s.qaida,
-              attended: isP ? s.attended + 1 : s.attended,
-              totalClasses: s.totalClasses + 1,
-              attendance: Math.round(
-                ((isP ? s.attended + 1 : s.attended) / (s.totalClasses + 1)) *
-                  100,
-              ),
+              attended: _cnt.attended,
+              totalClasses: _cnt.totalClasses,
+              attendance: _cnt.attendance,
               lB: pf.beh,
               lP: pf.perf,
               lH: pf.hw,
@@ -239,24 +243,18 @@ const StudentsMod = ({
       st,
     );
     const isP = st === "Present" || st === "Late";
-    const _now = new Date();
-    const today =
-      _now.getFullYear() +
-      "-" +
-      String(_now.getMonth() + 1).padStart(2, "0") +
-      "-" +
-      String(_now.getDate()).padStart(2, "0");
+    // v64.5: Pakistan date (as Log Progress and the Timetable use), and a day
+    // marked again corrects the counters instead of counting twice
+    const today = todayPK();
+    const _cnt = llqaCountClass(sts.find((s) => s.id === id) || { id }, dailyProgress, today, st);
     setSts(
       sts.map((s) =>
         s.id === id
           ? {
               ...s,
-              totalClasses: s.totalClasses + 1,
-              attended: isP ? s.attended + 1 : s.attended,
-              attendance: Math.round(
-                ((isP ? s.attended + 1 : s.attended) / (s.totalClasses + 1)) *
-                  100,
-              ),
+              totalClasses: _cnt.totalClasses,
+              attended: _cnt.attended,
+              attendance: _cnt.attendance,
               lastDate: today,
             }
           : s,
@@ -446,6 +444,17 @@ const StudentsMod = ({
                 fee_amount: pf.fee_amount || s.fee_amount,
                 currency: pf.currency || s.currency,
                 notes: pf.notes || s.notes,
+                // v64.5: saved on Edit too
+                code: pf.code !== undefined ? pf.code : s.code || "",
+                referredBy: pf.referredBy !== undefined ? pf.referredBy : s.referredBy || "",
+                specificSubject:
+                  pf.course === "Subject"
+                    ? Array.isArray(pf.specificSubject) ? pf.specificSubject : s.specificSubject || []
+                    : [],
+                trial: llqaInTrial({ fee: pf.fee || s.fee, classType: pf.classType || s.classType }) ? "trial" : "",
+                trialStart: llqaInTrial({ fee: pf.fee || s.fee, classType: pf.classType || s.classType })
+                  ? s.trialStart || pf.trialStart || todayPK()
+                  : s.trialStart || "",
               }
             : s,
         ),
@@ -455,6 +464,8 @@ const StudentsMod = ({
         const pLower = oldParent.trim().toLowerCase();
         const matchesOld = (cell) => {
           if (!cell || typeof cell !== "object") return false;
+          // v64.5: a booking that carries a student id belongs to that student only
+          if (cell.sid != null && cell.sid !== "") return String(cell.sid) === String(pf.editingId);
           const cs = (cell.s || "").trim().toLowerCase();
           const cl = (cell.l || "").trim().toLowerCase();
           if (cs !== nLower) return false;
@@ -471,6 +482,12 @@ const StudentsMod = ({
           gender: pf.gender || "Any",
           phone: pf.phone || "",
           family: pf.family || "",
+          sub:
+            pf.course === "Subject"
+              ? Array.isArray(pf.specificSubject) && pf.specificSubject.length
+                ? pf.specificSubject.join(", ")
+                : "Subject"
+              : "",
         };
         setAppTeachers(
           appTeachers.map((t) => {
@@ -593,6 +610,11 @@ const StudentsMod = ({
       lR: "N/A",
       lT: "N/A",
       notes: pf.notes || "",
+      code: pf.code || "",
+      specificSubject:
+        pf.course === "Subject" && Array.isArray(pf.specificSubject) ? pf.specificSubject : [],
+      trial: llqaInTrial(pf) ? "trial" : "",
+      trialStart: llqaInTrial(pf) ? pf.dor || todayPK() : "",
       referredBy: pf.referredBy || "",
       schedule: pl.items.map((it) => ({
         day: it.day,
@@ -610,7 +632,10 @@ const StudentsMod = ({
         alert("Student NOT saved — the Timetable is still loading. Please try again in a moment.");
         return;
       }
-      const res = LLQABooking.book(appTeachers, pl.items, newStudent);
+      const res = LLQABooking.book(appTeachers, pl.items, {
+        ...newStudent,
+        sub: isQuranCourse ? "" : llqaSubjects(newStudent) || "Subject",
+      });
       if (!res.ok) {
         alert(
           "Student NOT saved — the Timetable changed while the form was open:\n\n• " +
@@ -650,6 +675,14 @@ const StudentsMod = ({
       fee_amount: s.fee_amount || "",
       currency: s.currency || "USD",
       notes: s.notes || "",
+      // v64.5: fields Edit used to drop, and the classes for the read-only view
+      code: s.code || "",
+      referredBy: s.referredBy || "",
+      specificSubject: Array.isArray(s.specificSubject) ? s.specificSubject : [],
+      schedule: Array.isArray(s.schedule) ? s.schedule : undefined,
+      tz: s.tz || "",
+      parentId: s.parentId || "",
+      trialStart: s.trialStart || "",
     });
     setModal({
       type: "addNew",

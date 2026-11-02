@@ -3762,6 +3762,14 @@ const LLQABooking = (() => {
           country: stu.country || c.cell.country,
           state: stu.state || c.cell.state,
           phone: stu.phone || c.cell.phone || "",
+          gender: stu.gender || c.cell.gender || "Any",
+          family: stu.family !== undefined ? stu.family : c.cell.family || "",
+          sub:
+            stu.course === "Subject"
+              ? Array.isArray(stu.specificSubject) && stu.specificSubject.length
+                ? stu.specificSubject.join(", ")
+                : c.cell.sub || "Subject"
+              : "",
           sid: stu.id,
         };
       });
@@ -4048,3 +4056,412 @@ const LLQABooking = (() => {
     offsetAt, indexCells, cellsFromIndex,
   };
 })();
+
+
+/* ============================================================
+   v64.5 — every saved student field on the view screens, one
+   trial rule for the whole CRM, and "Log Today's Class" from
+   the Timetable.
+   ============================================================ */
+// On trial: Fee Status "trial" or Class Type "Trial" (until paid).
+const llqaInTrial = (s) => !!s && (s.fee === "trial" || s.classType === "Trial");
+const llqaSubjects = (s) =>
+  Array.isArray(s && s.specificSubject)
+    ? s.specificSubject.filter(Boolean).join(", ")
+    : String((s && s.specificSubject) || "");
+const llqaZoneLabel = (tz) => (tz ? String(tz).split("/").pop().replace(/_/g, " ") : "");
+// "Mon|0500 PM, Wed|0500 PM" → "Mon 05:00 PM, Wed 05:00 PM" (display only)
+const llqaTimeText = (t) =>
+  String(t || "")
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean)
+    .map((x) => {
+      const i = x.indexOf("|");
+      const d = i >= 0 ? x.slice(0, i).trim() : "";
+      const tm = i >= 0 ? x.slice(i + 1).trim() : x;
+      return (d ? d + " " : "") + LLQABooking.timeLabel(tm);
+    })
+    .join(", ");
+
+// Every class of a student: the student's day + local time → the booked
+// Pakistan slot + teacher.
+const llqaClasses = (s) => {
+  if (!s) return [];
+  const B = LLQABooking;
+  const tz = s.tz || B.timezoneFor(s.country, s.state);
+  const saved = Array.isArray(s.schedule) ? s.schedule : [];
+  return B.scheduleOf(s).map((r) => {
+    const hit = saved.find((x) => x && x.day === r.day && x.time === r.time);
+    let pkt = "";
+    if (hit && hit.pktSlot)
+      pkt = B.fmt12(hit.pktSlot) + " PKT" + (hit.pktDay && hit.pktDay !== r.day ? " (" + hit.pktDay + ")" : "");
+    else if (r.day && tz) {
+      const pk = B.toPkt(r.day, r.time, tz);
+      if (pk) pkt = B.fmt12(pk.slot) + " PKT" + (pk.pktDay !== r.day ? " (" + pk.pktDay + ")" : "");
+    }
+    return { day: r.day || "", local: B.timeLabel(r.time), pkt, teacher: r.teacher || s.teacher || "" };
+  });
+};
+
+// [label, value] for every field the Add Student form saves (the name is the
+// screen's title; withCode adds the Code where the title doesn't show it).
+const llqaStudentRows = (s, withCode) => {
+  if (!s) return [];
+  const tz = s.tz || LLQABooking.timezoneFor(s.country, s.state);
+  const fee = s.fee ? s.fee + (s.fee_amount ? " · " + s.fee_amount + " " + (s.currency || "") : "") : "";
+  const n = s.attended || 0;
+  const trial = llqaInTrial(s)
+    ? "Since " + (s.trialStart || s.dor || "?") + " · " + n + " class" + (n === 1 ? "" : "es") + " attended"
+    : "";
+  return [
+    ...(withCode ? [["Code", s.code]] : []),
+    ["Parent", s.parent],
+    ["Family", s.family],
+    ["Phone / WhatsApp", s.phone],
+    ["Email", s.email],
+    ["Age", s.age && s.age !== "0" ? s.age : ""],
+    ["Gender", s.gender],
+    ["Country", s.country],
+    ["State / City", s.state],
+    ["Time zone", llqaZoneLabel(tz)],
+    ["Course", s.course],
+    ["Subjects", llqaSubjects(s)],
+    ["Class type", s.classType],
+    ["Teacher", s.teacher],
+    ["Hours / week", s.hoursPerWeek],
+    ["Fee", fee],
+    ["Trial", trial],
+    ["Registered", s.dor],
+    ["Referred by", s.referredBy],
+    ["Parent Portal ID", s.parentId],
+    ["Status", s.status],
+    ["Attendance", s.attendance != null && s.attendance !== "" ? s.attendance + "%" : ""],
+  ].map(([l, v]) => [l, v === undefined || v === null || v === "" ? "—" : String(v)]);
+};
+
+const LLQAClassList = ({ s }) => {
+  const rows = llqaClasses(s);
+  return React.createElement(
+    "div",
+    { style: { marginBottom: 14 } },
+    React.createElement(
+      "div",
+      {
+        style: {
+          color: c.textSec,
+          fontSize: 10,
+          fontWeight: 700,
+          textTransform: "uppercase",
+          letterSpacing: 0.5,
+          marginBottom: 6,
+        },
+      },
+      "Classes (" + rows.length + ")",
+    ),
+    rows.length === 0
+      ? React.createElement("div", { style: { color: c.textMuted, fontSize: 11 } }, "No class time saved yet.")
+      : rows.map((r, i) =>
+          React.createElement(
+            "div",
+            {
+              key: i,
+              style: {
+                display: "flex",
+                justifyContent: "space-between",
+                gap: 8,
+                padding: "6px 10px",
+                background: c.bgDeep,
+                borderRadius: 6,
+                marginBottom: 4,
+                fontSize: 12,
+                color: c.text,
+              },
+            },
+            React.createElement(
+              "span",
+              null,
+              (r.day ? r.day + " · " : "") + r.local + (r.pkt ? "  →  " + r.pkt : ""),
+            ),
+            React.createElement("span", { style: { color: c.textSec } }, r.teacher || "—"),
+          ),
+        ),
+  );
+};
+
+// Notes / Special Requirements, full width (Sales view).
+const LLQANotes = ({ s }) =>
+  s && String(s.notes || "").trim()
+    ? React.createElement(
+        "div",
+        { style: { background: c.bgDeep, borderRadius: 8, padding: "10px 12px", marginBottom: 16 } },
+        React.createElement(
+          "div",
+          {
+            style: {
+              color: c.textSec,
+              fontSize: 9,
+              textTransform: "uppercase",
+              fontWeight: 600,
+              marginBottom: 3,
+            },
+          },
+          "Notes / Special Requirements",
+        ),
+        React.createElement(
+          "div",
+          { style: { color: c.text, fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" } },
+          String(s.notes),
+        ),
+      )
+    : null;
+
+// Full details block for the Students view (its title shows the name and
+// its Notes box the notes; the Code is shown here).
+const LLQAStudentAllDetails = ({ s }) =>
+  React.createElement(
+    "div",
+    { style: { marginBottom: 14 } },
+    React.createElement(
+      "h4",
+      { style: { color: c.text, fontSize: 12, margin: "0 0 8px", fontWeight: 600 } },
+      "All details",
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 6, marginBottom: 10 } },
+      llqaStudentRows(s, true).map(([l, v]) =>
+        React.createElement(
+          "div",
+          { key: l, style: { background: c.bgDeep, borderRadius: 6, padding: "6px 8px" } },
+          React.createElement(
+            "div",
+            { style: { color: c.textMuted, fontSize: 9, textTransform: "uppercase", letterSpacing: 0.4 } },
+            l,
+          ),
+          React.createElement(
+            "div",
+            { style: { color: c.text, fontSize: 12, fontWeight: 600, wordBreak: "break-word" } },
+            v,
+          ),
+        ),
+      ),
+    ),
+    React.createElement(LLQAClassList, { s }),
+  );
+
+// One class per student per day — the same rule as the daily progress
+// record. Logging a day again (from the Timetable, Log Progress or the
+// quick Present/Absent buttons) corrects the counters instead of counting
+// the class twice. The trial rule (3 classes) depends on this count.
+const llqaCountClass = (s, dailyProgress, date, att) => {
+  const earlier =
+    (dailyProgress || []).find((p) => String(p.studentId) === String(s.id) && p.date === date) || null;
+  const isP = /^(present|late)$/i.test(String(att || ""));
+  const prevP = !!earlier && /^(present|late)$/i.test(String(earlier.attended || ""));
+  const attended = Math.max(0, (parseInt(s.attended, 10) || 0) + (isP ? 1 : 0) - (prevP ? 1 : 0));
+  const totalClasses = (parseInt(s.totalClasses, 10) || 0) + (earlier ? 0 : 1);
+  return {
+    earlier,
+    attended,
+    totalClasses,
+    attendance: totalClasses ? Math.round((attended / totalClasses) * 100) : s.attendance,
+  };
+};
+
+// Logs one class from the Timetable: the same progress record and student
+// fields as the Students module's Log Progress.
+const llqaLogClass = ({ students, setStudents, dailyProgress, setDailyProgress, studentId, teacherName, form }) => {
+  const stu = (students || []).find((x) => String(x.id) === String(studentId));
+  if (!stu) return "This booking is not linked to a student record, so the class can't be logged.";
+  if (!form || !String(form.lesson || "").trim()) return "Please write today's lesson.";
+  const dt = todayPK();
+  const att = String(form.attended || "Present");
+  const cnt = llqaCountClass(stu, dailyProgress, dt, att);
+  const earlier = cnt.earlier;
+  const pageN = parseInt(form.pages, 10);
+  const note = String(form.notes || "").trim();
+  setStudents(
+    (students || []).map((x) => {
+      if (String(x.id) !== String(stu.id)) return x;
+      return {
+        ...x,
+        lastLesson: form.lesson,
+        lastDate: dt,
+        page: pageN > 0 ? pageN : x.page,
+        qaida: x.qaida > 0 && pageN > 0 ? pageN : x.qaida,
+        attended: cnt.attended,
+        totalClasses: cnt.totalClasses,
+        attendance: cnt.attendance,
+        lB: form.behavior || x.lB,
+        lP: form.performance || x.lP,
+        lH: form.homework || x.lH,
+        lR: form.recitation || x.lR,
+        lT: form.tajweed || x.lT,
+        // class notes are added to the student's notes, as Log Progress does
+        // (not again when the same note is saved twice on one day)
+        notes:
+          note && !(earlier && String(earlier.notes || "").trim() === note)
+            ? x.notes
+              ? x.notes + " | " + note
+              : note
+            : x.notes,
+      };
+    }),
+  );
+  if (typeof setDailyProgress === "function")
+    setDailyProgress((prev) => {
+      const list = prev || [];
+      const idx = list.findIndex((p) => String(p.studentId) === String(stu.id) && p.date === dt);
+      const entry = {
+        id: idx >= 0 ? list[idx].id : "dp_" + dt + "_" + stu.id + "_" + Date.now(),
+        studentId: stu.id,
+        date: dt,
+        attended: att.toLowerCase(),
+        lesson: form.lesson || "",
+        pages: form.pages || "",
+        behavior: form.behavior || "",
+        performance: form.performance || "",
+        homework: form.homework || "",
+        recitation: form.recitation || "",
+        tajweed: form.tajweed || "",
+        notes: form.notes || "",
+        teacherName: teacherName || stu.teacher || "",
+        source: "timetable",
+        createdAt: idx >= 0 ? list[idx].createdAt || new Date().toISOString() : new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+      if (idx >= 0) {
+        const next = [...list];
+        next[idx] = { ...next[idx], ...entry };
+        return next;
+      }
+      return [...list, entry];
+    });
+  return "";
+};
+
+const LLQALogClassModal = ({ info, form, setForm, students, dailyProgress, onClose, onSave }) => {
+  const stu = (students || []).find((x) => String(x.id) === String(info.studentId));
+  const set = (k, v) => setForm({ ...form, [k]: v });
+  const cap = (v) => String(v || "").replace(/^./, (m) => m.toUpperCase());
+  const earlier =
+    stu && (dailyProgress || []).find((p) => String(p.studentId) === String(stu.id) && p.date === todayPK());
+  const n = (stu && stu.attended) || 0;
+  // Which class: the family's day + time as booked, and the Pakistan slot.
+  // (Timetable rows follow the family's day; a night slot is the next
+  // morning in Pakistan, so no Pakistan weekday is claimed here.)
+  const cl = info.cell || {};
+  const famTime = String(cl.t || "").replace(/\s+(USA|CA)$/i, "").trim();
+  const famDay = cl.day || info.day || "";
+  const which = [
+    famDay ? famDay + (famTime ? " " + LLQABooking.timeLabel(famTime) + " family time" : " class") : "",
+    info.slot ? LLQABooking.fmt12(info.slot) + " PKT slot" : "",
+  ]
+    .filter(Boolean)
+    .join(" → ");
+  return React.createElement(
+    "div",
+    {
+      style: {
+        position: "fixed",
+        inset: 0,
+        zIndex: 1100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "rgba(0,0,0,.65)",
+        backdropFilter: "blur(4px)",
+      },
+    },
+    React.createElement(
+      "div",
+      {
+        style: {
+          background: "linear-gradient(" + c.bgCard + ", " + c.bgCard + "), " + c.bg,
+          border: "1px solid " + c.border,
+          borderRadius: 14,
+          padding: 22,
+          width: 480,
+          maxWidth: "94vw",
+          maxHeight: "90vh",
+          overflowY: "auto",
+        },
+      },
+      React.createElement(
+        "h3",
+        { style: { color: c.text, fontSize: 16, margin: "0 0 4px" } },
+        "✍ Log today's class — " + (info.studentName || "?"),
+      ),
+      React.createElement(
+        "div",
+        { style: { color: c.textSec, fontSize: 11, marginBottom: 12 } },
+        [info.teacherName || "", which, "logged for " + todayPK()].filter(Boolean).join(" · "),
+      ),
+      !stu &&
+        React.createElement(
+          "div",
+          {
+            style: {
+              padding: "8px 10px",
+              background: c.warnBg,
+              color: c.warn,
+              borderRadius: 8,
+              fontSize: 11,
+              marginBottom: 12,
+            },
+          },
+          "This booking is not linked to a student record, so the class can't be logged. Add the student in Sales or Students first.",
+        ),
+      stu &&
+        llqaInTrial(stu) &&
+        React.createElement(
+          "div",
+          {
+            style: {
+              padding: "8px 10px",
+              background: c.accentBg,
+              color: c.accent,
+              borderRadius: 8,
+              fontSize: 11,
+              marginBottom: 12,
+            },
+          },
+          "Trial student · " + n + " of 3 classes attended so far" + (n >= 3 ? " — trial passed, awaiting payment" : ""),
+        ),
+      earlier &&
+        React.createElement(
+          "div",
+          { style: { color: c.textMuted, fontSize: 11, marginBottom: 10 } },
+          "Already logged today — saving updates that entry (the class is not counted twice).",
+        ),
+      React.createElement(
+        "div",
+        { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" } },
+        React.createElement(Inp, { label: "Attendance", value: cap(form.attended || "Present"), onChange: (v) => set("attended", v), options: ATT_OPTS }),
+        React.createElement(Inp, { label: "Page reached", value: form.pages || "", onChange: (v) => set("pages", v), placeholder: "e.g. 24" }),
+      ),
+      React.createElement(Inp, { label: "Today's lesson *", value: form.lesson || "", onChange: (v) => set("lesson", v), placeholder: "What was taught today" }),
+      React.createElement(
+        "div",
+        { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 10px" } },
+        React.createElement(Inp, { label: "Behavior", value: form.behavior || "", onChange: (v) => set("behavior", v), options: BEHAV_OPTS }),
+        React.createElement(Inp, { label: "Performance", value: form.performance || "", onChange: (v) => set("performance", v), options: PERF_OPTS }),
+        React.createElement(Inp, { label: "Homework", value: form.homework || "", onChange: (v) => set("homework", v), options: HW_OPTS }),
+      ),
+      React.createElement(
+        "div",
+        { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" } },
+        React.createElement(Inp, { label: "Recitation", value: form.recitation || "", onChange: (v) => set("recitation", v), options: RECIT_OPTS }),
+        React.createElement(Inp, { label: "Tajweed", value: form.tajweed || "", onChange: (v) => set("tajweed", v), options: TAJ_OPTS }),
+      ),
+      React.createElement(Inp, { label: "Notes", value: form.notes || "", onChange: (v) => set("notes", v), placeholder: "Optional" }),
+      React.createElement(
+        "div",
+        { style: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 } },
+        React.createElement(Btn, { variant: "outline", onClick: onClose }, "Cancel"),
+        stu && React.createElement(Btn, { icon: CheckCircle, onClick: onSave }, "Save class"),
+      ),
+    ),
+  );
+};
