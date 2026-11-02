@@ -3478,14 +3478,19 @@ const LLQABooking = (() => {
     shiftsOf(t).some(
       (sh) => rowDaysOf(sh).includes(day) && TT_DATA[sh].slots.includes(slot),
     );
-  const slotInfo = (t, day, slot) => {
+  // own (optional): the student being rescheduled — their own classes count
+  // as free so they can keep or move them.
+  const slotInfo = (t, day, slot, own) => {
     if (!t) return { state: "noteacher" };
     if (!isActive(t)) return { state: "inactive" };
     if (!inShift(t, day, slot)) return { state: "offshift" };
     const v = rawCell(t, day, slot);
     if (v === undefined || v === null || v === "" || v === "F")
       return { state: "free" };
-    if (typeof v === "object" && v.s) return { state: "booked", who: v.s, cell: v };
+    if (typeof v === "object" && v.s)
+      return own && sameStudent(v, own)
+        ? { state: "free", own: true, cell: v }
+        : { state: "booked", who: v.s, cell: v };
     if (v === "N") return { state: "noclass" };
     return { state: "blocked" };
   };
@@ -3519,7 +3524,7 @@ const LLQABooking = (() => {
       .filter((t) => !o.filter || o.filter(t))
       .filter((t) =>
         (items || []).every(
-          (it) => slotInfo(t, it.rowDay, it.slot).state === "free",
+          (it) => slotInfo(t, it.rowDay, it.slot, o.own).state === "free",
         ),
       )
       .map((t) => ({ t, load: countLoad(t) }))
@@ -3643,7 +3648,7 @@ const LLQABooking = (() => {
   };
 
   /* ---------- plan: check a form schedule before saving ---------- */
-  const plan = ({ rows, country, state, teachers, isQuran, master }) => {
+  const plan = ({ rows, country, state, teachers, isQuran, master, own }) => {
     const tz = timezoneFor(country, state);
     const timed = (rows || []).filter((r) => r && r.day && r.time);
     const problems = [];
@@ -3674,7 +3679,7 @@ const LLQABooking = (() => {
         return;
       }
       const t = (teachers || []).find((x) => x.name === tName);
-      const info = slotInfo(t, pk.rowDay, pk.slot);
+      const info = slotInfo(t, pk.rowDay, pk.slot, own);
       if (info.state !== "free") {
         problems.push(label + " (" + pktLabel(pk) + ") with " + tName + ": " + reasonText(info) + ".");
         return;
@@ -4048,12 +4053,100 @@ const LLQABooking = (() => {
     );
   };
 
+  /* ---------- v65: reschedule, nearest free time, Pakistan day ---------- */
+  // Move a student's classes in one step: free the old cells, book the new
+  // ones. All-or-nothing; a class that stays on the same cell keeps its flags.
+  const rebook = (teachers, oldCells, items, stu) => {
+    const freed = release(teachers, oldCells);
+    const res = book(freed, items, stu);
+    if (!res.ok) return { ok: false, problems: res.problems, teachers };
+    const kept = {};
+    (oldCells || []).forEach((c) => {
+      kept[c.teacherId + "|" + c.day + "|" + c.slot] = c.cell;
+    });
+    const next = res.teachers.map((t) => {
+      const mine = (items || []).filter((it) => it.teacherId === t.id && kept[t.id + "|" + it.rowDay + "|" + it.slot]);
+      if (!mine.length) return t;
+      const sch = copy(t._ttSchedule);
+      mine.forEach((it) => {
+        const old = kept[t.id + "|" + it.rowDay + "|" + it.slot];
+        sch[it.rowDay][it.slot] = { ...old, ...sch[it.rowDay][it.slot], f: Array.isArray(old.f) ? old.f : [] };
+      });
+      return { ...t, _ttSchedule: sch };
+    });
+    const key = (x) => x.teacherId + "|" + (x.rowDay || x.day) + "|" + x.slot;
+    const newKeys = new Set((items || []).map(key));
+    const oldKeys = new Set((oldCells || []).map(key));
+    return {
+      ok: true,
+      problems: [],
+      teachers: next,
+      freed: (oldCells || []).filter((c) => !newKeys.has(key(c))),
+      added: (items || []).filter((it) => !oldKeys.has(key(it))),
+    };
+  };
+  // Closest free class times to a wanted day + time (the family's clock):
+  // same day first (±30 min steps), then the same time on other days.
+  // filter(t) limits teachers; fixed = one teacher only; avoid = [{day,time}].
+  const nearestFree = ({ day, time, tz, teachers, filter, own, fixed, take, avoid, maxMinutes }) => {
+    const out = [];
+    const p = parseUSTime(time);
+    if (!tz || !p || DAYS.indexOf(day) < 0) return out;
+    const max = maxMinutes || 180;
+    const n = take || 6;
+    const base = p.hour * 60 + p.minute;
+    const tmOf = (min) => {
+      const h = Math.floor(min / 60);
+      const m = min % 60;
+      let dh = h % 12;
+      if (dh === 0) dh = 12;
+      return pad(dh) + pad(m) + " " + (h >= 12 ? "PM" : "AM");
+    };
+    const cands = [];
+    for (let d = 30; d <= max; d += 30)
+      [base + d, base - d].forEach((min) => {
+        if (min >= 0 && min < 1440) cands.push({ day, time: tmOf(min), delta: min - base });
+      });
+    for (let k = 1; k < 7; k++) cands.push({ day: DAYS[(DAYS.indexOf(day) + k) % 7], time: tmOf(base), delta: 0, other: true });
+    const pool = (teachers || []).filter((t) => isActive(t) && (!filter || filter(t)) && (!fixed || t.name === fixed));
+    for (const cd of cands) {
+      if (out.length >= n) break;
+      if ((avoid || []).some((a) => a && a.day === cd.day && a.time === cd.time)) continue;
+      const pk = toPkt(cd.day, cd.time, tz);
+      if (!pk) continue;
+      const free = pool
+        .filter((t) => slotInfo(t, pk.rowDay, pk.slot, own).state === "free")
+        .map((t) => ({ t, load: countLoad(t) }))
+        .sort((a, b) => a.load.booked - b.load.booked || String(a.t.name).localeCompare(String(b.t.name)));
+      if (free.length) out.push({ ...cd, pk, teacher: free[0].t.name, teachers: free.map((x) => x.t.name) });
+    }
+    return out;
+  };
+  // The Pakistan weekday a booked class happens on, and the family's clock
+  // time for it on a given date. Timetable rows follow the family's day, so
+  // a night slot is the next morning in Pakistan.
+  const pktDayOf = (rowDay, slot, tz, ref) => {
+    const [h, m] = String(slot || "").split(":").map(Number);
+    if (isNaN(h)) return { pktDay: rowDay, shift: 0, famTime: "" };
+    if (!tz) return { pktDay: rowDay, shift: 0, famTime: "" };
+    const r = ref || new Date();
+    const diff = offsetAt("Asia/Karachi", r) - offsetAt(tz, r);
+    const famMin = h * 60 + (m || 0) - diff;
+    const shift = famMin < 0 ? 1 : famMin >= 1440 ? -1 : 0;
+    const fam = ((famMin % 1440) + 1440) % 1440;
+    return {
+      pktDay: DAYS[(((DAYS.indexOf(rowDay) + shift) % 7) + 7) % 7],
+      shift,
+      famTime: fmt12(pad(Math.floor(fam / 60)) + ":" + pad(fam % 60)),
+    };
+  };
   return {
     DAYS, TIMES, timezoneFor, toPkt, pktOptions, pktLabel, fmt12, timeLabel, clockChange,
     shiftsOf, slotInfo, reasonText, countLoad, rankTeachers,
     sameStudent, studentCells, cellsText, plan, book, release, updateCells,
     nextStudentId, newParentId, scheduleOf, health, healthFor, applyFixes, bookingSummary,
     offsetAt, indexCells, cellsFromIndex,
+    rebook, nearestFree, pktDayOf, isActive, eachBooked, rawCell,
   };
 })();
 
@@ -4112,7 +4205,7 @@ const llqaStudentRows = (s, withCode) => {
   const fee = s.fee ? s.fee + (s.fee_amount ? " · " + s.fee_amount + " " + (s.currency || "") : "") : "";
   const n = s.attended || 0;
   const trial = llqaInTrial(s)
-    ? "Since " + (s.trialStart || s.dor || "?") + " · " + n + " class" + (n === 1 ? "" : "es") + " attended"
+    ? "Since " + (s.trialStart || s.dor || "?") + " · " + n + " of " + llqaTrialTarget(s) + " classes attended"
     : "";
   return [
     ...(withCode ? [["Code", s.code]] : []),
@@ -4271,33 +4364,37 @@ const llqaCountClass = (s, dailyProgress, date, att) => {
 
 // Logs one class from the Timetable: the same progress record and student
 // fields as the Students module's Log Progress.
-const llqaLogClass = ({ students, setStudents, dailyProgress, setDailyProgress, studentId, teacherName, form }) => {
+const llqaLogClass = ({ students, setStudents, dailyProgress, setDailyProgress, studentId, teacherName, form, date }) => {
   const stu = (students || []).find((x) => String(x.id) === String(studentId));
   if (!stu) return "This booking is not linked to a student record, so the class can't be logged.";
   if (!form || !String(form.lesson || "").trim()) return "Please write today's lesson.";
-  const dt = todayPK();
+  // v65: a past day can be logged from Today's Classes (never a future one)
+  const dt = date && date <= todayPK() ? date : todayPK();
   const att = String(form.attended || "Present");
   const cnt = llqaCountClass(stu, dailyProgress, dt, att);
+  if (typeof llqaAfterCount === "function" && llqaCanManage()) llqaAfterCount(stu, cnt);
   const earlier = cnt.earlier;
   const pageN = parseInt(form.pages, 10);
   const note = String(form.notes || "").trim();
   setStudents(
     (students || []).map((x) => {
       if (String(x.id) !== String(stu.id)) return x;
+      // an older day (logged late) updates the counts, not the latest lesson
+      const latest = !x.lastDate || dt >= x.lastDate;
       return {
         ...x,
-        lastLesson: form.lesson,
-        lastDate: dt,
-        page: pageN > 0 ? pageN : x.page,
-        qaida: x.qaida > 0 && pageN > 0 ? pageN : x.qaida,
+        lastLesson: latest ? form.lesson : x.lastLesson,
+        lastDate: latest ? dt : x.lastDate,
+        page: latest && pageN > 0 ? pageN : x.page,
+        qaida: latest && x.qaida > 0 && pageN > 0 ? pageN : x.qaida,
         attended: cnt.attended,
         totalClasses: cnt.totalClasses,
         attendance: cnt.attendance,
-        lB: form.behavior || x.lB,
-        lP: form.performance || x.lP,
-        lH: form.homework || x.lH,
-        lR: form.recitation || x.lR,
-        lT: form.tajweed || x.lT,
+        lB: latest ? form.behavior || x.lB : x.lB,
+        lP: latest ? form.performance || x.lP : x.lP,
+        lH: latest ? form.homework || x.lH : x.lH,
+        lR: latest ? form.recitation || x.lR : x.lR,
+        lT: latest ? form.tajweed || x.lT : x.lT,
         // class notes are added to the student's notes, as Log Progress does
         // (not again when the same note is saved twice on one day)
         notes:
@@ -4346,7 +4443,7 @@ const LLQALogClassModal = ({ info, form, setForm, students, dailyProgress, onClo
   const set = (k, v) => setForm({ ...form, [k]: v });
   const cap = (v) => String(v || "").replace(/^./, (m) => m.toUpperCase());
   const earlier =
-    stu && (dailyProgress || []).find((p) => String(p.studentId) === String(stu.id) && p.date === todayPK());
+    stu && (dailyProgress || []).find((p) => String(p.studentId) === String(stu.id) && p.date === (info.date || todayPK()));
   const n = (stu && stu.attended) || 0;
   // Which class: the family's day + time as booked, and the Pakistan slot.
   // (Timetable rows follow the family's day; a night slot is the next
@@ -4396,7 +4493,7 @@ const LLQALogClassModal = ({ info, form, setForm, students, dailyProgress, onClo
       React.createElement(
         "div",
         { style: { color: c.textSec, fontSize: 11, marginBottom: 12 } },
-        [info.teacherName || "", which, "logged for " + todayPK()].filter(Boolean).join(" · "),
+        [info.teacherName || "", which, "logged for " + (info.date || todayPK())].filter(Boolean).join(" · "),
       ),
       !stu &&
         React.createElement(
@@ -4427,7 +4524,7 @@ const LLQALogClassModal = ({ info, form, setForm, students, dailyProgress, onClo
               marginBottom: 12,
             },
           },
-          "Trial student · " + n + " of 3 classes attended so far" + (n >= 3 ? " — trial passed, awaiting payment" : ""),
+          "Trial student · " + n + " of " + llqaTrialTarget(stu) + " classes attended so far" + (n >= llqaTrialTarget(stu) ? " — trial done, fee due" : ""),
         ),
       earlier &&
         React.createElement(

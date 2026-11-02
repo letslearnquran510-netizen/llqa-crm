@@ -192,6 +192,10 @@ function App() {
     [],
   );
   const [hrHiring, setHrHiring] = useFirestoreCollection("hrHiring", []);
+  // v65: automation data
+  const [waitlist, setWaitlist] = useFirestoreCollection("waitlist", []);
+  const [messageLog, setMessageLog] = useFirestoreCollection("messageLog", []);
+  const [messaging, setMessaging] = useFirestoreDoc("settings/messaging", {});
   const upsertSalesMaster = (records) => {
     if (!records || records.length === 0) return;
     setSalesMasterData((prev) => {
@@ -684,6 +688,8 @@ function App() {
     ? (a) =>
         setStudents(_mb(students, typeof a === "function" ? a(scStudents) : a))
     : setStudents;
+  // v65: what the automation screens and pop-ups read
+  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging });
   const render = () => {
     switch (page) {
       case "dashboard":
@@ -1453,6 +1459,7 @@ function App() {
           },
         },
         React.createElement(ErrorBoundary, { key: page }, render()),
+        React.createElement(LLQAHost, null),
       ),
     ),
   );

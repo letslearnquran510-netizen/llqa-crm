@@ -116,6 +116,7 @@ const DashMod = ({ teachers, setPage, students }) => {
         ),
       ),
     ),
+    React.createElement(LLQADashCards, null), // v65
     React.createElement(
       "div",
       {
