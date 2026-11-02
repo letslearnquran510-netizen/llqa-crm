@@ -23,7 +23,7 @@ const ParentMod = ({
   const stu = isParent
     ? myStudent
     : allStudents.find((s) => s.id === selectedStuId);
-  const [tab, setTab] = useState("overview");
+  const [tab, setTab] = useState(() => (llqaLinkRequest() ? "requests" : "overview")); // v66: approval links open Requests
   const [noteText, setNoteText] = useState("");
   const [fbCat, setFbCat] = useState("Excellent Teaching");
   const [fbCustom, setFbCustom] = useState("");
@@ -236,7 +236,10 @@ const ParentMod = ({
     w.document.close();
   };
   const invoiceHistory = (() => {
-    const dor = stu.dor ? new Date(stu.dor) : new Date();
+    // v66: months are billed from enrollment (never during the trial), by the fee cycle rule
+    const _start = llqaFeeStart(stu);
+    const dor = _start ? new Date(_start.slice(0, 10) + "T12:00:00") : new Date();
+    const _cy = llqaFeeCycle(stu, arPayments);
     const now = new Date();
     const months = [];
     const cursor = new Date(dor.getFullYear(), dor.getMonth(), 1);
@@ -244,7 +247,7 @@ const ParentMod = ({
     const studentPays = pays.filter(
       (p) => String(p.studentId) === String(stu.id),
     );
-    while (cursor <= now) {
+    while (!llqaInTrial(stu) && cursor <= now) {
       const ym =
         cursor.getFullYear() +
         "-" +
@@ -255,11 +258,12 @@ const ParentMod = ({
       const monthsAgo =
         (now.getFullYear() - cursor.getFullYear()) * 12 +
         (now.getMonth() - cursor.getMonth());
-      const paymentRecord = studentPays.find(
-        (p) => p.paidDate && p.paidDate.startsWith(ym),
-      );
+      const paymentRecord = studentPays.find((p) => llqaPayMonth(p) === ym); // v66: the month it was paid for
       const hasPaid = !!paymentRecord;
-      let status = hasPaid ? "paid" : monthsAgo > 0 ? "overdue" : "pending";
+      const _cm = _cy ? _cy.months.find((m) => m.ym === ym) : null;
+      let status = _cm
+        ? _cm.state === "paid" ? "paid" : _cm.state === "overdue" ? "overdue" : "pending"
+        : hasPaid ? "paid" : monthsAgo > 0 ? "overdue" : "pending";
 
       let amt = null;
       let curr = stu.currency || "USD";
@@ -1732,6 +1736,7 @@ const ParentMod = ({
           : null,
       );
     })(),
+    llqaParentAskBanner(stu, user, tab, () => setTab("requests")), // v66
     React.createElement(
       "div",
       {
@@ -1749,6 +1754,7 @@ const ParentMod = ({
         ["invoices", "Invoices"],
         ["notes", "Notes (" + myNotes.length + ")"],
         ["feedback", "Teacher Feedback"],
+        ["requests", "📨 Requests" + (llqaParentAskCount(stu, user) ? " · " + llqaParentAskCount(stu, user) : "")], // v66
       ].map(([k, l]) =>
         React.createElement(
           "button",
@@ -1771,6 +1777,7 @@ const ParentMod = ({
         ),
       ),
     ),
+    tab === "requests" && React.createElement(LLQAParentRequests, { stu, user }), // v66
     tab === "overview" &&
       React.createElement(
         "div",
@@ -1824,9 +1831,11 @@ const ParentMod = ({
           }),
           React.createElement(SC, {
             label: "Fee Status",
-            value: (invoiceHistory[0]
-              ? invoiceHistory[0].status
-              : "PENDING"
+            value: (llqaInTrial(stu) // v66: trial families see their trial, not a fee
+              ? "trial"
+              : invoiceHistory[0]
+                ? invoiceHistory[0].status
+                : "PENDING"
             ).toUpperCase(),
             color:
               invoiceHistory[0] && invoiceHistory[0].status === "paid"
@@ -1834,8 +1843,9 @@ const ParentMod = ({
                 : invoiceHistory[0] && invoiceHistory[0].status === "overdue"
                   ? c.danger
                   : c.warn,
-            sub:
-              (invoiceHistory[0] ? invoiceHistory[0].currency : "USD") +
+            sub: llqaInTrial(stu)
+              ? llqaTrialInfo(stu).done + " of " + llqaTrialInfo(stu).target + " trial classes"
+              : (invoiceHistory[0] ? invoiceHistory[0].currency : "USD") +
               " " +
               (invoiceHistory[0] && invoiceHistory[0].amount !== null
                 ? invoiceHistory[0].amount.toLocaleString()

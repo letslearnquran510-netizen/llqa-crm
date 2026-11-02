@@ -1538,10 +1538,14 @@ const SalesMod = ({
       [
         ["master", "Sales Master Data"],
         ["current", "Current Students List"],
-        // v65 tabs (number = needs action)
+        // v65 / v66 tabs (number = needs action)
+        ["autopilot", "🤖 Autopilot" + (llqaTabBadge("autopilot") ? " · " + llqaTabBadge("autopilot") : "")],
         ["pipeline", "🧪 Trial Pipeline" + (llqaTabBadge("pipeline") ? " · " + llqaTabBadge("pipeline") : "")],
         ["contacts", "💬 Contacts & Messages"],
         ["waitlist", "⏳ Waitlist" + (llqaTabBadge("waitlist") ? " · " + llqaTabBadge("waitlist") + " free" : "")],
+        // v66
+        ["fees", "💰 Fee Cycle" + (llqaTabBadge("fees") ? " · " + llqaTabBadge("fees") + " overdue" : "")],
+        ["requests", "📨 Requests" + (llqaTabBadge("requests") ? " · " + llqaTabBadge("requests") : "")],
         ["references", "References"],
         ["health", "Booking Health"],
         ["clock", "🕐 Clock Changes" + (llqaTabBadge("clock") ? " · " + llqaTabBadge("clock") : "")],

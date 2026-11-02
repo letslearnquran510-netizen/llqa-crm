@@ -238,10 +238,35 @@ const LLQA_TEMPLATES = [
     "Assalamu Alaikum {parent}, good news: the class time you asked for is now available — {wantTime} ({zone} time). Reply to confirm and we'll book it for {student}."],
   ["clockKept", "Clock change — time kept",
     "Assalamu Alaikum {parent}, the clocks have changed — {student}'s class stays at your usual time ({zone} time):\n{schedule}\nJazakAllah Khair!"],
+  // v66
+  ["firstClass", "After the first class",
+    "Assalamu Alaikum {parent}, {student} had the first class with {teacher}. How did it go? Is the class time working well for you? JazakAllah Khair!"],
+  ["monthlyReport", "Monthly progress report",
+    "Assalamu Alaikum {parent},\n\nHere is {student}'s update for the last 30 days:\n• Classes: {classes} (attended {present}, {pct})\n• Current lesson: {lesson}\n• Teacher: {teacher}\n\nDaily progress and teacher notes are in the Parent Portal: {portalLink} (Parent ID {portalId}).\nJazakAllah Khair!"],
+  ["checkIn", "Check-in (missed classes)",
+    "Assalamu Alaikum {parent}, we noticed {student} has missed some classes recently. Is everything okay? If the class time or teacher doesn't suit you, we can change it. JazakAllah Khair!"],
+  ["holidayNotice", "Holiday notice",
+    "Assalamu Alaikum {parent}, the academy is closed for {holiday} ({holidayDates}) — no classes on these days. Classes continue on {resume} at the usual time. JazakAllah Khair!"],
+  ["ramadanNotice", "Ramadan message",
+    "Assalamu Alaikum {parent}, Ramadan Mubarak! 🌙 {student}'s classes continue during Ramadan ({holidayDates}) at the usual time. JazakAllah Khair!"],
+  ["coverFamily", "Teacher on leave — cover",
+    "Assalamu Alaikum {parent}, {teacherName} is on leave on {date}, so {cover} will teach {student}'s class at the usual time ({time}). JazakAllah Khair!", "ctx"],
+  ["classOff", "Class cancelled — teacher on leave",
+    "Assalamu Alaikum {parent}, {student}'s class on {date} ({time}) can't take place because the teacher is on leave. We'll arrange a make-up class — please tell us a time that suits you. JazakAllah Khair!", "ctx"],
+  ["feeReceipt", "Payment received",
+    "Assalamu Alaikum {parent}, JazakAllah Khair — we have received {amount} for {student}'s fee ({month}).", "ctx"],
+  ["approvalAsk", "Ask the parent to approve",
+    "Assalamu Alaikum {parent},\n\n{proposal}\n\nPlease approve or decline here: {approvalLink}\n(or simply reply to this message). JazakAllah Khair!", "ctx"],
+  ["requestReply", "Reply to a request",
+    "Assalamu Alaikum {parent}, about your request ({request}): {decision}. JazakAllah Khair!", "ctx"],
   ["custom", "Custom message", "Assalamu Alaikum {parent},\n\n"],
   // to teachers (not shown in the family message list)
   ["teacherMoves", "Teachers — moved classes",
     "Assalamu Alaikum {name}, the clocks changed for some families, so these classes move to keep the families' usual time:\n{moves}\n\nYour Timetable already shows the new times. JazakAllah Khair!", "staff"],
+  ["coverTeacher", "Teachers — cover classes",
+    "Assalamu Alaikum {name}, please take these classes (Pakistan time) while their teacher is on leave:\n{moves}\n\nThey are in your Today's Classes. JazakAllah Khair!", "staff"],
+  ["holidayTeachers", "Teachers — holiday",
+    "Assalamu Alaikum {name}, a reminder that the academy is closed for {holiday} ({holidayDates}) — no classes on these days. JazakAllah Khair!", "staff"],
 ];
 const llqaTplName = (k) => (LLQA_TEMPLATES.find((x) => x[0] === k) || [k, k])[1];
 const llqaTplText = (k, messaging) => {
@@ -300,7 +325,19 @@ const llqaFill = (text, s, extra, messaging) => {
   const fee = st.fee_amount
     ? st.fee_amount + " " + (st.currency || "USD") + " per month"
     : "the monthly fee";
+  // v66: last 30 days and the next holiday, for the report / holiday messages
+  const today = todayPK();
+  const ms = st.id != null ? llqaMonthStats(st, LLQAApp.ctx.dailyProgress, today) : { classes: 0, present: 0, pct: null };
+  const hol = llqaNextHoliday(today);
   const v = {
+    classes: String(ms.classes),
+    present: String(ms.present),
+    pct: ms.pct == null ? "—" : ms.pct + "%",
+    lesson: st.lastLesson || "—",
+    page: st.page ? String(st.page) : "—",
+    holiday: hol ? hol.name || "the holiday" : "the holiday",
+    holidayDates: hol ? llqaRangeLabel(hol.from, hol.to) : "",
+    resume: hol ? llqaDateLabel(llqaAddDays(hol.to || hol.from, 1)) : "",
     parent: st.parent || "",
     student: st.name || "",
     teacher: st.teacher && st.teacher !== "Unassigned" ? st.teacher : "your teacher",
@@ -320,8 +357,8 @@ const llqaFill = (text, s, extra, messaging) => {
 };
 const llqaLastMsg = (log, studentId, template) => {
   let best = null;
-  (log || []).forEach((m) => {
-    if (!m || String(m.studentId) !== String(studentId)) return;
+  // v66: the log is grouped by student once (it grows every day)
+  (llqaLogIndex(log).byStu.get(String(studentId)) || []).forEach((m) => {
     if (template && m.template !== template) return;
     if (!best || String(m.at) > String(best.at)) best = m;
   });
@@ -373,26 +410,56 @@ const llqaCall = (digits, meta) => {
 /* ---------- today's classes ---------- */
 // Every class on a Pakistan date: night slots belong to the next Pakistan
 // morning, because Timetable rows follow the family's day.
+// v66: the Pakistan weekday and family time of a Timetable slot, given the
+// zone difference (Pakistan minus family, in minutes) — same as
+// LLQABooking.pktDayOf, but the difference is worked out once per date.
+const llqaPktDay = (rowDay, slot, diff) => {
+  const B = LLQABooking;
+  const [h, m] = String(slot || "").split(":").map(Number);
+  if (isNaN(h)) return { pktDay: rowDay, shift: 0, famTime: "" };
+  const famMin = h * 60 + (m || 0) - diff;
+  const shift = famMin < 0 ? 1 : famMin >= 1440 ? -1 : 0;
+  const fam = ((famMin % 1440) + 1440) % 1440;
+  return {
+    pktDay: B.DAYS[(((B.DAYS.indexOf(rowDay) + shift) % 7) + 7) % 7],
+    shift,
+    famTime: B.fmt12(String(Math.floor(fam / 60)).padStart(2, "0") + ":" + String(fam % 60).padStart(2, "0")),
+  };
+};
 const llqaClassesOn = (date, teachers, students, dailyProgress) => {
   const B = LLQABooking;
   const wd = llqaWeekday(date);
   const ref = new Date(date + "T07:00:00Z"); // noon in Pakistan
   const byId = new Map((students || []).map((s) => [String(s.id), s]));
+  const tById = new Map((teachers || []).map((t) => [String(t.id), t]));
+  const dpx = llqaDpIndex(dailyProgress);
+  const pkOff = B.offsetAt("Asia/Karachi", ref);
+  const diffs = new Map();
+  const holiday = llqaHolidayOn(date, "holiday");
   const out = [];
   B.eachBooked(teachers || [], (c) => {
     const cell = c.cell;
     const tz = B.timezoneFor(cell.country, cell.state);
-    const pd = B.pktDayOf(c.day, c.slot, tz, ref);
+    let pd = { pktDay: c.day, shift: 0, famTime: "" };
+    if (tz) {
+      if (!diffs.has(tz)) diffs.set(tz, pkOff - B.offsetAt(tz, ref));
+      pd = llqaPktDay(c.day, c.slot, diffs.get(tz));
+    }
     if (pd.pktDay !== wd) return;
     const stu =
       cell.sid != null && cell.sid !== ""
         ? byId.get(String(cell.sid))
         : (students || []).find((s) => B.sameStudent(cell, s));
-    const entry = stu
-      ? (dailyProgress || []).find((p) => p && String(p.studentId) === String(stu.id) && p.date === date)
-      : null;
+    const entry = stu ? dpx.byKey.get(String(stu.id) + "|" + date) || null : null;
+    // (v66: a scheduled leave counts on its dates before it starts)
     const onLeave =
-      !!stu && stu.status === "leave" && (!stu.lvFrom || stu.lvFrom <= date) && (!stu.lvTo || stu.lvTo >= date);
+      !!stu &&
+      (stu.status === "leave"
+        ? (!stu.lvFrom || stu.lvFrom <= date) && (!stu.lvTo || stu.lvTo >= date)
+        : !!stu.lvPlanned && !!stu.lvFrom && stu.lvFrom <= date && (!stu.lvTo || stu.lvTo >= date));
+    // v66: teacher on leave, a substitute (or class off) for this date, holidays
+    const t = tById.get(String(c.teacherId)) || { id: c.teacherId, name: c.teacher };
+    const cover = llqaCoverOn(date, c.teacherId, c.day, c.slot);
     out.push({
       key: c.teacherId + "|" + c.day + "|" + c.slot,
       teacherId: c.teacherId,
@@ -407,6 +474,12 @@ const llqaClassesOn = (date, teachers, students, dailyProgress) => {
       entry: entry || null,
       onLeave,
       quit: !!stu && stu.status === "quit",
+      tLeave: llqaLeaveOn(t, date),
+      cover,
+      covered: !!(cover && cover.coverId != null && cover.coverId !== ""),
+      off: !!(cover && cover.cancelled),
+      holiday,
+      by: cover && cover.coverId != null && cover.coverId !== "" ? cover.cover : c.teacher,
     });
   });
   out.sort((a, b) => a.min - b.min || String(a.teacher).localeCompare(String(b.teacher)));
@@ -425,6 +498,11 @@ const llqaClassState = (it, date, nowMin) => {
   }
   if (it.onLeave) return { k: "leave", text: "On leave", col: c.textSec };
   if (it.quit) return { k: "quit", text: "Quit — slot still booked", col: c.warn };
+  // v66: holidays, class off, teacher on leave without a substitute
+  if (it.holiday) return { k: "holiday", text: "🗓 " + (it.holiday.name || "Holiday"), col: c.textSec };
+  if (it.off) return { k: "off", text: "Class off — teacher on leave", col: c.textSec };
+  if (it.tLeave && !it.covered)
+    return date < today ? { k: "noteacher", text: "Teacher was on leave", col: c.warn } : { k: "cover", text: "⚠ Needs cover", col: c.danger };
   if (date < today) return { k: "missing", text: "⚠ Not logged", col: c.danger };
   if (date > today) return { k: "upcoming", text: "Upcoming", col: c.textSec };
   const n = nowMin == null ? llqaNowPkMin() : nowMin;
@@ -899,7 +977,7 @@ const llqaFindStudent = (id) =>
       null;
 
 /* ---------- one message ---------- */
-const LLQAMessageModal = ({ studentId, student, template, extra, onClose }) => {
+const LLQAMessageModal = ({ studentId, student, template, extra, msgKey, onSent, onClose }) => {
   const ctx = LLQAApp.ctx;
   const s = student || llqaFindStudent(studentId) || {};
   const first = template || llqaSuggest(s, ctx.messageLog);
@@ -912,7 +990,14 @@ const LLQAMessageModal = ({ studentId, student, template, extra, onClose }) => {
     setTpl(k);
     setText(llqaFill(llqaTplText(k, ctx.messaging), s, extra, ctx.messaging));
   };
-  const meta = { studentId: s.id != null ? s.id : null, name: s.name || "", template: tpl, ...(extra && extra.waitId ? { waitId: extra.waitId } : {}) };
+  // v66: an Autopilot message carries its key, so it isn't suggested again
+  const meta = {
+    studentId: s.id != null ? s.id : null,
+    name: s.name || "",
+    template: tpl,
+    ...(extra && extra.waitId ? { waitId: extra.waitId } : {}),
+    ...(msgKey && tpl === first ? { key: msgKey } : {}),
+  };
   const last = s.id != null ? llqaLastMsg(ctx.messageLog, s.id) : null;
   const copy = () => {
     try {
@@ -968,7 +1053,10 @@ const LLQAMessageModal = ({ studentId, student, template, extra, onClose }) => {
       llqaMini("📋 Copy", copy, { key: "cp", big: true }),
       llqaMini("📞 Call", () => llqaCall(digits, meta), { key: "call", big: true, disabled: !digits }),
       llqaMini("💬 Open WhatsApp", () => {
-        if (llqaWhatsApp(digits, text, meta)) onClose();
+        if (llqaWhatsApp(digits, text, meta)) {
+          if (onSent) onSent(text);
+          onClose();
+        }
       }, { key: "wa", big: true, solid: true, tone: "success", disabled: !digits || !text.trim() }),
     ],
     { onClose, width: 600 },
@@ -1016,8 +1104,15 @@ const LLQASendQueue = ({ items, title, onClose }) => {
     [
       llqaMini("Stop", onClose, { key: "x", big: true }),
       llqaMini("Skip →", next, { key: "s", big: true }),
+      // v66: Autopilot items can be marked done when sent another way
+      it.key
+        ? llqaMini("✓ Already sent", () => {
+            llqaPilotDone({ ...it, student: s });
+            next();
+          }, { key: "d", big: true, title: "Sent another way — don't suggest it again" })
+        : null,
       llqaMini("💬 Open WhatsApp & next", () => {
-        if (llqaWhatsApp(digits, text, { studentId: s.id != null ? s.id : null, name: s.name || "", template: it.template })) setOpened(opened + 1);
+        if (llqaWhatsApp(digits, text, { studentId: s.id != null ? s.id : null, name: s.name || "", template: it.template, ...(it.key ? { key: it.key } : {}) })) setOpened(opened + 1);
         next();
       }, { key: "go", big: true, solid: true, tone: "success", disabled: !digits }),
     ],
@@ -1117,6 +1212,8 @@ const LLQAConvertModal = ({ studentId, onClose }) => {
     fee_amount: s.fee_amount || "",
     currency: s.currency || "USD",
     classType: !s.classType || s.classType === "Trial" ? "Regular" : s.classType,
+    received: false,
+    gateway: "Bank Transfer",
   });
   const save = () => {
     const fields = {
@@ -1130,8 +1227,12 @@ const LLQAConvertModal = ({ studentId, onClose }) => {
     };
     ctx.setStudents((prev) => (prev || []).map((x) => (String(x.id) === String(s.id) ? { ...x, ...fields } : x)));
     if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster([{ ...s, ...fields }]);
+    // v66: the first month's payment goes into the fee cycle straight away
+    const paidNow = f.received && Number(f.fee_amount) > 0
+      ? llqaRecordPayment({ ...s, ...fields }, { amount: f.fee_amount, currency: f.currency, gateway: f.gateway, month: fields.convertedAt.slice(0, 7) })
+      : null;
     onClose();
-    llqaToast({ kind: "info", ttl: 6000, text: "✓ " + s.name + " is now a paid student." });
+    llqaToast({ kind: "info", ttl: 6000, text: "✓ " + s.name + " is now a paid student." + (paidNow ? " First month's fee recorded (" + paidNow.amount + " " + paidNow.currency + ")." : "") });
   };
   const info = llqaTrialInfo(s);
   return llqaShell(
@@ -1139,10 +1240,24 @@ const LLQAConvertModal = ({ studentId, onClose }) => {
     "Trial: " + info.done + " of " + info.target + " classes" + (info.start ? " · started " + info.start : ""),
     React.createElement(
       "div",
-      { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 10px" } },
-      React.createElement(Inp, { label: "Fee amount", type: "number", value: f.fee_amount, onChange: (v) => setF({ ...f, fee_amount: v }) }),
-      React.createElement(Inp, { label: "Currency", value: f.currency, onChange: (v) => setF({ ...f, currency: v }), options: ["USD", "CAD", "GBP", "EUR", "AED", "PKR"] }),
-      React.createElement(Inp, { label: "Class type", value: f.classType, onChange: (v) => setF({ ...f, classType: v }), options: ["Regular", "Premium", "Saudi", "Group"] }),
+      null,
+      React.createElement(
+        "div",
+        { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 10px" } },
+        React.createElement(Inp, { label: "Fee amount", type: "number", value: f.fee_amount, onChange: (v) => setF({ ...f, fee_amount: v }) }),
+        React.createElement(Inp, { label: "Currency", value: f.currency, onChange: (v) => setF({ ...f, currency: v }), options: ["USD", "CAD", "GBP", "EUR", "AED", "PKR"] }),
+        React.createElement(Inp, { label: "Class type", value: f.classType, onChange: (v) => setF({ ...f, classType: v }), options: ["Regular", "Premium", "Saudi", "Group"] }),
+      ),
+      React.createElement(
+        "label",
+        { style: { display: "flex", gap: 8, alignItems: "center", color: c.text, fontSize: 12, cursor: "pointer", marginTop: 2 } },
+        React.createElement("input", { type: "checkbox", checked: f.received, onChange: (e) => setF({ ...f, received: e.target.checked }) }),
+        "First month's fee received now (records the payment in the fee cycle)",
+      ),
+      f.received
+        ? React.createElement("div", { style: { maxWidth: 240, marginTop: 8 } },
+            React.createElement(Inp, { label: "Paid by", value: f.gateway, onChange: (v) => setF({ ...f, gateway: v }), options: LLQA_GATEWAYS }))
+        : React.createElement("div", { style: { color: c.textMuted, fontSize: 10, marginTop: 6 } }, "The monthly fee will be due on day " + llqaBillDay({ ...s, convertedAt: s.convertedAt || todayPK() }) + " of each month (change it in Sales → Fee Cycle)."),
     ),
     [
       llqaMini("Cancel", onClose, { key: "x", big: true }),
@@ -1318,16 +1433,81 @@ const LLQAToasts = () =>
                 llqaGo("sales", "waitlist");
               }, { key: "wl", tone: "accent" })
             : null,
+          // v66
+          t.kind === "covers"
+            ? [
+                llqaMini("💬 Tell substitutes", () => {
+                  llqaDismiss(t.id);
+                  llqaOpen("queue", { title: "Cover classes — substitutes", items: llqaCoverTeacherItems(t.covers) });
+                }, { key: "ts", tone: "success" }),
+                llqaMini("💬 Tell families", () => {
+                  llqaDismiss(t.id);
+                  llqaOpen("queue", { title: "Teacher on leave — families", items: llqaCoverFamilyItems(t.covers) });
+                }, { key: "tf", tone: "success" }),
+                llqaMini("Review", () => {
+                  llqaDismiss(t.id);
+                  llqaGo("timetable", "leavecover");
+                }, { key: "rv", tone: "accent" }),
+              ]
+            : null,
+          t.kind === "leaveCover"
+            ? llqaMini("Leave Cover", () => {
+                llqaDismiss(t.id);
+                llqaGo("timetable", "leavecover");
+              }, { key: "lc", tone: "accent" })
+            : null,
+          t.kind === "fees"
+            ? llqaMini("Fee Cycle", () => {
+                llqaDismiss(t.id);
+                llqaGo("sales", "fees");
+              }, { key: "fc", tone: "accent" })
+            : null,
+          t.kind === "request" || t.kind === "decision"
+            ? llqaMini("Open Requests", () => {
+                llqaDismiss(t.id);
+                llqaGo("sales", "requests");
+              }, { key: "rq", tone: "accent" })
+            : null,
+          t.kind === "pilot"
+            ? llqaMini("Open Autopilot", () => {
+                llqaDismiss(t.id);
+                llqaGo("sales", "autopilot");
+              }, { key: "ap", tone: "accent" })
+            : null,
+          t.kind === "leaveEnded"
+            ? [
+                llqaMini("✓ Back to active", () => {
+                  llqaDismiss(t.id);
+                  llqaResumeStudents(t.ids);
+                }, { key: "ra", tone: "success" }),
+                llqaMini("Students", () => {
+                  llqaDismiss(t.id);
+                  llqaGo("students");
+                }, { key: "st", tone: "accent" }),
+              ]
+            : null,
           llqaMini("✕", () => llqaDismiss(t.id), { key: "x", title: "Dismiss" }),
         ),
       ),
     ),
   );
 
-/* ---------- automatic clock-change fixing (runs while the CRM is open) ---------- */
+/* ---------- automatic work while the CRM is open (admin side) ---------- */
+// Each job waits while earlier changes are still being saved, so when one job
+// saves something the others run on the next check (a few seconds later).
+// Returns true when a quick re-check is worth it.
 const llqaClockTick = (state) => {
+  let again = false;
+  const job = (fn) => {
+    try {
+      if (fn()) again = true;
+    } catch (e) {}
+  };
+  job(() => {
+    const run = llqaClockAutoRun();
+    return run && !run.same && ((run.moved || []).length || (run.skipped || []).length);
+  });
   try {
-    llqaClockAutoRun();
     if (!state.soon) {
       const soon = llqaClockSoon();
       if (soon) {
@@ -1336,23 +1516,129 @@ const llqaClockTick = (state) => {
       }
     }
   } catch (e) {}
+  // v66: read-only notices first (leave ended, today's follow-ups), then the
+  // jobs that save: teacher leave → cover, fee cycle → Fee Status
+  try {
+    if (!state.ended) {
+      const ended = llqaLeaveEnded();
+      if (ended.length) {
+        state.ended = true;
+        llqaToast({
+          kind: "leaveEnded",
+          key: "leaveEnded",
+          ids: ended.map((s) => s.id),
+          text: "🏖 Leave has ended for " + ended.length + " student" + (ended.length === 1 ? "" : "s") + ": " + ended.slice(0, 4).map((s) => s.name + " (to " + llqaDateLabel(s.lvTo) + ")").join(", ") + (ended.length > 4 ? "…" : "") + ". Back to active?",
+        });
+      }
+    }
+    if (!state.pilot && llqaCanManage() && LLQAApp.ctx.user && llqaReadyFor(["students", "messageLog", "dailyProgress"])) {
+      state.pilot = true;
+      const due = llqaAutopilot();
+      if (due.length)
+        llqaToast({ kind: "pilot", key: "pilot", text: "🤖 " + due.length + " follow-up message" + (due.length === 1 ? " is" : "s are") + " due today (" + [...new Set(due.map((x) => llqaTplName(x.template)))].slice(0, 3).join(", ") + ")." });
+    }
+  } catch (e) {}
+  job(llqaLeaveStartRun);
+  job(llqaCoverRunAuto);
+  job(llqaFeeRunAuto);
+  try {
+    const st = typeof LLQASync !== "undefined" && LLQASync.get ? LLQASync.get() : null;
+    if (st && st.mode === "cloud" && (st.pending || st.sending)) again = true;
+  } catch (e) {}
+  return again;
+};
+// Students whose leave end date has passed but who are still on leave.
+const llqaLeaveEnded = () => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user || !llqaCanManage() || !llqaReadyFor(["students"])) return [];
+  const today = todayPK();
+  return (ctx.students || []).filter((s) => s && s.status === "leave" && s.lvTo && s.lvTo < today);
+};
+// Back to active (as the Students page's Resume does).
+const llqaResumeStudents = (ids) => {
+  const ctx = LLQAApp.ctx;
+  const set = new Set((ids || []).map(String));
+  if (!set.size) return;
+  const fields = { status: "active", lvType: "", lvFrom: "", lvTo: "" };
+  ctx.setStudents((prev) => (prev || []).map((x) => (set.has(String(x.id)) && x.status === "leave" ? { ...x, ...fields } : x)));
+  if (typeof ctx.upsertSalesMaster === "function")
+    ctx.upsertSalesMaster((ctx.students || []).filter((x) => set.has(String(x.id))).map((x) => ({ ...x, ...fields })));
+  llqaToast({ kind: "info", ttl: 6000, text: "✓ " + set.size + " student" + (set.size === 1 ? " is" : "s are") + " active again." });
+};
+// New parent requests, and parents' answers to approval requests, show up
+// as notices for the admin while the CRM is open.
+const llqaRequestEvents = (list) => {
+  const out = [];
+  (list || []).forEach((r) => {
+    if (!r || !r.id) return;
+    if (r.createdBy === "parent") out.push({ id: r.id + ":new", r, kind: "request" });
+    if (r.type === "proposal" && r.decidedBy === "parent" && r.status !== "pending") out.push({ id: r.id + ":" + r.status, r, kind: "decision" });
+  });
+  return out;
 };
 /* ---------- host: renders whichever pop-up is open ---------- */
 const LLQAHost = () => {
   const [, bump] = useState(0);
+  const seen = React.useRef(null);
   useEffect(() => {
     const f = () => bump((n) => n + 1);
     LLQAUI.subs.add(f);
     return () => LLQAUI.subs.delete(f);
   }, []);
+  // v66: watch parent requests (runs after every App update)
   useEffect(() => {
-    // first check once the cloud data has settled, then every 5 minutes
+    const ctx = LLQAApp.ctx;
+    if (!ctx.user || !llqaCanManage()) {
+      seen.current = null;
+      return;
+    }
+    try {
+      if (typeof LLQACloud !== "undefined" && LLQACloud.ready && !LLQACloud.ready("parentRequests")) return;
+    } catch (e) {
+      return;
+    }
+    const ev = llqaRequestEvents(ctx.parentRequests);
+    if (!seen.current) {
+      seen.current = new Set(ev.map((e) => e.id));
+      const waiting = llqaPendingRequests(ctx.parentRequests).length;
+      if (waiting)
+        llqaToast({ kind: "request", key: "req-waiting", text: "📨 " + waiting + " parent request" + (waiting === 1 ? " is" : "s are") + " waiting for an answer." });
+      return;
+    }
+    ev.forEach((e) => {
+      if (seen.current.has(e.id)) return;
+      seen.current.add(e.id);
+      const r = e.r;
+      llqaToast(
+        e.kind === "request"
+          ? { kind: "request", key: "req-" + r.id, text: "📨 " + (r.parent || "A parent") + " (" + (r.student || "student") + "): " + (LLQA_REQ_KINDS[r.type] || "Request") + " — " + llqaReqText(r) }
+          : { kind: "decision", key: "dec-" + r.id, text: (r.status === "approved" ? "✅ " : "✕ ") + (r.parent || "The parent") + " " + (r.status === "approved" ? "approved" : "declined") + ": " + llqaReqText(r) + (r.reply ? " — “" + r.reply + "”" : "") },
+      );
+    });
+  });
+  useEffect(() => {
+    // first check once the cloud data has settled, then every 5 minutes;
+    // after a job saved something, the others get a quick re-check (v66)
     const state = { soon: false };
-    const first = setTimeout(() => llqaClockTick(state), 15000);
-    const again = setInterval(() => llqaClockTick(state), 5 * 60 * 1000);
+    let quick = null;
+    let quickN = 0;
+    const tick = () => {
+      if (quick) clearTimeout(quick);
+      quick = null;
+      if (llqaClockTick(state) && quickN < 6) {
+        quickN++;
+        quick = setTimeout(tick, 8000);
+      } else quickN = 0;
+    };
+    const first = setTimeout(tick, 15000);
+    const again = setInterval(() => {
+      quickN = 0;
+      tick();
+    }, 5 * 60 * 1000);
     return () => {
       clearTimeout(first);
       clearInterval(again);
+      if (quick) clearTimeout(quick);
     };
   }, []);
   const m = LLQAUI.modal;
@@ -1367,6 +1653,10 @@ const LLQAHost = () => {
     k === "convert" ? React.createElement(LLQAConvertModal, { key: m.key, ...d, onClose: llqaClose }) : null,
     k === "quit" ? React.createElement(LLQAQuitModal, { key: m.key, ...d, onClose: llqaClose }) : null,
     k === "log" ? React.createElement(LLQALogHost, { key: m.key, info: d, onClose: llqaClose }) : null,
+    // v66
+    k === "payment" ? React.createElement(LLQAPaymentModal, { key: m.key, ...d, onClose: llqaClose }) : null,
+    k === "logRequest" ? React.createElement(LLQALogRequestModal, { key: m.key, ...d, onClose: llqaClose }) : null,
+    k === "ask" ? React.createElement(LLQAAskModal, { key: m.key, ...d, onClose: llqaClose }) : null,
     LLQAUI.toasts.length ? React.createElement(LLQAToasts, null) : null,
   );
 };
@@ -1433,7 +1723,7 @@ const LLQAEnrollToggle = ({ pf, setPf }) => {
    Messages, Waitlist, Clock Changes. Timetable: Today's Classes.
    Dashboard: today & follow-ups.
    ============================================================ */
-const LLQA_SALES_TABS = { pipeline: 1, contacts: 1, waitlist: 1, clock: 1 };
+const LLQA_SALES_TABS = { pipeline: 1, contacts: 1, waitlist: 1, clock: 1, autopilot: 1, fees: 1, requests: 1 };
 const llqaCard = (kids, opt) =>
   React.createElement(
     "div",
@@ -1515,6 +1805,10 @@ const llqaTabBadge = (k) => {
       return (ctx.students || []).filter((s) => s.status !== "quit" && llqaTrialInfo(s).stage === "complete").length;
     if (k === "waitlist") return llqaWaitingFree(ctx.waitlist, ctx.teachers).length;
     if (k === "clock") return llqaClockReport(ctx.students, ctx.teachers).filter((r) => r.rows.some((x) => x.kind === "moved")).length;
+    // v66
+    if (k === "autopilot") return llqaAutopilot().length;
+    if (k === "fees") return (ctx.students || []).filter((s) => (llqaFeeCycle(s, ctx.arPayments) || {}).status === "overdue").length;
+    if (k === "requests") return llqaPendingRequests(ctx.parentRequests).length;
   } catch (e) {}
   return 0;
 };
@@ -1527,7 +1821,13 @@ const LLQASalesTab = (props) =>
         ? React.createElement(LLQAWaitlistTab, props)
         : props.tab === "clock"
           ? React.createElement(LLQAClockTab, props)
-          : null;
+          : props.tab === "autopilot"
+            ? React.createElement(LLQAAutopilotTab, props)
+            : props.tab === "fees"
+              ? React.createElement(LLQAFeeCycleTab, props)
+              : props.tab === "requests"
+                ? React.createElement(LLQARequestsTab, props)
+                : null;
 
 /* ---------- Trial Pipeline ---------- */
 const LLQATrialCard = ({ x, ctx }) => {
@@ -1691,7 +1991,7 @@ const LLQATemplateEditor = ({ onClose }) => {
   };
   return llqaCard(
     [
-      llqaH("⚙ Message templates & links", "Placeholders: {parent} {student} {teacher} {schedule} {zone} {nextClass} {portalLink} {portalId} {academy} {trialDone} {trialTarget} {fee} {date}"),
+      llqaH("⚙ Message templates & links", "Placeholders: {parent} {student} {teacher} {schedule} {zone} {nextClass} {portalLink} {portalId} {academy} {trialDone} {trialTarget} {fee} {date} {classes} {present} {pct} {lesson} {holiday} {holidayDates} {resume} — cover, receipt and approval messages also fill {cover} {time} {amount} {month} {proposal} {approvalLink} {request} {decision}"),
       React.createElement(
         "div",
         { key: "f", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "0 12px" } },
@@ -2220,18 +2520,25 @@ const LLQATodayClasses = (props) => {
   const [date, setDate] = useState(today);
   const [f, setF] = useState("all");
   const [tf, setTf] = useState("all");
+  const [pick, setPick] = useState(null);
   const manage = llqaCanManage();
+  const u = LLQAApp.ctx.user || {};
+  const isT = u.role === "teacher";
   const nowMin = llqaNowPkMin();
-  const all = llqaClassesOn(date, props.teachers || ctx.teachers, ctx.students, ctx.dailyProgress).map((it) => ({
+  // v66: a teacher also sees the classes they cover for someone on leave
+  const raw = llqaClassesOn(date, isT ? LLQAApp.ctx.teachers || [] : props.teachers || ctx.teachers, isT ? LLQAApp.ctx.students || [] : ctx.students, ctx.dailyProgress);
+  const mine = (it) => String(it.teacherId) === String(u.teacherId) || (it.covered && String(it.cover.coverId) === String(u.teacherId));
+  const all = (isT ? raw.filter(mine) : raw).map((it) => ({
     ...it,
     st: llqaClassState(it, date, nowMin),
     trial: it.stu ? llqaTrialInfo(it.stu, { today: date, arPayments: ctx.arPayments }) : null,
   }));
-  const teachersList = [...new Set(all.map((it) => it.teacher))].sort();
-  const byT = all.filter((it) => tf === "all" || it.teacher === tf);
+  const teachersList = [...new Set(all.flatMap((it) => (it.covered ? [it.teacher, it.by] : [it.teacher])))].sort();
+  const byT = all.filter((it) => tf === "all" || it.teacher === tf || it.by === tf);
   const FILTERS = [
     ["all", "All", () => true],
     ["missing", "⚠ Not logged", (it) => it.st.k === "missing"],
+    ["cover", "🔁 Needs cover", (it) => it.st.k === "cover"],
     ["upcoming", "Upcoming", (it) => it.st.k === "upcoming" || it.st.k === "now"],
     ["done", "Logged", (it) => it.st.k === "logged" || it.st.k === "absent" || it.st.k === "excused"],
     ["trial", "Trials", (it) => it.trial && it.trial.active],
@@ -2242,9 +2549,44 @@ const LLQATodayClasses = (props) => {
     if ((it.st.k === "upcoming" || it.st.k === "now") && it.stu && llqaPhone(it.stu.phone, it.stu.country) && !upcomingStu.some((x) => x.id === it.stu.id))
       upcomingStu.push(it.stu);
   });
+  const needCover = byT.filter((it) => it.st.k === "cover");
+  const dayCovers = (ctx.covers || []).filter((x) => x && x.date === date && (x.cancelled || x.coverId != null));
+  const hol = llqaHolidayOn(date);
+  const coverAll = () => {
+    const res = llqaPlanCovers([date], false);
+    if (res.recs.length) llqaSaveCovers(res.recs);
+    llqaToast(
+      res.recs.length
+        ? { kind: "covers", key: "covers", covers: res.recs, text: "🔁 " + res.recs.length + " class" + (res.recs.length === 1 ? "" : "es") + " given to substitutes" + (res.missing.length ? " · " + res.missing.length + " have no free teacher (mark them off or pick another time)" : "") + "." }
+        : { kind: "info", ttl: 7000, text: "No free teacher for " + res.missing.length + " class" + (res.missing.length === 1 ? "" : "es") + " at those times." },
+    );
+  };
   const dayBtn = (label, d) => llqaMini(label, () => setDate(d), { key: label, tone: date === d ? "accent" : undefined, solid: date === d });
   const th = (t) => React.createElement("th", { key: t, style: { textAlign: "left", padding: "8px 10px", color: c.textSec, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4, borderBottom: "1px solid " + c.border } }, t);
   const td = (kids, k, st) => React.createElement("td", { key: k, style: { padding: "8px 10px", borderBottom: "1px solid " + c.border + "66", fontSize: 12, color: c.text, verticalAlign: "middle", ...(st || {}) } }, kids);
+  const coverSelect = (it) => {
+    const opts = llqaCoverOptions(it, date, raw);
+    return React.createElement(
+      "select",
+      {
+        key: "cs",
+        value: "",
+        onClick: (e) => e.stopPropagation(),
+        onChange: (e) => {
+          const t = opts.find((o) => String(o.t.id) === e.target.value);
+          if (t) {
+            llqaAssignCover(it, date, t.t, false);
+            setPick(null);
+          }
+        },
+        style: { padding: "4px 6px", background: c.bgDeep, border: "1px solid " + (opts.length ? c.accent : c.danger) + "88", borderRadius: 6, color: c.text, fontSize: 11, maxWidth: 210 },
+      },
+      React.createElement("option", { value: "" }, opts.length ? "🔁 Choose substitute (" + opts.length + " free)…" : "No teacher free then"),
+      opts.map((o) =>
+        React.createElement("option", { key: o.t.id, value: String(o.t.id) }, (o.pref ? "★ " : "") + o.t.name + " · " + (o.t.gender || "—") + " · " + o.load.booked + " classes/wk"),
+      ),
+    );
+  };
   return React.createElement(
     "div",
     null,
@@ -2264,19 +2606,37 @@ const LLQATodayClasses = (props) => {
       }),
       React.createElement("div", { style: { color: c.text, fontSize: 13, fontWeight: 700, marginLeft: 6 } }, llqaDateLabel(date) + " · Pakistan time"),
     ),
+    hol
+      ? llqaCard(
+          React.createElement(
+            "div",
+            { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+            React.createElement(
+              "div",
+              { style: { color: c.text, fontSize: 13 } },
+              React.createElement("b", null, ((hol.kind || "holiday") === "ramadan" ? "🌙 " : "🗓 ") + (hol.name || "Holiday")),
+              " · " + llqaRangeLabel(hol.from, hol.to) + " · " + ((hol.kind || "holiday") === "holiday" ? "academy closed — no classes" : "classes run as usual") + (hol.note ? " · " + hol.note : ""),
+            ),
+            manage ? llqaMini("🗓 Holidays", () => llqaGo("timetable", "holidays"), { key: "h", tone: "accent" }) : null,
+          ),
+          { border: ((hol.kind || "holiday") === "holiday" ? c.warn : c.accent) + "88" },
+        )
+      : null,
     React.createElement(
       "div",
       { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 } },
-      llqaStat("Classes", byT.length, tf === "all" ? "all teachers" : tf),
+      llqaStat("Classes", byT.length, tf === "all" ? (isT ? "yours" : "all teachers") : tf),
       llqaStat("Logged", byT.filter((it) => ["logged", "absent", "excused"].includes(it.st.k)).length, "attendance saved", byT.some((it) => ["logged", "absent", "excused"].includes(it.st.k)) ? c.success : c.text),
       llqaStat("Not logged", byT.filter((it) => it.st.k === "missing").length, "time passed, nothing saved", byT.some((it) => it.st.k === "missing") ? c.danger : c.text),
       llqaStat("Upcoming", byT.filter((it) => it.st.k === "upcoming" || it.st.k === "now").length, date === today ? "later today" : ""),
-      llqaStat("Trial classes", byT.filter((it) => it.trial && it.trial.active).length, "red in the Timetable", byT.some((it) => it.trial && it.trial.active) ? c.danger : c.text),
+      needCover.length || byT.some((it) => it.covered)
+        ? llqaStat("Teacher on leave", needCover.length ? needCover.length + " need cover" : "all covered", byT.filter((it) => it.covered).length + " covered · " + byT.filter((it) => it.off).length + " off", needCover.length ? c.danger : c.success, "lv")
+        : llqaStat("Trial classes", byT.filter((it) => it.trial && it.trial.active).length, "red in the Timetable", byT.some((it) => it.trial && it.trial.active) ? c.danger : c.text),
     ),
     React.createElement(
       "div",
       { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" } },
-      llqaChips(FILTERS.map(([k, l, t]) => [k, l, byT.filter(t).length]), f, setF),
+      llqaChips(FILTERS.filter((x) => x[0] !== "cover" || needCover.length).map(([k, l, t]) => [k, l, byT.filter(t).length]), f, setF),
       teachersList.length > 1
         ? React.createElement(
             "select",
@@ -2289,10 +2649,19 @@ const LLQATodayClasses = (props) => {
             teachersList.map((t) => React.createElement("option", { key: t, value: t }, t)),
           )
         : null,
+      manage && needCover.length && date >= today
+        ? llqaMini("🔁 Cover all " + needCover.length, coverAll, { big: true, tone: "danger", solid: true, key: "ca", title: "Give each class to the best free teacher" })
+        : null,
+      manage && dayCovers.length
+        ? llqaMini("💬 Tell substitutes", () => llqaOpen("queue", { title: "Cover classes — substitutes", items: llqaCoverTeacherItems(dayCovers) }), { big: true, tone: "success", key: "ts" })
+        : null,
+      manage && dayCovers.some((x) => x.sid != null)
+        ? llqaMini("💬 Tell families", () => llqaOpen("queue", { title: "Teacher on leave — families", items: llqaCoverFamilyItems(dayCovers) }), { big: true, tone: "success", key: "tf" })
+        : null,
       manage && upcomingStu.length
         ? llqaMini("💬 Remind " + upcomingStu.length + " famil" + (upcomingStu.length === 1 ? "y" : "ies"), () =>
             llqaOpen("queue", { title: "Class reminders", items: upcomingStu.map((s) => ({ studentId: s.id, template: "classReminder" })) }),
-          { big: true, tone: "success" })
+          { big: true, tone: "success", key: "rm" })
         : null,
     ),
     llqaCard(
@@ -2312,8 +2681,10 @@ const LLQATodayClasses = (props) => {
                   const s = it.stu;
                   const digits = s ? llqaPhone(s.phone, s.country) : "";
                   const sub = it.cell.c + (it.cell.sub ? " · " + it.cell.sub : "");
-                  const canLog = !!s && date <= today;
+                  const canLog = !!s && date <= today && it.st.k !== "holiday" && it.st.k !== "off";
                   const tplK = it.st.k === "missing" || it.st.k === "absent" ? "missedClass" : "classReminder";
+                  const future = date >= today;
+                  const showPick = manage && future && !it.entry && (it.st.k === "cover" || pick === it.key);
                   return React.createElement(
                     "tr",
                     { key: it.key },
@@ -2334,15 +2705,25 @@ const LLQATodayClasses = (props) => {
                         s ? null : llqaPill("not linked to a student", c.warn, null, "nl"),
                       ),
                     ], "s"),
-                    td(it.teacher, "te"),
+                    td([
+                      React.createElement("div", { key: "b", style: { fontWeight: it.covered ? 700 : 400, color: it.covered ? c.accent : c.text } }, it.by),
+                      it.covered ? React.createElement("div", { key: "f", style: { color: c.textMuted, fontSize: 10 } }, "🔁 covering for " + it.teacher) : null,
+                      it.tLeave && !it.covered ? React.createElement("div", { key: "l" }, llqaPill("on leave · " + (it.tLeave.status || "pending"), it.tLeave.status === "approved" ? c.warn : c.textSec, null, "lv")) : null,
+                    ], "te"),
                     td(React.createElement("span", { style: { color: it.st.col, fontWeight: 700, fontSize: 11 } }, it.st.text), "st", { whiteSpace: "nowrap" }),
                     td(
                       React.createElement(
                         "div",
-                        { style: { display: "flex", gap: 5, justifyContent: "flex-end" } },
-                        canLog
+                        { style: { display: "flex", gap: 5, justifyContent: "flex-end", alignItems: "center", flexWrap: "wrap" } },
+                        showPick ? coverSelect(it) : null,
+                        manage && future && !it.entry && it.st.k === "cover" ? llqaMini("Class off", () => llqaClassOff(it, date), { key: "off", title: "No class that day (tell the family)" }) : null,
+                        manage && future && !it.entry && (it.covered || it.off) ? llqaMini("↺", () => llqaUncover(it, date), { key: "un", title: it.covered ? "Remove the substitute" : "Class back on — needs a teacher" }) : null,
+                        manage && future && !it.entry && !it.tLeave && !it.covered && !it.off && it.st.k !== "holiday" && pick !== it.key
+                          ? llqaMini("🔁", () => setPick(it.key), { key: "pk", title: "Teacher can't take this class — choose a substitute" })
+                          : null,
+                        canLog && it.st.k !== "cover"
                           ? llqaMini(it.entry ? "✍ Edit log" : "✍ Log", () =>
-                              llqaOpen("log", { studentId: s.id, studentName: it.cell.s, teacherName: it.teacher, cell: it.cell, day: it.rowDay, slot: it.slot, date }),
+                              llqaOpen("log", { studentId: s.id, studentName: it.cell.s, teacherName: it.by, cell: it.cell, day: it.rowDay, slot: it.slot, date }),
                             { key: "l", tone: it.st.k === "missing" ? "danger" : "accent", solid: it.st.k === "missing" })
                           : null,
                         manage && s ? llqaMini("💬", () => llqaOpen("message", { studentId: s.id, template: tplK, extra: { date: llqaDateLabel(date) } }), { key: "m", disabled: !digits, title: llqaTplName(tplK) }) : null,
@@ -2366,7 +2747,8 @@ const LLQADashCards = (props) => {
   if (!llqaCanManage()) return null;
   const today = todayPK();
   const nowMin = llqaNowPkMin();
-  const cls = llqaClassesOn(today, ctx.teachers, ctx.students, ctx.dailyProgress).map((it) => llqaClassState(it, today, nowMin).k);
+  const clsAll = llqaClassesOn(today, ctx.teachers, ctx.students, ctx.dailyProgress);
+  const cls = clsAll.map((it) => llqaClassState(it, today, nowMin).k);
   const logged = cls.filter((k) => k === "logged" || k === "absent" || k === "excused").length;
   const missing = cls.filter((k) => k === "missing").length;
   const live = (ctx.students || []).filter((s) => s && s.status !== "quit");
@@ -2381,6 +2763,22 @@ const LLQADashCards = (props) => {
   const movedN = clock.filter((r) => r.rows.some((x) => x.kind === "moved")).length;
   const up = clock.filter((r) => r.rows.some((x) => x.kind === "upcoming"));
   const firstUp = up.length ? up.map((r) => r.next).filter(Boolean).sort((a, b) => a.date - b.date)[0] : null;
+  // v66
+  const pilot = llqaAutopilot({ today });
+  const risky = llqaRiskList(live, ctx.dailyProgress, today);
+  const highRisk = risky.filter((x) => x.r.level === "high").length;
+  const cycles = live.map((s) => llqaFeeCycle(s, ctx.arPayments, today)).filter(Boolean);
+  const feeOver = cycles.filter((x) => x.status === "overdue").length;
+  const feeDueNow = cycles.filter((x) => x.status === "due" || x.status === "partial").length;
+  const tomorrow = llqaAddDays(today, 1);
+  const needCover = [today, tomorrow].reduce(
+    (a, d) => a + (d === today ? clsAll : llqaClassesOn(d, ctx.teachers, ctx.students, ctx.dailyProgress)).filter((it) => it.tLeave && !it.covered && !it.off && !it.onLeave && !it.quit && !it.holiday && !it.entry).length,
+    0,
+  );
+  const reqWaiting = llqaPendingRequests(ctx.parentRequests).length;
+  const askWaiting = (ctx.parentRequests || []).filter((r) => r && r.type === "proposal" && r.status === "pending").length;
+  const holNow = llqaHolidayOn(today) || llqaHolidayOn(tomorrow);
+  const holNext = llqaCalendar().filter((d) => (d.to || d.from) >= today).sort((a, b) => String(a.from).localeCompare(String(b.from)))[0];
   const card = (key, icon, title, value, sub, alert, go) =>
     React.createElement(
       "div",
@@ -2421,5 +2819,1955 @@ const LLQADashCards = (props) => {
       movedN ? c.danger : null,
       () => llqaGo("sales", "clock"),
     ),
+    // v66
+    card("pilot", "🤖", "Autopilot", pilot.length, pilot.length ? "follow-up messages due today" : "nothing due — all sent", pilot.length ? c.accent : null, () => llqaGo("sales", "autopilot")),
+    card("risk", "⚠", "At-risk students", highRisk, risky.length - highRisk + " more to watch", highRisk ? c.danger : null, () => llqaGo("sales", "autopilot")),
+    card("fees", "💰", "Fee cycle", feeOver, feeOver + " overdue · " + feeDueNow + " due now" + ((ctx.automation || {}).feeAuto !== false ? " · auto ✓" : " · auto off"), feeOver ? c.danger : feeDueNow ? c.warn : null, () => llqaGo("sales", "fees")),
+    card("cover", "🔁", "Leave cover", needCover, needCover ? "classes need a substitute (today/tomorrow)" : "no teacher away without cover", needCover ? c.danger : null, () => llqaGo("timetable", "leavecover")),
+    card("req", "📨", "Parent requests", reqWaiting, askWaiting + " approval" + (askWaiting === 1 ? "" : "s") + " waiting for parents", reqWaiting ? c.warn : null, () => llqaGo("sales", "requests")),
+    card(
+      "hol",
+      holNow && (holNow.kind || "holiday") === "ramadan" ? "🌙" : "🗓",
+      "Holidays",
+      holNow ? holNow.name || "Holiday" : holNext ? llqaDateLabel(holNext.from) : "—",
+      holNow ? (llqaHolidayOn(today) ? "today" : "tomorrow") + " · " + ((holNow.kind || "holiday") === "holiday" ? "no classes" : "classes run") : holNext ? holNext.name || "next holiday" : "none planned — add Eid / Ramadan dates",
+      holNow && (holNow.kind || "holiday") === "holiday" ? c.warn : null,
+      () => llqaGo("timetable", "holidays"),
+    ),
+  );
+};
+
+/* ============================================================
+   v66 — Part 4: holidays & Ramadan, teacher leave → cover,
+   at-risk radar, follow-up autopilot, monthly fee cycle, teacher
+   scorecards, parent requests & approvals. Logic only.
+   ============================================================ */
+
+/* ---------- fast lookups (rebuilt only when that list changes) ---------- */
+const llqaMemo = (fn) => {
+  const cache = new WeakMap();
+  return (list) => {
+    if (!Array.isArray(list)) return fn([]);
+    let v = cache.get(list);
+    // (also rebuilt if the same list grew or shrank in place)
+    if (!v || v.n !== list.length) {
+      v = { n: list.length, v: fn(list) };
+      cache.set(list, v);
+    }
+    return v.v;
+  };
+};
+// Daily progress per student (newest first) and per "student|date".
+const llqaDpIndex = llqaMemo((dp) => {
+  const byStu = new Map();
+  const byKey = new Map();
+  dp.forEach((p) => {
+    if (!p || p.studentId == null) return;
+    const k = String(p.studentId);
+    if (!byStu.has(k)) byStu.set(k, []);
+    byStu.get(k).push(p);
+    const kk = k + "|" + p.date;
+    if (!byKey.has(kk)) byKey.set(kk, p);
+  });
+  byStu.forEach((a) => a.sort((x, y) => String(y.date).localeCompare(String(x.date))));
+  return { byStu, byKey };
+});
+const llqaDpOf = (dp, sid) => llqaDpIndex(dp).byStu.get(String(sid)) || [];
+// Message log per student, and every message key already used.
+const llqaLogIndex = llqaMemo((log) => {
+  const byStu = new Map();
+  const keys = new Set();
+  log.forEach((m) => {
+    if (!m) return;
+    if (m.key) keys.add(m.key);
+    if (m.studentId == null) return;
+    const k = String(m.studentId);
+    if (!byStu.has(k)) byStu.set(k, []);
+    byStu.get(k).push(m);
+  });
+  return { byStu, keys };
+});
+// Payments per student.
+const llqaPayIndex = llqaMemo((pays) => {
+  const m = new Map();
+  pays.forEach((p) => {
+    if (!p || p.studentId == null) return;
+    const k = String(p.studentId);
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(p);
+  });
+  return m;
+});
+const llqaLoadCache = new WeakMap();
+const llqaLoadOf = (t) => {
+  let v = llqaLoadCache.get(t);
+  if (!v) {
+    v = LLQABooking.countLoad(t);
+    llqaLoadCache.set(t, v);
+  }
+  return v;
+};
+// Cloud lists loaded in this session, nothing waiting to send, online.
+const llqaReadyFor = (names) => {
+  try {
+    if (typeof LLQACloud !== "undefined" && LLQACloud.ready && names.some((n) => !LLQACloud.ready(n))) return false;
+    const st = typeof LLQASync !== "undefined" && LLQASync.get ? LLQASync.get() : null;
+    if (st && st.mode === "cloud" && (st.pending || st.sending)) return false;
+    if (typeof navigator !== "undefined" && navigator.onLine === false) return false;
+  } catch (e) {
+    return false;
+  }
+  return true;
+};
+const llqaRangeLabel = (from, to) =>
+  !from ? "" : !to || to === from ? llqaDateLabel(from) : llqaDateLabel(from) + " – " + llqaDateLabel(to);
+const llqaMonthAdd = (ym, n) => {
+  const [y, m] = String(ym).split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1 + n, 1, 12)).toISOString().slice(0, 7);
+};
+const llqaMonthLabel = (ym) => {
+  try {
+    return new Date(ym + "-15T12:00:00Z").toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
+  } catch (e) {
+    return ym;
+  }
+};
+// The Pakistan date of a saved time (times are saved in UTC).
+const llqaAtDay = (iso) => {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? String(iso).slice(0, 10) : todayPK(d);
+};
+const llqaUid = (p) => p + "_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+// Timetable cells store the family time as "0500 PM USA"; show "05:00 PM USA".
+const llqaCellTime = (t) =>
+  String(t == null ? "" : t).replace(/\b(\d{1,2})(\d{2})(\s*[AP]M)\b/i, (m, h, mm, ap) => String(h).padStart(2, "0") + ":" + mm + ap.toUpperCase());
+
+/* ---------- holidays & Ramadan (settings/calendar) ---------- */
+const LLQA_DAY_KINDS = [
+  ["holiday", "Holiday — no classes"],
+  ["ramadan", "Ramadan — classes run"],
+  ["notice", "Notice only — classes run"],
+];
+const llqaCalendar = () => {
+  const cal = LLQAApp.ctx.calendar || {};
+  return (Array.isArray(cal.days) ? cal.days : []).filter((d) => d && d.from);
+};
+// kind "holiday" = no classes; "ramadan" / "notice" = classes run as usual
+const llqaHolidayOn = (date, kind) =>
+  llqaCalendar().find((d) => d.from <= date && (d.to || d.from) >= date && (!kind || (d.kind || "holiday") === kind)) || null;
+const llqaNextHoliday = (today) =>
+  llqaCalendar()
+    .filter((d) => (d.kind || "holiday") === "holiday" && (d.to || d.from) >= today)
+    .sort((a, b) => String(a.from).localeCompare(String(b.from)))[0] || null;
+const llqaDatesIn = (from, to, max) => {
+  const out = [];
+  for (let d = from; d <= (to || from) && out.length < (max || 62); d = llqaAddDays(d, 1)) out.push(d);
+  return out;
+};
+
+/* ---------- teacher leave → cover ---------- */
+// A teacher's leave on a date (pending or approved; never rejected).
+const llqaLeaveOn = (teacher, date) => {
+  if (!teacher) return null;
+  return (
+    (LLQAApp.ctx.leaves || []).find(
+      (l) =>
+        l &&
+        l.from &&
+        ((l.teacherId != null && l.teacherId !== "" && String(l.teacherId) === String(teacher.id)) || (!!l.teacherName && l.teacherName === teacher.name)) &&
+        l.from <= date &&
+        (l.to || l.from) >= date &&
+        String(l.status || "pending") !== "rejected",
+    ) || null
+  );
+};
+const llqaCoverKey = (date, teacherId, rowDay, slot) => "c_" + date + "_" + teacherId + "_" + rowDay + "_" + String(slot).replace(":", "");
+const llqaCoverIndex = llqaMemo((covers) => new Map(covers.filter((x) => x && x.id).map((x) => [x.id, x])));
+const llqaCoverOn = (date, teacherId, rowDay, slot) =>
+  llqaCoverIndex(LLQAApp.ctx.covers).get(llqaCoverKey(date, teacherId, rowDay, slot)) || null;
+// Teachers who can take one class on one date: free then in their Timetable
+// (inside their shift), not teaching or covering another class at that time,
+// not on leave, and suitable for the course. The substitute named on the leave
+// form comes first, then the usual teacher's gender, then the lighter week.
+const llqaCoverOptions = (it, date, dayItems) => {
+  const ctx = LLQAApp.ctx;
+  const B = LLQABooking;
+  const all = ctx.teachers || [];
+  const orig = all.find((t) => String(t.id) === String(it.teacherId)) || { id: it.teacherId, name: it.teacher };
+  const subs = String(it.cell.sub || "").split(",").map((x) => x.trim()).filter(Boolean);
+  const ok = llqaDeptOk(it.cell.c === "Subject" ? "Subject" : "Quran", subs);
+  const items = dayItems || llqaClassesOn(date, all, ctx.students, ctx.dailyProgress);
+  const busy = new Set();
+  items.forEach((x) => {
+    if (x.slot !== it.slot || x.key === it.key) return;
+    if (x.covered) busy.add(String(x.cover.coverId));
+    else if (!x.off && !x.holiday) busy.add(String(x.teacherId));
+  });
+  const leave = it.tLeave || llqaLeaveOn(orig, date);
+  const want = leave && leave.substitute ? String(leave.substitute).trim().toLowerCase() : "";
+  return all
+    .filter((t) => t && String(t.id) !== String(it.teacherId) && B.isActive(t) && ok(t) && !busy.has(String(t.id)) && !llqaLeaveOn(t, date))
+    .filter((t) => B.slotInfo(t, it.rowDay, it.slot).state === "free")
+    .map((t) => ({
+      t,
+      load: llqaLoadOf(t),
+      pref: !!want && (String(t.name || "").trim().toLowerCase() === want || String(t.code || "").trim().toLowerCase() === want),
+      same: !!orig.gender && t.gender === orig.gender,
+    }))
+    .sort((a, b) => b.pref - a.pref || b.same - a.same || a.load.booked - b.load.booked || String(a.t.name).localeCompare(String(b.t.name)));
+};
+const llqaCoverRecord = (it, date, patch) => {
+  const u = LLQAApp.ctx.user || {};
+  return {
+    id: llqaCoverKey(date, it.teacherId, it.rowDay, it.slot),
+    date,
+    rowDay: it.rowDay,
+    slot: it.slot,
+    famTime: it.famTime || "",
+    tz: it.tz || "",
+    teacherId: it.teacherId,
+    teacher: it.teacher,
+    coverId: null,
+    cover: "",
+    cancelled: false,
+    sid: it.cell && it.cell.sid != null && it.cell.sid !== "" ? it.cell.sid : it.stu ? it.stu.id : null,
+    student: (it.cell && it.cell.s) || "",
+    course: (it.cell && it.cell.c) || "",
+    by: u.name || u.role || "",
+    at: new Date().toISOString(),
+    auto: false,
+    ...(patch || {}),
+  };
+};
+// Saves cover decisions (a substitute, class off, or "needs cover" again).
+const llqaSaveCovers = (recs) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setCovers !== "function" || !recs.length) return false;
+  const ids = new Set(recs.map((r) => r.id));
+  ctx.setCovers((prev) => [...(prev || []).filter((x) => !ids.has(x.id)), ...recs]);
+  return true;
+};
+const llqaAssignCover = (it, date, t, auto) =>
+  llqaSaveCovers([llqaCoverRecord(it, date, { coverId: t.id, cover: t.name, auto: !!auto })]) ? t.name : null;
+const llqaClassOff = (it, date) => llqaSaveCovers([llqaCoverRecord(it, date, { cancelled: true })]);
+// "Needs cover" again — kept as a record so automatic cover leaves it to you.
+const llqaUncover = (it, date) => llqaSaveCovers([llqaCoverRecord(it, date, { manual: true })]);
+// Every class on these dates whose teacher is on leave and that has no
+// decision yet gets the best free teacher (one class per teacher per time).
+const llqaPlanCovers = (dates, onlyApproved) => {
+  const ctx = LLQAApp.ctx;
+  const recs = [];
+  const missing = [];
+  (dates || []).forEach((date) => {
+    if (llqaHolidayOn(date, "holiday")) return;
+    const items = llqaClassesOn(date, ctx.teachers, ctx.students, ctx.dailyProgress);
+    items.forEach((it) => {
+      if (!it.tLeave || it.cover || it.onLeave || it.quit || it.entry) return;
+      if (onlyApproved && String(it.tLeave.status) !== "approved") return;
+      const taken = new Set(recs.filter((r) => r.date === date && r.slot === it.slot).map((r) => String(r.coverId)));
+      const opt = llqaCoverOptions(it, date, items).find((o) => !taken.has(String(o.t.id)));
+      if (opt) recs.push(llqaCoverRecord(it, date, { coverId: opt.t.id, cover: opt.t.name, auto: !!onlyApproved }));
+      else missing.push({ date, it });
+    });
+  });
+  return { recs, missing };
+};
+const llqaCoverDates = (n) => {
+  const t = todayPK();
+  return llqaDatesIn(t, llqaAddDays(t, (n || 2) - 1));
+};
+// Automatic cover (on unless turned off): approved leave, today and tomorrow.
+const llqaCoverRunAuto = () => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user || !llqaCanManage()) return null;
+  if ((ctx.automation || {}).coverAuto === false) return null;
+  if (!llqaReadyFor(["teachers", "students", "leaves", "covers", "doc:settings/automation", "doc:settings/calendar"])) return null;
+  const res = llqaPlanCovers(llqaCoverDates(2), true);
+  if (!res.recs.length) return null;
+  llqaSaveCovers(res.recs);
+  llqaToast({
+    kind: "covers",
+    key: "covers",
+    covers: res.recs,
+    text:
+      "🔁 Teacher on leave: " + res.recs.length + " class" + (res.recs.length === 1 ? "" : "es") + " given to a substitute automatically" +
+      (res.missing.length ? " · " + res.missing.length + " still need a teacher" : "") + ". Tell the substitutes and families?",
+  });
+  return res;
+};
+// WhatsApp per substitute listing the classes they take.
+const llqaCoverTeacherItems = (covers) => {
+  const ctx = LLQAApp.ctx;
+  const B = LLQABooking;
+  const by = new Map();
+  (covers || []).filter((x) => x && x.coverId != null && x.coverId !== "").forEach((x) => {
+    const k = String(x.coverId);
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(x);
+  });
+  return [...by.entries()].map(([tid, list]) => {
+    const t = (ctx.teachers || []).find((y) => String(y.id) === tid) || { name: list[0].cover };
+    const lines = list
+      .sort((a, b) => String(a.date + a.slot).localeCompare(String(b.date + b.slot)))
+      .map((x) => "• " + llqaDateLabel(x.date) + " " + B.fmt12(x.slot) + " PKT — " + x.student + (x.course ? " (" + x.course + ")" : "") + ", for " + x.teacher);
+    return {
+      student: { name: t.name || "Teacher", parent: t.name || "", phone: t.phone || "", country: "Pakistan" },
+      template: "coverTeacher",
+      extra: { name: t.name || "", moves: lines.join("\n") },
+    };
+  });
+};
+const llqaCoverFamilyItems = (covers) =>
+  (covers || [])
+    .filter((x) => x && x.sid != null && (x.cancelled || (x.coverId != null && x.coverId !== "")))
+    .map((x) => ({
+      studentId: x.sid,
+      template: x.cancelled ? "classOff" : "coverFamily",
+      key: (x.cancelled ? "off:" : "cov:") + x.id,
+      extra: {
+        date: llqaDateLabel(x.date),
+        cover: x.cover || "",
+        teacherName: x.teacher || "",
+        time: [x.famTime ? x.rowDay + " " + x.famTime : "", x.tz ? llqaZoneLabel(x.tz) + " time" : ""].filter(Boolean).join(" "),
+      },
+    }));
+// After a leave is approved: what it means for the Timetable.
+const llqaLeaveApproved = (leave) => {
+  if (!leave || !leave.from) return;
+  const ctx = LLQAApp.ctx;
+  const t = (ctx.teachers || []).find((x) => String(x.id) === String(leave.teacherId) || x.name === leave.teacherName);
+  if (!t) return;
+  let n = 0;
+  llqaDatesIn(leave.from, leave.to || leave.from).forEach((d) => {
+    if (llqaHolidayOn(d, "holiday")) return;
+    n += llqaClassesOn(d, [t], ctx.students, ctx.dailyProgress).filter((it) => !it.onLeave && !it.quit).length;
+  });
+  llqaToast({
+    kind: "leaveCover",
+    key: "leave-" + leave.id,
+    text:
+      "✓ Leave approved for " + t.name + " (" + llqaRangeLabel(leave.from, leave.to) + "): " + n + " class" + (n === 1 ? "" : "es") + " in that time." +
+      (n ? ((ctx.automation || {}).coverAuto !== false ? " Today's and tomorrow's get a substitute automatically; plan the rest in Leave Cover." : " Choose substitutes in Leave Cover.") : ""),
+  });
+  if (n) setTimeout(() => llqaCoverRunAuto(), 2500);
+};
+
+/* ---------- monthly fee cycle ---------- */
+const LLQA_FEE_GRACE = 5;
+// A payment counts for the month it was recorded for (Fee Cycle saves it),
+// otherwise for the month it was paid in.
+const llqaPayMonth = (p) => String((p && (p.month || p.paidDate)) || "").slice(0, 7);
+// Billing starts when the student became a paying student (never in trial).
+const llqaFeeStart = (s) => String((s && (s.billStart || s.convertedAt || s.dor)) || "").slice(0, 10);
+const llqaBillDay = (s) =>
+  Math.min(28, Math.max(1, parseInt(s && s.billDay, 10) || parseInt(llqaFeeStart(s).slice(8, 10), 10) || 1));
+// One paying student's fee, month by month (newest first, up to 12 months):
+// each month is due on the bill day; unpaid 5 days after = overdue; earlier
+// unpaid months stay owed.
+const llqaFeeCycle = (s, pays, today) => {
+  const amt = Number(s && s.fee_amount) || 0;
+  if (!s || amt <= 0 || llqaInTrial(s) || s.status === "quit" || s.fee === "n/a") return null;
+  const t = today || todayPK();
+  const start = llqaFeeStart(s) || t;
+  const startM = start.slice(0, 7);
+  const day = llqaBillDay(s);
+  const cur = s.currency || "USD";
+  const mine = llqaPayIndex(pays).get(String(s.id)) || [];
+  const dueOf = (ym) => {
+    const d = ym + "-" + String(day).padStart(2, "0");
+    return ym === startM && d < start ? start : d;
+  };
+  // the newest bill that is out (a bill is out a week before its due date)
+  let curM = t.slice(0, 7);
+  if (llqaAddDays(dueOf(curM), -7) > t) curM = llqaMonthAdd(curM, -1);
+  if (curM < startM)
+    return { amt, cur, day, start, status: "upcoming", months: [], owed: [], current: null, due: dueOf(startM), left: 0 };
+  const months = [];
+  for (let ym = curM, k = 0; ym >= startM && k < 12; ym = llqaMonthAdd(ym, -1), k++) {
+    const due = dueOf(ym);
+    const over = llqaAddDays(due, LLQA_FEE_GRACE);
+    const ps = mine.filter((p) => llqaPayMonth(p) === ym);
+    const other = ps.some((p) => p.currency && p.currency !== cur); // another currency: can't compare, counts as paid
+    const paid = Math.round(ps.filter((p) => !p.currency || p.currency === cur).reduce((a, p) => a + (Number(p.amount) || 0), 0) * 100) / 100;
+    const full = other || paid >= amt - 0.005;
+    const state = full ? "paid" : t >= over ? "overdue" : paid > 0 ? "partial" : t < due ? "upcoming" : "due";
+    months.push({ ym, due, over, paid, left: full ? 0 : Math.round((amt - paid) * 100) / 100, state, pays: ps });
+  }
+  const current = months[0];
+  const owed = months.filter((m) => m.state === "overdue");
+  return {
+    amt, cur, day, start, months, current, owed,
+    status: owed.length ? "overdue" : current.state,
+    due: current.due,
+    left: Math.round(months.reduce((a, m) => a + m.left, 0) * 100) / 100,
+  };
+};
+// The month a new payment should go to: the oldest one not fully paid.
+const llqaFeeNextMonth = (cy) => {
+  if (!cy || !cy.months.length) return (cy && cy.start ? cy.start : todayPK()).slice(0, 7);
+  const open = cy.months.filter((m) => m.left > 0);
+  return open.length ? open[open.length - 1].ym : llqaMonthAdd(cy.current.ym, 1);
+};
+// Fee Status that matches the cycle (paid = in good standing).
+const llqaFeeTarget = (cy) => (!cy ? null : cy.status === "overdue" ? "overdue" : cy.status === "partial" ? "partial" : "paid");
+const LLQA_FEE_AUTO_SET = ["paid", "overdue", "partial"];
+// Automatic Fee Status (on unless turned off). A status someone changed by hand
+// after the automation set it is left alone for the rest of that month.
+const llqaFeeRunAuto = () => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user || !llqaCanManage()) return null;
+  if ((ctx.automation || {}).feeAuto === false) return null;
+  if (!llqaReadyFor(["students", "arPayments", "doc:settings/automation"])) return null;
+  const today = todayPK();
+  const changes = [];
+  (ctx.students || []).forEach((s) => {
+    if (!s || !LLQA_FEE_AUTO_SET.includes(s.fee)) return;
+    const cy = llqaFeeCycle(s, ctx.arPayments, today);
+    const want = llqaFeeTarget(cy);
+    if (!want || want === s.fee) return;
+    const m = cy && cy.current ? cy.current.ym : today.slice(0, 7);
+    const lock = s.feeAuto;
+    if (lock && lock.v !== s.fee && lock.m === m) return;
+    changes.push({ s, to: want, m });
+  });
+  if (!changes.length) return null;
+  const at = new Date().toISOString();
+  const byId = new Map(changes.map((x) => [String(x.s.id), x]));
+  const upd = (x) => {
+    const ch = byId.get(String(x.id));
+    return ch ? { ...x, fee: ch.to, feeAuto: { v: ch.to, m: ch.m, at } } : x;
+  };
+  ctx.setStudents((prev) => (prev || []).map(upd));
+  if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster(changes.map((x) => upd(x.s)));
+  const n = (k) => changes.filter((x) => x.to === k).length;
+  llqaToast({
+    kind: "fees",
+    key: "fees",
+    text:
+      "💰 Fee Status updated from the fee cycle: " +
+      [n("overdue") && n("overdue") + " overdue", n("partial") && n("partial") + " partly paid", n("paid") && n("paid") + " back to paid"].filter(Boolean).join(", ") +
+      " (" + changes.slice(0, 4).map((x) => x.s.name).join(", ") + (changes.length > 4 ? "…" : "") + ").",
+  });
+  return changes;
+};
+const llqaRecordPayment = (s, f) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setArPayments !== "function" || !s) return null;
+  const rec = {
+    id: Date.now(),
+    studentId: s.id,
+    studentName: s.name || "",
+    parent: s.parent || "",
+    course: s.course || "",
+    amount: Math.round((Number(f.amount) || 0) * 100) / 100,
+    currency: f.currency || s.currency || "USD",
+    paidDate: f.paidDate || todayPK(),
+    month: f.month || String(f.paidDate || todayPK()).slice(0, 7),
+    gateway: f.gateway || "Bank Transfer",
+    receipt: f.receipt || "",
+    type: "regular",
+    notes: f.notes || "",
+    source: "fee-cycle",
+  };
+  ctx.setArPayments((prev) => [...(prev || []), rec]);
+  // Fee Status follows straight away (the automatic check would do it later)
+  const after = llqaFeeCycle(s, [...(ctx.arPayments || []), rec]);
+  const want = llqaFeeTarget(after);
+  if (want && want !== s.fee && LLQA_FEE_AUTO_SET.includes(s.fee) && (ctx.automation || {}).feeAuto !== false) {
+    const fields = { fee: want, feeAuto: { v: want, m: after && after.current ? after.current.ym : rec.month, at: new Date().toISOString() } };
+    ctx.setStudents((prev) => (prev || []).map((x) => (String(x.id) === String(s.id) ? { ...x, ...fields } : x)));
+    if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster([{ ...s, ...fields }]);
+  }
+  return rec;
+};
+
+/* ---------- at-risk radar ---------- */
+const llqaRisk = (s, dp, today) => {
+  if (!s || s.status === "quit" || s.status === "leave") return null;
+  const t = today || todayPK();
+  const mine = llqaDpOf(dp, s.id).filter((p) => p.date <= t);
+  const reasons = [];
+  let score = 0;
+  const last4 = mine.slice(0, 4);
+  const abs = last4.filter((p) => /^absent/i.test(String(p.attended || ""))).length;
+  if (abs >= 2) {
+    score += 40;
+    reasons.push(abs + " absent in the last " + last4.length + " classes");
+  }
+  const booked = LLQABooking.scheduleOf(s).length > 0;
+  const lastDay = mine[0] ? mine[0].date : s.lastDate || "";
+  if (booked && lastDay) {
+    let gap = llqaDays(lastDay, t) || 0;
+    if (gap >= 10)
+      llqaDatesIn(llqaAddDays(lastDay, 1), t, 120).forEach((d) => {
+        if (llqaHolidayOn(d, "holiday")) gap--;
+      });
+    if (gap >= 10) {
+      score += 35;
+      reasons.push("no class logged for " + gap + " days");
+    }
+  }
+  const total = parseInt(s.totalClasses, 10) || 0;
+  const att = parseInt(s.attendance, 10);
+  if (total >= 5 && !isNaN(att) && att < 70) {
+    score += 25;
+    reasons.push("attendance " + att + "%");
+  }
+  const info = llqaTrialInfo(s, { today: t });
+  if (info.stalled) {
+    score += 30;
+    reasons.push("trial not moving (" + info.done + "/" + info.target + ")");
+  }
+  if (s.fee === "overdue") {
+    score += 20;
+    reasons.push("fee overdue");
+  }
+  if (!score) return null;
+  const level = score >= 50 ? "high" : score >= 25 ? "medium" : "low";
+  const action =
+    abs >= 2 || reasons.some((r) => /no class/.test(r))
+      ? "Message the family; offer another time or teacher"
+      : info.stalled
+        ? "Follow up on the trial"
+        : s.fee === "overdue"
+          ? "Send a fee reminder"
+          : "Check in with the family";
+  return { score, level, reasons, action, abs, lastDay };
+};
+const llqaRiskList = (students, dp, today) =>
+  (students || [])
+    .map((s) => ({ s, r: llqaRisk(s, dp, today) }))
+    .filter((x) => x.r)
+    .sort((a, b) => b.r.score - a.r.score || String(a.s.name).localeCompare(String(b.s.name)));
+
+/* ---------- follow-up autopilot: every message due today ---------- */
+const llqaMonthStats = (s, dp, today) => {
+  const since = llqaAddDays(today, -30);
+  const mine = llqaDpOf(dp, s.id).filter((p) => p.date > since && p.date <= today);
+  const present = mine.filter((p) => /^(present|late)/i.test(String(p.attended || ""))).length;
+  return { classes: mine.length, present, pct: mine.length ? Math.round((present / mine.length) * 100) : null };
+};
+// Each item has a key; once a message with that key is in the log (sent or
+// marked done) it never comes back. One message per family at a time, most
+// urgent first.
+const llqaAutopilot = (opt) => {
+  const ctx = { ...LLQAApp.ctx, ...(opt || {}) };
+  const today = ctx.today || todayPK();
+  const logx = llqaLogIndex(ctx.messageLog);
+  const dp = ctx.dailyProgress || [];
+  const out = [];
+  const add = (s, template, key, reason, extra, prio) => {
+    if (!logx.keys.has(key)) out.push({ studentId: s.id, student: s, template, key, reason, extra: extra || null, prio: prio == null ? 5 : prio });
+  };
+  const last = (sid, tpl) => llqaLastMsg(ctx.messageLog, sid, tpl);
+  const byId = new Map((ctx.students || []).map((s) => [String(s.id), s]));
+  // substitute / class off: today and tomorrow
+  (ctx.covers || []).forEach((x) => {
+    if (!x || x.sid == null || x.date < today || x.date > llqaAddDays(today, 1)) return;
+    const s = byId.get(String(x.sid));
+    if (!s || s.status === "quit") return;
+    const it = llqaCoverFamilyItems([x])[0];
+    if (it) add(s, it.template, it.key, (x.cancelled ? "Class off " : x.cover + " teaches ") + llqaDateLabel(x.date) + " (" + x.teacher + " on leave)", it.extra, 0);
+  });
+  const soon = llqaCalendar().filter((d) => d.from > today && d.from <= llqaAddDays(today, 3) && (d.kind || "holiday") !== "notice");
+  (ctx.students || []).forEach((s) => {
+    if (!s || s.status === "quit") return;
+    const away = s.status === "leave";
+    const info = llqaTrialInfo(s, { today, arPayments: ctx.arPayments });
+    const booked = LLQABooking.scheduleOf(s).length > 0;
+    const mine = llqaDpOf(dp, s.id);
+    // welcome only for a new family (added in the last 2 weeks, at most one class so far)
+    const isNew = (s.dor && llqaDays(s.dor, today) != null && llqaDays(s.dor, today) <= 14) || (parseInt(s.attended, 10) || 0) <= 1;
+    if (!away && isNew && !last(s.id, "welcome")) add(s, "welcome", "welcome:" + s.id, "New family — class times and Parent ID", null, 1);
+    const first = mine.length ? mine[mine.length - 1] : null;
+    if (!away && first && first.date <= today && llqaDays(first.date, today) <= 7 && !last(s.id, "firstClass"))
+      add(s, "firstClass", "first:" + s.id, "First class on " + llqaDateLabel(first.date) + " — ask how it went", null, 3);
+    if (info.stage === "complete") {
+      add(s, "trialComplete", "trialdone:" + s.id, "Trial classes done (" + info.done + "/" + info.target + ") — fee message", null, 1);
+      const sent = last(s.id, "trialComplete");
+      if (sent && llqaDays(llqaAtDay(sent.at), today) >= 2)
+        add(s, "feeDue", "trialfee2:" + s.id, "Fee message sent " + llqaAgo(sent.at) + ", not enrolled yet", null, 2);
+    }
+    if (!away)
+      mine
+        .filter((p) => /^absent/i.test(String(p.attended || "")) && p.date <= today && llqaDays(p.date, today) <= 2)
+        .forEach((p) => add(s, "missedClass", "miss:" + s.id + ":" + p.date, "Absent on " + llqaDateLabel(p.date), { date: llqaDateLabel(p.date) }, 2));
+    const cy = llqaFeeCycle(s, ctx.arPayments, today);
+    if (cy && cy.current) {
+      const feeTxt = (x) => x + " " + cy.cur;
+      if (cy.owed.length) {
+        const oldest = cy.owed[cy.owed.length - 1];
+        const week = Math.max(0, Math.floor((llqaDays(oldest.over, today) || 0) / 7));
+        const owed = Math.round(cy.owed.reduce((a, m) => a + m.left, 0) * 100) / 100;
+        add(s, "feeDue", "fee:" + s.id + ":" + oldest.ym + ":over" + week, "Fee overdue since " + llqaDateLabel(oldest.over) + " (" + feeTxt(owed) + ")",
+          { fee: feeTxt(owed) + " (" + cy.owed.map((m) => llqaMonthLabel(m.ym)).reverse().join(", ") + ")" }, 1);
+      } else if (cy.current.state === "due" || cy.current.state === "partial") {
+        add(s, "feeDue", "fee:" + s.id + ":" + cy.current.ym + ":due", "Fee due " + llqaDateLabel(cy.current.due) + " (" + feeTxt(cy.current.left) + ")",
+          { fee: feeTxt(cy.current.left) + " for " + llqaMonthLabel(cy.current.ym) }, 2);
+      }
+    }
+    if (booked && !away)
+      soon.forEach((d) =>
+        add(s, (d.kind || "holiday") === "ramadan" ? "ramadanNotice" : "holidayNotice", "hol:" + d.id + ":" + s.id,
+          (d.name || "Holiday") + " from " + llqaDateLabel(d.from),
+          { holiday: d.name || "the holiday", holidayDates: llqaRangeLabel(d.from, d.to), resume: llqaDateLabel(llqaAddDays(d.to || d.from, 1)) }, 2),
+      );
+    const enrolled = s.convertedAt || (!llqaInTrial(s) && s.fee !== "trial" ? s.dor : "");
+    const lastRep = last(s.id, "monthlyReport");
+    if (!away && !llqaInTrial(s) && enrolled && llqaDays(enrolled, today) >= 30 && (!lastRep || llqaDays(llqaAtDay(lastRep.at), today) >= 30)) {
+      const st = llqaMonthStats(s, dp, today);
+      if (st.classes > 0)
+        add(s, "monthlyReport", "report:" + s.id + ":" + today.slice(0, 7), "Monthly report (" + st.classes + " classes, " + (st.pct == null ? "—" : st.pct + "% attended") + ")", null, 4);
+    }
+    const risk = llqaRisk(s, dp, today);
+    const lastCheck = last(s.id, "checkIn");
+    if (risk && risk.level === "high" && (!lastCheck || llqaDays(llqaAtDay(lastCheck.at), today) >= 7))
+      add(s, "checkIn", "risk:" + s.id + ":" + today, "At risk: " + risk.reasons.join(", "), null, 1);
+  });
+  out.sort((a, b) => a.prio - b.prio || String(a.student.name).localeCompare(String(b.student.name)));
+  const seen = new Set();
+  return out.filter((x) => (seen.has(String(x.studentId)) ? false : (seen.add(String(x.studentId)), true)));
+};
+// Marks an item handled without sending from here (sent another way).
+const llqaPilotDone = (it, how) =>
+  llqaLogMsg({ channel: how || "manual", studentId: it.studentId, name: (it.student && it.student.name) || "", template: it.template, key: it.key, text: "" });
+
+/* ---------- teacher scorecards ---------- */
+const llqaMonthDates = (month, today) =>
+  llqaDatesIn(month + "-01", month < today.slice(0, 7) ? llqaAddDays(llqaMonthAdd(month, 1) + "-01", -1) : today, 31);
+const llqaScorecards = (month, opt) => {
+  const ctx = { ...LLQAApp.ctx, ...(opt || {}) };
+  const today = ctx.today || todayPK();
+  const rows = new Map();
+  const row = (name) => {
+    if (!rows.has(name))
+      rows.set(name, { name, scheduled: 0, logged: 0, onTime: 0, present: 0, absent: 0, covered: 0, trials: 0, converted: 0, lostTrials: 0, lost: 0, students: 0, leaveDays: 0 });
+    return rows.get(name);
+  };
+  const tByName = new Map();
+  (ctx.teachers || []).filter((t) => LLQABooking.isActive(t)).forEach((t) => {
+    row(t.name);
+    tByName.set(t.name, t);
+  });
+  const leaveDays = new Set();
+  const nowMin = ctx.nowMin != null ? ctx.nowMin : llqaNowPkMin();
+  if (month <= today.slice(0, 7))
+    llqaMonthDates(month, today).forEach((date) => {
+      if (llqaHolidayOn(date, "holiday")) return;
+      llqaClassesOn(date, ctx.teachers, ctx.students, ctx.dailyProgress).forEach((it) => {
+        if (it.onLeave || it.quit || it.off) return;
+        // today: only classes that should be over (40 minutes after the start)
+        if (date === today && !it.entry && it.min + 40 > nowMin) return;
+        if (it.tLeave && !it.covered) {
+          leaveDays.add(it.teacher + "|" + date);
+          return;
+        }
+        const r = row(it.by);
+        r.scheduled++;
+        if (it.covered) r.covered++;
+        if (it.entry) {
+          r.logged++;
+          const at = llqaAtDay(it.entry.createdAt || it.entry.updatedAt || it.entry.timestamp || "");
+          const late = at ? llqaDays(date, at) : null;
+          // saved the same day or the next (night classes); older records have no time
+          if (late == null || late <= 1) r.onTime++;
+          if (/^(present|late)/i.test(String(it.entry.attended || ""))) r.present++;
+          else if (/^absent/i.test(String(it.entry.attended || ""))) r.absent++;
+        }
+      });
+    });
+  leaveDays.forEach((k) => {
+    const name = k.slice(0, k.lastIndexOf("|"));
+    if (rows.has(name)) rows.get(name).leaveDays++;
+  });
+  (ctx.students || []).forEach((s) => {
+    if (!s || !s.teacher || !rows.has(s.teacher)) return;
+    const r = rows.get(s.teacher);
+    if (s.status !== "quit") r.students++;
+    if (String(s.convertedAt || "").slice(0, 7) === month && s.trialOutcome === "converted") {
+      r.trials++;
+      r.converted++;
+    } else if (s.status === "quit" && String(s.qDate || "").slice(0, 7) === month && s.trialOutcome === "quit") {
+      r.trials++;
+      r.lostTrials++;
+    }
+    if (s.status === "quit" && String(s.qDate || "").slice(0, 7) === month) r.lost++;
+  });
+  const pct = (a, b) => (b ? Math.round((a / b) * 100) : null);
+  return [...rows.values()]
+    .map((r) => {
+      const loggedPct = pct(r.logged, r.scheduled);
+      const onTimePct = pct(r.onTime, r.logged);
+      const attPct = pct(r.present, r.present + r.absent);
+      const convPct = pct(r.converted, r.trials);
+      const parts = [[loggedPct, 40], [onTimePct, 20], [attPct, 20], [convPct, 20]].filter((p) => p[0] != null);
+      const w = parts.reduce((a, p) => a + p[1], 0);
+      const score = w && r.scheduled ? Math.round(parts.reduce((a, p) => a + p[0] * p[1], 0) / w) : null;
+      const t = tByName.get(r.name) || {};
+      return { ...r, teamLead: t.teamLead || "", code: t.code || "", loggedPct, onTimePct, attPct, convPct, score };
+    })
+    .sort((a, b) => (b.score == null ? -1 : b.score) - (a.score == null ? -1 : a.score) || b.scheduled - a.scheduled || String(a.name).localeCompare(String(b.name)));
+};
+
+/* ---------- parent requests & approvals ---------- */
+const LLQA_REQ_KINDS = { leave: "Leave", time: "Change class time", message: "Message", proposal: "Approval asked" };
+const LLQA_REQ_SOURCES = { portal: "Parent Portal", whatsapp: "WhatsApp", call: "Phone call", dialer: "Dialer", academy: "Academy" };
+const llqaApprovalLink = (s, reqId) => {
+  const base = llqaPortalLink(LLQAApp.ctx.messaging);
+  if (!s || !s.parentId) return base;
+  return base + (base.includes("?") ? "&" : "?") + "parent=" + encodeURIComponent(s.parentId) + (reqId ? "&req=" + encodeURIComponent(reqId) : "");
+};
+// An approval link opens the Parent Portal for that family (…?parent=P-XXXX).
+const llqaLinkParent = () => {
+  try {
+    return String(new URLSearchParams(window.location.search).get("parent") || "").trim().toUpperCase();
+  } catch (e) {
+    return "";
+  }
+};
+const llqaLinkRequest = () => {
+  try {
+    return String(new URLSearchParams(window.location.search).get("req") || "");
+  } catch (e) {
+    return "";
+  }
+};
+const llqaReqText = (r) => {
+  const B = LLQABooking;
+  if (!r) return "";
+  if (r.type === "leave") return "Leave " + llqaRangeLabel(r.from, r.to) + (r.text ? " — " + r.text : "");
+  if (r.type === "time") return "Class time → " + [r.wantDay, r.wantTime ? B.timeLabel(r.wantTime) : ""].filter(Boolean).join(" ") + (r.text ? " — " + r.text : "");
+  return r.text || "";
+};
+const llqaAddRequest = (s, data) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setParentRequests !== "function" || !s) return null;
+  const u = ctx.user || {};
+  const rec = {
+    id: llqaUid("r"),
+    studentId: s.id,
+    student: s.name || "",
+    parentId: s.parentId || "",
+    parent: s.parent || "",
+    status: "pending",
+    source: u.role === "parent" ? "portal" : "academy",
+    createdAt: new Date().toISOString(),
+    createdBy: u.role === "parent" ? "parent" : u.name || u.role || "",
+    ...data,
+  };
+  ctx.setParentRequests((prev) => [...(prev || []), rec]);
+  return rec;
+};
+const llqaDecide = (id, patch) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setParentRequests !== "function") return;
+  const u = ctx.user || {};
+  ctx.setParentRequests((prev) =>
+    (prev || []).map((r) =>
+      r.id === id ? { ...r, ...patch, decidedAt: new Date().toISOString(), decidedBy: u.role === "parent" ? "parent" : u.name || u.role || "" } : r,
+    ),
+  );
+};
+// Approving a leave request puts the student on leave for those dates (the
+// same fields the Students page uses).
+const llqaApproveLeave = (r, reply) => {
+  const ctx = LLQAApp.ctx;
+  const s = llqaFindStudent(r.studentId);
+  if (!s) return false;
+  // a leave that starts later is scheduled: the student stays active until the first day
+  const later = r.from > todayPK();
+  const fields = { lvType: "Parent request", lvFrom: r.from, lvTo: r.to || r.from, lvReason: r.text || "Parent request", lvPlanned: later, ...(later ? {} : { status: "leave" }) };
+  ctx.setStudents((prev) => (prev || []).map((x) => (String(x.id) === String(s.id) ? { ...x, ...fields } : x)));
+  if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster([{ ...s, ...fields }]);
+  llqaDecide(r.id, { status: "approved", reply: reply || "" });
+  return true;
+};
+// Scheduled leave starts on its first day (admin side, once the students have loaded).
+const llqaLeaveStartRun = () => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user || !llqaCanManage() || !llqaReadyFor(["students"])) return null;
+  const today = todayPK();
+  const due = (ctx.students || []).filter((s) => s && s.lvPlanned && s.lvFrom && s.lvFrom <= today && s.status !== "quit");
+  if (!due.length) return null;
+  const upd = (x) => {
+    if (!x || !x.lvPlanned || !x.lvFrom || x.lvFrom > today || x.status === "quit") return x;
+    // already over (nobody opened the CRM during it): just clear the plan
+    return x.lvTo && x.lvTo < today ? { ...x, lvPlanned: false } : { ...x, status: "leave", lvPlanned: false };
+  };
+  ctx.setStudents((prev) => (prev || []).map(upd));
+  if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster(due.map(upd));
+  const started = due.filter((x) => !(x.lvTo && x.lvTo < today));
+  if (started.length)
+    llqaToast({ kind: "info", ttl: 12000, text: "🏖 Leave starts today for " + started.map((x) => x.name + " (to " + llqaDateLabel(x.lvTo || x.lvFrom) + ")").join(", ") + "." });
+  return due;
+};
+// Requests that need the academy (proposals wait for the parent instead).
+const llqaPendingRequests = (list) => (list || []).filter((r) => r && r.status === "pending" && r.type !== "proposal");
+
+/* ============================================================
+   v66 — Part 5: screens. Timetable: Leave Cover, Holidays,
+   Scorecards. Sales: Autopilot (+ at-risk radar), Fee Cycle,
+   Requests. Parent Portal: Requests & approvals.
+   ============================================================ */
+const LLQA_GATEWAYS = ["Bank Transfer", "Credit/Debit Card", "PayPal", "Stripe", "Wise", "Zelle", "Cash", "Western Union", "Other"];
+const llqaTh = (t) =>
+  React.createElement("th", { key: t, style: { textAlign: "left", padding: "8px 10px", color: c.textSec, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4, borderBottom: "1px solid " + c.border, whiteSpace: "nowrap" } }, t);
+const llqaTd = (kids, k, st) =>
+  React.createElement("td", { key: k, style: { padding: "8px 10px", borderBottom: "1px solid " + c.border + "66", fontSize: 12, color: c.text, verticalAlign: "middle", ...(st || {}) } }, kids);
+const llqaTable = (heads, rows) =>
+  React.createElement(
+    "div",
+    { style: { overflowX: "auto" } },
+    React.createElement(
+      "table",
+      { style: { width: "100%", borderCollapse: "collapse" } },
+      React.createElement("thead", null, React.createElement("tr", null, heads.map(llqaTh))),
+      React.createElement("tbody", null, rows),
+    ),
+  );
+const llqaSmall = (text, col, key) => React.createElement("div", { key, style: { color: col || c.textMuted, fontSize: 10, marginTop: 2 } }, text);
+const llqaSelectStyle = { padding: "5px 8px", background: c.bgDeep, border: "1px solid " + c.border, borderRadius: 7, color: c.text, fontSize: 11 };
+const llqaSel = (value, onChange, options, opt) =>
+  React.createElement(
+    "select",
+    { key: (opt && opt.key) || "sel", value, onChange: (e) => onChange(e.target.value), onClick: (e) => e.stopPropagation(), title: (opt && opt.title) || "", style: { ...llqaSelectStyle, ...((opt && opt.style) || {}) } },
+    options.map((o) => (Array.isArray(o) ? React.createElement("option", { key: o[0], value: o[0] }, o[1]) : React.createElement("option", { key: o, value: o }, o))),
+  );
+// On/off card for one automation (saved in settings/automation; on by default).
+const llqaAutoSwitch = (key, title, onText, offText) => {
+  const ctx = LLQAApp.ctx;
+  const on = (ctx.automation || {})[key] !== false;
+  const manage = llqaCanManage();
+  return llqaCard(
+    React.createElement(
+      "div",
+      { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" } },
+      React.createElement(
+        "div",
+        { style: { flex: "1 1 400px" } },
+        React.createElement("div", { style: { color: c.text, fontSize: 14, fontWeight: 700 } }, "🤖 " + title + " — " + (on ? "ON" : "OFF")),
+        React.createElement("div", { style: { color: c.textSec, fontSize: 11, marginTop: 3, lineHeight: 1.5 } }, on ? onText : offText),
+      ),
+      manage
+        ? llqaMini(on ? "Turn off" : "Turn on", () => {
+            if (typeof ctx.setAutomation === "function") ctx.setAutomation({ ...(ctx.automation || {}), [key]: !on });
+          }, { big: true, tone: "success", solid: !on, key: "sw" })
+        : null,
+    ),
+    { border: on ? c.success + "66" : c.border, key: "sw-" + key },
+  );
+};
+const llqaWho = (s) => [s.parent, s.name && s.name !== s.parent ? s.name : ""].filter(Boolean).join(" · ");
+
+/* ---------- record a fee payment ---------- */
+const LLQAPaymentModal = ({ studentId, month, onClose }) => {
+  const ctx = LLQAApp.ctx;
+  const s = llqaFindStudent(studentId) || {};
+  const cy = llqaFeeCycle(s, ctx.arPayments);
+  const first = month || llqaFeeNextMonth(cy);
+  const info = cy ? cy.months.find((m) => m.ym === first) : null;
+  const amt = cy ? cy.amt : Number(s.fee_amount) || 0;
+  const [f, setF] = useState({
+    amount: String(info ? info.left || amt : amt || ""),
+    currency: s.currency || "USD",
+    month: first,
+    paidDate: todayPK(),
+    gateway: "Bank Transfer",
+    receipt: "",
+    notes: "",
+    tell: true,
+  });
+  const opts = [];
+  const seen = new Set();
+  const addM = (ym) => {
+    if (!ym || seen.has(ym)) return;
+    seen.add(ym);
+    const m = cy ? cy.months.find((x) => x.ym === ym) : null;
+    opts.push({ value: ym, label: llqaMonthLabel(ym) + (m ? (m.left > 0 ? " — " + m.left + " " + (cy.cur || "") + " left" : " — paid") : "") });
+  };
+  (cy ? cy.months.slice().reverse() : []).forEach((m) => addM(m.ym));
+  addM(first);
+  const base = cy && cy.current ? cy.current.ym : todayPK().slice(0, 7);
+  addM(llqaMonthAdd(base, 1));
+  addM(llqaMonthAdd(base, 2));
+  const digits = llqaPhone(s.phone, s.country);
+  const save = () => {
+    if (!(Number(f.amount) > 0)) {
+      alert("Enter the amount received.");
+      return;
+    }
+    const rec = llqaRecordPayment(s, f);
+    if (!rec) {
+      alert("Payments can't be saved from here.");
+      return;
+    }
+    onClose();
+    if (f.tell && digits)
+      llqaOpen("message", { studentId: s.id, template: "feeReceipt", extra: { amount: rec.amount + " " + rec.currency, month: llqaMonthLabel(rec.month) } });
+    else llqaToast({ kind: "info", ttl: 6000, text: "✓ Payment recorded: " + rec.amount + " " + rec.currency + " for " + llqaMonthLabel(rec.month) + " (" + s.name + ")." });
+  };
+  return llqaShell(
+    "💰 Record payment — " + (s.name || ""),
+    (s.parent ? s.parent + " · " : "") + (cy ? "Fee " + cy.amt + " " + cy.cur + " a month, due on day " + cy.day + (cy.left ? " · " + cy.left + " " + cy.cur + " owed now" : " · nothing owed") : "No monthly fee set for this student"),
+    React.createElement(
+      "div",
+      null,
+      React.createElement(
+        "div",
+        { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0 10px" } },
+        React.createElement(Inp, { label: "Amount received", type: "number", value: f.amount, onChange: (v) => setF({ ...f, amount: v }) }),
+        React.createElement(Inp, { label: "Currency", value: f.currency, onChange: (v) => setF({ ...f, currency: v }), options: ["USD", "CAD", "GBP", "EUR", "AED", "PKR"] }),
+        React.createElement(Inp, { label: "For month", value: f.month, onChange: (v) => setF({ ...f, month: v }), options: opts }),
+        React.createElement(Inp, { label: "Date received", type: "date", value: f.paidDate, onChange: (v) => setF({ ...f, paidDate: v }) }),
+        React.createElement(Inp, { label: "Paid by", value: f.gateway, onChange: (v) => setF({ ...f, gateway: v }), options: LLQA_GATEWAYS }),
+        React.createElement(Inp, { label: "Receipt / reference (optional)", value: f.receipt, onChange: (v) => setF({ ...f, receipt: v }) }),
+      ),
+      React.createElement(Inp, { label: "Note (optional)", value: f.notes, onChange: (v) => setF({ ...f, notes: v }) }),
+      React.createElement(
+        "label",
+        { style: { display: "flex", gap: 8, alignItems: "center", color: digits ? c.text : c.textMuted, fontSize: 12, cursor: "pointer" } },
+        React.createElement("input", { type: "checkbox", checked: f.tell && !!digits, disabled: !digits, onChange: (e) => setF({ ...f, tell: e.target.checked }) }),
+        digits ? "Then send a thank-you / receipt on WhatsApp" : "No usable WhatsApp number for this family",
+      ),
+      React.createElement("div", { style: { color: c.textMuted, fontSize: 10, marginTop: 8 } }, "Saved in Accounts Receivable too. The Fee Status follows the fee cycle by itself."),
+    ),
+    [
+      llqaMini("Cancel", onClose, { key: "x", big: true }),
+      llqaMini("✓ Save payment", save, { key: "ok", big: true, solid: true, tone: "success" }),
+    ],
+    { onClose, width: 640 },
+  );
+};
+
+/* ---------- log a request that came by WhatsApp / a call ---------- */
+const llqaStudentOptions = () =>
+  (LLQAApp.ctx.students || [])
+    .filter((s) => s && s.status !== "quit")
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)))
+    .map((s) => ({ value: String(s.id), label: s.name + (s.parent ? " — " + s.parent : "") + (s.code ? " (" + s.code + ")" : "") }));
+const LLQALogRequestModal = ({ studentId, source, onClose }) => {
+  const B = LLQABooking;
+  const [f, setF] = useState({
+    sid: studentId != null ? String(studentId) : "",
+    source: source || "whatsapp",
+    type: "leave",
+    from: todayPK(),
+    to: todayPK(),
+    wantDay: "Mon",
+    wantTime: "0500 PM",
+    text: "",
+  });
+  const s = llqaFindStudent(f.sid);
+  const save = () => {
+    if (!s) {
+      alert("Choose the student.");
+      return;
+    }
+    if (f.type === "leave" && (!f.from || (f.to && f.to < f.from))) {
+      alert("Check the leave dates.");
+      return;
+    }
+    if (f.type === "message" && !f.text.trim()) {
+      alert("Write what the parent asked.");
+      return;
+    }
+    const data = { type: f.type, source: f.source, text: f.text.trim() };
+    if (f.type === "leave") Object.assign(data, { from: f.from, to: f.to || f.from });
+    if (f.type === "time") Object.assign(data, { wantDay: f.wantDay, wantTime: f.wantTime });
+    const rec = llqaAddRequest(s, data);
+    onClose();
+    if (rec) llqaToast({ kind: "info", ttl: 6000, text: "✓ Request logged for " + s.name + " (" + LLQA_REQ_SOURCES[f.source] + "). It's in Sales → Requests." });
+  };
+  return llqaShell(
+    "📨 Log a parent request",
+    "For requests that came by WhatsApp, a phone call or the dialer — so everything is answered in one place.",
+    React.createElement(
+      "div",
+      null,
+      React.createElement(Inp, { label: "Student", value: f.sid, onChange: (v) => setF({ ...f, sid: v }), options: llqaStudentOptions() }),
+      React.createElement(
+        "div",
+        { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 10px" } },
+        React.createElement(Inp, { label: "Came by", value: f.source, onChange: (v) => setF({ ...f, source: v }), options: [{ value: "whatsapp", label: "WhatsApp" }, { value: "call", label: "Phone call" }, { value: "dialer", label: "Dialer" }] }),
+        React.createElement(Inp, { label: "Request", value: f.type, onChange: (v) => setF({ ...f, type: v }), options: [{ value: "leave", label: "Leave" }, { value: "time", label: "Change class time" }, { value: "message", label: "Other / message" }] }),
+      ),
+      f.type === "leave"
+        ? React.createElement(
+            "div",
+            { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 10px" } },
+            React.createElement(Inp, { label: "From", type: "date", value: f.from, onChange: (v) => setF({ ...f, from: v, to: f.to && f.to < v ? v : f.to }) }),
+            React.createElement(Inp, { label: "To", type: "date", value: f.to, onChange: (v) => setF({ ...f, to: v }) }),
+          )
+        : null,
+      f.type === "time"
+        ? React.createElement(
+            "div",
+            { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 10px" } },
+            React.createElement(Inp, { label: "Day wanted (family's day)", value: f.wantDay, onChange: (v) => setF({ ...f, wantDay: v }), options: B.DAYS }),
+            React.createElement(Inp, { label: "Time wanted (family's time)", value: f.wantTime, onChange: (v) => setF({ ...f, wantTime: v }), options: B.TIMES.map((t) => ({ value: t, label: B.timeLabel(t) })) }),
+          )
+        : null,
+      React.createElement("textarea", { value: f.text, onChange: (e) => setF({ ...f, text: e.target.value }), rows: 3, placeholder: f.type === "leave" ? "Reason (optional)" : "What the parent said", style: llqaTextStyle }),
+    ),
+    [
+      llqaMini("Cancel", onClose, { key: "x", big: true }),
+      llqaMini("✓ Log request", save, { key: "ok", big: true, solid: true, tone: "accent" }),
+    ],
+    { onClose, width: 560 },
+  );
+};
+
+/* ---------- ask a parent to approve something (WhatsApp link) ---------- */
+const LLQA_ASK_IDEAS = [
+  ["time", "New class time", "We'd like to move {student}'s class to a new time: ___ (your time). Is that okay for you?"],
+  ["teacher", "Change of teacher", "We'd like {student} to continue with a new teacher, ___, at the same time. Is that okay for you?"],
+  ["makeup", "Make-up class", "We can arrange a make-up class for {student} on ___ at ___ (your time). Is that okay for you?"],
+  ["fee", "Fee change", "From next month, {student}'s fee will be ___ per month. Do you agree?"],
+];
+const LLQAAskModal = ({ studentId, text, onClose }) => {
+  const [sid, setSid] = useState(studentId != null ? String(studentId) : "");
+  const [t, setT] = useState(text || "");
+  const s = llqaFindStudent(sid);
+  const send = () => {
+    if (!s) {
+      alert("Choose the student.");
+      return;
+    }
+    if (!t.trim() || /___/.test(t)) {
+      alert("Fill in the blanks (___) in the message first.");
+      return;
+    }
+    const rec = llqaAddRequest(s, { type: "proposal", text: t.trim(), source: "academy" });
+    if (!rec) return;
+    onClose();
+    llqaOpen("message", {
+      studentId: s.id,
+      template: "approvalAsk",
+      msgKey: "ask:" + rec.id,
+      extra: { proposal: t.trim(), approvalLink: llqaApprovalLink(s, rec.id) },
+    });
+  };
+  return llqaShell(
+    "✉ Ask a parent to approve",
+    "The parent gets a WhatsApp with a link. It opens their Parent Portal, where they tap Approve or Decline — you see the answer here at once. If they just reply on WhatsApp, mark it yourself.",
+    React.createElement(
+      "div",
+      null,
+      React.createElement(Inp, { label: "Student", value: sid, onChange: setSid, options: llqaStudentOptions() }),
+      s && !s.parentId
+        ? React.createElement("div", { style: { color: c.warn, fontSize: 11, marginTop: -6, marginBottom: 8 } }, "⚠ This family has no Parent ID yet, so the link can't open their portal — they can still reply on WhatsApp.")
+        : null,
+      React.createElement(
+        "div",
+        { style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 } },
+        LLQA_ASK_IDEAS.map(([k, label, tx]) => llqaMini(label, () => setT(tx.split("{student}").join(s ? s.name : "your child")), { key: k })),
+      ),
+      React.createElement("textarea", { value: t, onChange: (e) => setT(e.target.value), rows: 4, placeholder: "What should the parent approve?", style: llqaTextStyle }),
+    ),
+    [
+      llqaMini("Cancel", onClose, { key: "x", big: true }),
+      llqaMini("💬 Create & open WhatsApp", send, { key: "ok", big: true, solid: true, tone: "success" }),
+    ],
+    { onClose, width: 600 },
+  );
+};
+
+/* ---------- Timetable: Leave Cover ---------- */
+const LLQALeaveCoverTab = (props) => {
+  const ctx = llqaCtx(props);
+  const today = todayPK();
+  const [days, setDays] = useState(14);
+  const manage = llqaCanManage();
+  const end = llqaAddDays(today, days - 1);
+  const tById = new Map((ctx.teachers || []).map((t) => [String(t.id), t]));
+  const leaves = (ctx.leaves || [])
+    .filter((l) => l && l.from && (l.to || l.from) >= today && l.from <= end && String(l.status || "pending") !== "rejected")
+    .sort((a, b) => String(a.from).localeCompare(String(b.from)));
+  const cache = new Map();
+  const itemsOn = (d) => {
+    if (!cache.has(d)) cache.set(d, llqaClassesOn(d, ctx.teachers, ctx.students, ctx.dailyProgress));
+    return cache.get(d);
+  };
+  const isT = (l, it) => (l.teacherId != null && l.teacherId !== "" ? String(it.teacherId) === String(l.teacherId) : it.teacher === l.teacherName);
+  const blocks = leaves.map((l) => {
+    const t = tById.get(String(l.teacherId)) || (ctx.teachers || []).find((x) => x.name === l.teacherName) || { name: l.teacherName };
+    const dates = llqaDatesIn(l.from < today ? today : l.from, (l.to || l.from) > end ? end : l.to || l.from);
+    const rows = [];
+    dates.forEach((d) => {
+      if (llqaHolidayOn(d, "holiday")) return;
+      itemsOn(d)
+        .filter((it) => isT(l, it) && !it.onLeave && !it.quit)
+        .forEach((it) => rows.push({ d, it, st: llqaClassState(it, d) }));
+    });
+    return { l, t, rows };
+  });
+  const allRows = blocks.flatMap((b) => b.rows);
+  const need = allRows.filter((r) => r.st.k === "cover");
+  const covered = allRows.filter((r) => r.it.covered);
+  const off = allRows.filter((r) => r.it.off);
+  const coverDates = [...new Set(need.map((r) => r.d))];
+  const doCover = (dates) => {
+    const res = llqaPlanCovers(dates, false);
+    if (res.recs.length) llqaSaveCovers(res.recs);
+    llqaToast(
+      res.recs.length
+        ? { kind: "covers", key: "covers", covers: res.recs, text: "🔁 " + res.recs.length + " class" + (res.recs.length === 1 ? "" : "es") + " given to substitutes" + (res.missing.length ? " · " + res.missing.length + " have no free teacher then" : "") + "." }
+        : { kind: "info", ttl: 7000, text: "No free teacher for those classes — mark them off, or move them with 📅 Change classes." },
+    );
+  };
+  const decided = (rows) => rows.map((r) => r.it.cover).filter((x) => x && (x.cancelled || (x.coverId != null && x.coverId !== "")));
+  const coverSelect = (r) => {
+    const opts = llqaCoverOptions(r.it, r.d, itemsOn(r.d));
+    return React.createElement(
+      "select",
+      {
+        key: "cs",
+        value: "",
+        onChange: (e) => {
+          const o = opts.find((x) => String(x.t.id) === e.target.value);
+          if (o) llqaAssignCover(r.it, r.d, o.t, false);
+        },
+        style: { ...llqaSelectStyle, border: "1px solid " + (opts.length ? c.accent : c.danger) + "88", maxWidth: 230 },
+      },
+      React.createElement("option", { value: "" }, r.it.covered ? "Change substitute…" : opts.length ? "🔁 Choose substitute (" + opts.length + " free)…" : "No teacher free then"),
+      opts.map((o) => React.createElement("option", { key: o.t.id, value: String(o.t.id) }, (o.pref ? "★ " : "") + o.t.name + " · " + (o.t.gender || "—") + " · " + o.load.booked + " classes/wk")),
+    );
+  };
+  return React.createElement(
+    "div",
+    null,
+    llqaAutoSwitch(
+      "coverAuto",
+      "Automatic cover",
+      "When a teacher's leave is approved, each of their classes today and tomorrow is given to the best free teacher (free at that time in their Timetable, same course, the substitute named on the leave form first, then the same gender, then the lighter week). You get a notice with buttons to message the substitutes and the families. Anything you decide yourself is never changed.",
+      "Nothing is assigned by itself — choose substitutes below or use “Cover all”.",
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      llqaStat("Teachers on leave", new Set(blocks.map((b) => b.t.name)).size, "in the next " + days + " days"),
+      llqaStat("Need a substitute", need.length, "classes", need.length ? c.danger : c.text),
+      llqaStat("Covered", covered.length, "classes", covered.length ? c.success : c.text),
+      llqaStat("Class off", off.length, "families told separately"),
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12, alignItems: "center" } },
+      llqaChips([[7, "Next 7 days"], [14, "14 days"], [30, "30 days"]].map(([k, l]) => [k, l]), days, setDays),
+      manage && need.length ? llqaMini("🔁 Cover all " + need.length, () => doCover(coverDates), { big: true, solid: true, tone: "danger", key: "ca" }) : null,
+      manage ? llqaMini("＋ Add leave (HR → Teachers)", () => llqaGo("teachers"), { big: true, key: "add" }) : null,
+    ),
+    blocks.length === 0
+      ? llqaCard(React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "✓ No teacher leave in the next " + days + " days. Leaves added in HR → Teachers → Leave show here with every class they affect."))
+      : null,
+    ...blocks.map((b) => {
+      const l = b.l;
+      const bNeed = b.rows.filter((r) => r.st.k === "cover");
+      const dec = decided(b.rows);
+      return llqaCard(
+        [
+          React.createElement(
+            "div",
+            { key: "h", style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, flexWrap: "wrap", marginBottom: 8 } },
+            React.createElement(
+              "div",
+              null,
+              React.createElement("div", { style: { color: c.text, fontSize: 14, fontWeight: 700 } }, b.t.name + " · " + (l.type || "Leave") + (l.halfDay ? " (half day)" : "")),
+              llqaSmall(llqaRangeLabel(l.from, l.to) + " · " + b.rows.length + " class" + (b.rows.length === 1 ? "" : "es") + " in this window" + (l.substitute ? " · substitute on the form: " + l.substitute : "") + (l.reason ? " · " + l.reason : ""), c.textSec, "s"),
+            ),
+            React.createElement(
+              "div",
+              { style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } },
+              llqaPill(l.status || "pending", l.status === "approved" ? c.success : c.warn, null, "st"),
+              manage && bNeed.length ? llqaMini("🔁 Cover all " + bNeed.length, () => doCover([...new Set(bNeed.map((r) => r.d))]), { key: "c", tone: "danger" }) : null,
+              manage && dec.some((x) => x.coverId != null) ? llqaMini("💬 Tell substitutes", () => llqaOpen("queue", { title: "Cover classes — substitutes", items: llqaCoverTeacherItems(dec) }), { key: "ts", tone: "success" }) : null,
+              manage && dec.some((x) => x.sid != null) ? llqaMini("💬 Tell families", () => llqaOpen("queue", { title: b.t.name + " on leave — families", items: llqaCoverFamilyItems(dec) }), { key: "tf", tone: "success" }) : null,
+            ),
+          ),
+          l.status !== "approved"
+            ? React.createElement("div", { key: "p", style: { color: c.warn, fontSize: 11, marginBottom: 6 } }, "Pending approval — automatic cover starts once it's approved in HR → Teachers → Leave.")
+            : null,
+          b.rows.length
+            ? React.createElement(
+                "div",
+                { key: "t" },
+                llqaTable(
+                  ["Date", "Pakistan", "Family's time", "Student", "Status", "Substitute"],
+                  b.rows.map((r) => {
+                    const it = r.it;
+                    return React.createElement(
+                      "tr",
+                      { key: r.d + it.key },
+                      llqaTd(llqaDateLabel(r.d), "d", { whiteSpace: "nowrap" }),
+                      llqaTd(React.createElement("b", null, LLQABooking.fmt12(it.slot)), "p", { whiteSpace: "nowrap" }),
+                      llqaTd([React.createElement("div", { key: "f" }, it.famTime ? it.rowDay + " " + it.famTime : "—"), llqaSmall(llqaZoneLabel(it.tz), null, "z")], "f", { whiteSpace: "nowrap" }),
+                      llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, it.cell.s), llqaSmall(it.cell.c + (it.cell.sub ? " · " + it.cell.sub : ""), null, "c")], "s"),
+                      llqaTd(
+                        React.createElement("span", { style: { color: it.covered ? c.success : r.st.col, fontWeight: 700, fontSize: 11 } }, it.covered ? "✓ " + it.by + (it.cover.auto ? " (auto)" : "") : r.st.text),
+                        "st",
+                        { whiteSpace: "nowrap" },
+                      ),
+                      llqaTd(
+                        manage && !it.entry && r.d >= today
+                          ? React.createElement(
+                              "div",
+                              { style: { display: "flex", gap: 5, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" } },
+                              it.off ? null : coverSelect(r),
+                              !it.off && !it.covered ? llqaMini("Class off", () => llqaClassOff(it, r.d), { key: "o" }) : null,
+                              it.covered || it.off ? llqaMini("↺", () => llqaUncover(it, r.d), { key: "u", title: it.covered ? "Remove the substitute" : "Class back on — needs a teacher" }) : null,
+                            )
+                          : it.entry
+                            ? llqaSmall("logged", c.success)
+                            : null,
+                        "a",
+                      ),
+                    );
+                  }),
+                ),
+              )
+            : React.createElement("div", { key: "e", style: { color: c.textSec, fontSize: 12 } }, "No classes booked for " + b.t.name + " on these days."),
+        ],
+        { key: String(l.id), border: bNeed.length ? c.danger + "66" : c.border },
+      );
+    }),
+  );
+};
+
+/* ---------- Timetable: Holidays & Ramadan ---------- */
+const LLQA_HOLIDAY_NAMES = ["Eid ul Fitr", "Eid ul Adha", "Ramadan", "14 August", "Academy holiday"];
+const LLQAHolidaysTab = (props) => {
+  const ctx = llqaCtx(props);
+  const today = todayPK();
+  const manage = llqaCanManage();
+  const blank = { name: "", from: today, to: today, kind: "holiday", note: "" };
+  const [f, setF] = useState(blank);
+  const [msg, setMsg] = useState("");
+  const [past, setPast] = useState(false);
+  const list = llqaCalendar().slice().sort((a, b) => String(a.from).localeCompare(String(b.from)));
+  const upcoming = list.filter((d) => (d.to || d.from) >= today);
+  const done = list.filter((d) => (d.to || d.from) < today).reverse();
+  const save = () => {
+    if (!String(f.name).trim()) {
+      setMsg("Give it a name (e.g. Eid ul Fitr).");
+      return;
+    }
+    if (!f.from || (f.to && f.to < f.from)) {
+      setMsg("Check the dates — the last day can't be before the first.");
+      return;
+    }
+    if (typeof ctx.setCalendar !== "function") {
+      setMsg("The calendar can't be saved here.");
+      return;
+    }
+    const u = ctx.user || {};
+    const rec = { id: llqaUid("h"), name: String(f.name).trim(), from: f.from, to: f.to || f.from, kind: f.kind, note: String(f.note || "").trim(), at: new Date().toISOString(), by: u.name || u.role || "" };
+    ctx.setCalendar((prev) => ({ ...(prev || {}), days: [...((prev && prev.days) || []), rec] }));
+    setF({ ...blank });
+    setMsg("✓ Added " + rec.name + " (" + llqaRangeLabel(rec.from, rec.to) + ")." + (rec.kind === "holiday" ? " Today's Classes, the at-risk radar and the scorecards skip these days, and families get a notice 3 days before in Autopilot." : ""));
+  };
+  const del = (d) => {
+    if (!confirm("Delete " + (d.name || "this entry") + " (" + llqaRangeLabel(d.from, d.to) + ")?")) return;
+    ctx.setCalendar((prev) => ({ ...(prev || {}), days: ((prev && prev.days) || []).filter((x) => x.id !== d.id) }));
+  };
+  const affected = (d) => {
+    const fams = new Map();
+    const tchs = new Map();
+    let n = 0;
+    llqaDatesIn(d.from, d.to || d.from, 40).forEach((date) =>
+      llqaClassesOn(date, ctx.teachers, ctx.students, ctx.dailyProgress).forEach((it) => {
+        if (it.onLeave || it.quit) return;
+        n++;
+        if (it.stu) fams.set(String(it.stu.id), it.stu);
+        const t = (ctx.teachers || []).find((x) => String(x.id) === String(it.teacherId));
+        if (t) tchs.set(String(t.id), t);
+      }),
+    );
+    return { n, fams: [...fams.values()], tchs: [...tchs.values()] };
+  };
+  const extra = (d) => ({ holiday: d.name || "the holiday", holidayDates: llqaRangeLabel(d.from, d.to), resume: llqaDateLabel(llqaAddDays(d.to || d.from, 1)) });
+  const row = (d, old) => {
+    const a = old ? null : affected(d);
+    const kind = d.kind || "holiday";
+    const tpl = kind === "ramadan" ? "ramadanNotice" : "holidayNotice";
+    return React.createElement(
+      "div",
+      { key: d.id, style: { padding: "10px 0", borderTop: "1px solid " + c.border + "66", opacity: old ? 0.6 : 1 } },
+      React.createElement(
+        "div",
+        { style: { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" } },
+        React.createElement(
+          "div",
+          null,
+          React.createElement("div", { style: { color: c.text, fontSize: 13, fontWeight: 700 } }, (kind === "ramadan" ? "🌙 " : kind === "notice" ? "📣 " : "🗓 ") + (d.name || "Holiday") + " · " + llqaRangeLabel(d.from, d.to)),
+          llqaSmall(
+            (LLQA_DAY_KINDS.find((k) => k[0] === kind) || LLQA_DAY_KINDS[0])[1] + (a ? " · " + a.n + " class" + (a.n === 1 ? "" : "es") + " booked in these days · " + a.fams.length + " famil" + (a.fams.length === 1 ? "y" : "ies") : "") + (d.note ? " · " + d.note : ""),
+            c.textSec,
+            "s",
+          ),
+        ),
+        React.createElement(
+          "div",
+          { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+          manage && a && a.fams.length && kind !== "notice"
+            ? llqaMini("💬 Tell families (" + a.fams.length + ")", () => llqaOpen("queue", { title: d.name || "Holiday", items: a.fams.map((s) => ({ studentId: s.id, template: tpl, key: "hol:" + d.id + ":" + s.id, extra: extra(d) })) }), { key: "f", tone: "success" })
+            : null,
+          manage && a && a.tchs.length && kind === "holiday"
+            ? llqaMini("💬 Tell teachers (" + a.tchs.length + ")", () =>
+                llqaOpen("queue", {
+                  title: (d.name || "Holiday") + " — teachers",
+                  items: a.tchs.map((t) => ({ student: { name: t.name, parent: t.name, phone: t.phone || "", country: "Pakistan" }, template: "holidayTeachers", extra: { name: t.name, ...extra(d) } })),
+                }), { key: "t", tone: "success" })
+            : null,
+          manage ? llqaMini("✕", () => del(d), { key: "x", tone: "danger", title: "Delete" }) : null,
+        ),
+      ),
+    );
+  };
+  return React.createElement(
+    "div",
+    null,
+    manage
+      ? llqaCard([
+          llqaH("🗓 Add a holiday, Ramadan or notice", "Holiday = academy closed (no classes). Ramadan / notice = classes run; families get a message. Eid dates depend on the moon — add or change them once announced."),
+          React.createElement(
+            "div",
+            { key: "q", style: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 } },
+            LLQA_HOLIDAY_NAMES.map((n) => llqaMini(n, () => setF({ ...f, name: n, kind: n === "Ramadan" ? "ramadan" : f.kind === "ramadan" ? "holiday" : f.kind }), { key: n, tone: f.name === n ? "accent" : undefined })),
+          ),
+          React.createElement(
+            "div",
+            { key: "f", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0 10px" } },
+            React.createElement(Inp, { label: "Name", value: f.name, onChange: (v) => setF({ ...f, name: v }), placeholder: "e.g. Eid ul Fitr" }),
+            React.createElement(Inp, { label: "First day", type: "date", value: f.from, onChange: (v) => setF({ ...f, from: v, to: !f.to || f.to < v ? v : f.to }) }),
+            React.createElement(Inp, { label: "Last day", type: "date", value: f.to, onChange: (v) => setF({ ...f, to: v }) }),
+            React.createElement(Inp, { label: "Type", value: f.kind, onChange: (v) => setF({ ...f, kind: v }), options: LLQA_DAY_KINDS.map(([k, l]) => ({ value: k, label: l })) }),
+          ),
+          React.createElement(Inp, { key: "n", label: "Note for the team (optional)", value: f.note, onChange: (v) => setF({ ...f, note: v }) }),
+          React.createElement(
+            "div",
+            { key: "b", style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+            llqaMini("＋ Add to calendar", save, { big: true, solid: true, tone: "accent", key: "s" }),
+            msg ? React.createElement("span", { key: "m", style: { color: /^✓/.test(msg) ? c.success : c.warn, fontSize: 11 } }, msg) : null,
+          ),
+        ])
+      : null,
+    llqaCard([
+      llqaH("Coming up", upcoming.length ? upcoming.length + " entr" + (upcoming.length === 1 ? "y" : "ies") : "Nothing planned yet"),
+      ...upcoming.map((d) => row(d, false)),
+    ]),
+    done.length
+      ? llqaCard([
+          React.createElement(
+            "div",
+            { key: "h", style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
+            React.createElement("div", { style: { color: c.textSec, fontSize: 12, fontWeight: 700 } }, "Past (" + done.length + ")"),
+            llqaMini(past ? "Hide" : "Show", () => setPast(!past), { key: "t" }),
+          ),
+          ...(past ? done.map((d) => row(d, true)) : []),
+        ])
+      : null,
+  );
+};
+
+/* ---------- Timetable: teacher scorecards ---------- */
+const LLQAScorecardsTab = (props) => {
+  const ctx = llqaCtx(props);
+  const today = todayPK();
+  const [month, setMonth] = useState(today.slice(0, 7));
+  const [lead, setLead] = useState("all");
+  const months = [0, 1, 2, 3, 4, 5].map((k) => llqaMonthAdd(today.slice(0, 7), -k));
+  const all = llqaScorecards(month, { today });
+  const leads = [...new Set(all.map((r) => r.teamLead).filter(Boolean))].sort();
+  const rows = all.filter((r) => lead === "all" || r.teamLead === lead);
+  const tot = rows.reduce((a, r) => ({ sch: a.sch + r.scheduled, log: a.log + r.logged, conv: a.conv + r.converted, tri: a.tri + r.trials, lost: a.lost + r.lost }), { sch: 0, log: 0, conv: 0, tri: 0, lost: 0 });
+  const pc = (v) => (v == null ? "—" : v + "%");
+  const col = (v) => (v == null ? c.textMuted : v >= 90 ? c.success : v >= 70 ? c.warn : c.danger);
+  return React.createElement(
+    "div",
+    null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 } },
+      llqaSel(month, setMonth, months.map((m) => [m, llqaMonthLabel(m) + (m === today.slice(0, 7) ? " (so far)" : "")]), { key: "m" }),
+      leads.length ? llqaSel(lead, setLead, [["all", "All team leads"], ...leads.map((x) => [x, "Team: " + x])], { key: "l" }) : null,
+      React.createElement("div", { style: { color: c.textMuted, fontSize: 11 } }, "Score = classes logged 40% · logged on time 20% · student attendance 20% · trials won 20% (parts with no data are left out)."),
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      llqaStat("Classes", tot.sch, "scheduled up to today (no holidays, no leave)"),
+      llqaStat("Logged", pc(tot.sch ? Math.round((tot.log / tot.sch) * 100) : null), tot.log + " of " + tot.sch, col(tot.sch ? Math.round((tot.log / tot.sch) * 100) : null)),
+      llqaStat("Trials won", tot.conv + " / " + tot.tri, "this month"),
+      llqaStat("Students lost", tot.lost, "quit this month", tot.lost ? c.danger : c.text),
+    ),
+    llqaCard(
+      rows.length
+        ? llqaTable(
+            ["#", "Teacher", "Score", "Classes", "Logged", "On time", "Attendance", "Trials won", "Lost", "Students", "Covers", "Leave days"],
+            rows.map((r, i) =>
+              React.createElement(
+                "tr",
+                { key: r.name },
+                llqaTd(r.score == null ? "—" : i + 1, "i"),
+                llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, r.name), llqaSmall([r.code, r.teamLead && "Team " + r.teamLead].filter(Boolean).join(" · "), null, "c")], "n"),
+                llqaTd(React.createElement("span", { style: { fontSize: 16, fontWeight: 800, color: col(r.score) } }, r.score == null ? "—" : r.score), "s"),
+                llqaTd(r.scheduled, "sc"),
+                llqaTd(React.createElement("span", { style: { color: col(r.loggedPct), fontWeight: 700 } }, pc(r.loggedPct) + (r.scheduled ? " (" + r.logged + ")" : "")), "lg"),
+                llqaTd(React.createElement("span", { style: { color: col(r.onTimePct) } }, pc(r.onTimePct)), "ot"),
+                llqaTd(React.createElement("span", { style: { color: col(r.attPct) } }, pc(r.attPct)), "at"),
+                llqaTd(r.trials ? r.converted + " / " + r.trials : "—", "tr"),
+                llqaTd(React.createElement("span", { style: { color: r.lost ? c.danger : c.text } }, r.lost), "lo"),
+                llqaTd(r.students, "st"),
+                llqaTd(r.covered || "—", "cv"),
+                llqaTd(r.leaveDays || "—", "lv"),
+              ),
+            ),
+          )
+        : React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "No active teachers."),
+    ),
+    React.createElement("div", { style: { color: c.textMuted, fontSize: 10 } }, "Classes come from the Timetable for each day (a cover counts for the teacher who took it). Logged = attendance saved for that class; on time = saved the same day or the next. Attendance = present or late out of logged classes. Trials won = trials enrolled as paid this month; lost = students who quit this month."),
+  );
+};
+
+/* ---------- Sales: Autopilot + at-risk radar ---------- */
+const LLQAAutopilotTab = (props) => {
+  const ctx = llqaCtx(props);
+  const today = todayPK();
+  const risky = llqaRiskList((ctx.students || []).filter((s) => s && s.status !== "quit"), ctx.dailyProgress, today);
+  const [lv, setLv] = useState(() => (risky.some((x) => x.r.level === "high") ? "high" : "all"));
+  const [kind, setKind] = useState("all");
+  const items = llqaAutopilot({ today });
+  const kinds = [...new Set(items.map((x) => x.template))];
+  const shown = items.filter((x) => kind === "all" || x.template === kind);
+  const sendable = shown.filter((x) => llqaPhone(x.student.phone, x.student.country));
+  const sentToday = (ctx.messageLog || []).filter((m) => m && m.key && llqaAtDay(m.at) === today).length;
+  const riskShown = risky.filter((x) => lv === "all" || x.r.level === lv);
+  const lvCol = { high: c.danger, medium: c.warn, low: c.textSec };
+  return React.createElement(
+    "div",
+    null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      llqaStat("Due today", items.length, "one message per family", items.length ? c.accent : c.text),
+      llqaStat("Handled today", sentToday, "sent or marked done"),
+      llqaStat("At risk", risky.filter((x) => x.r.level === "high").length, risky.length + " to watch in total", risky.some((x) => x.r.level === "high") ? c.danger : c.text),
+    ),
+    llqaCard([
+      llqaH("🤖 Today's follow-ups", "Worked out from trials, classes, absences, the fee cycle, holidays and leave cover. A message never comes back once it's sent or marked done."),
+      React.createElement(
+        "div",
+        { key: "b", style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 } },
+        llqaChips([["all", "All", items.length], ...kinds.map((k) => [k, llqaTplName(k), items.filter((x) => x.template === k).length])], kind, setKind),
+        sendable.length
+          ? llqaMini("💬 Send " + sendable.length + " — one click each", () =>
+              llqaOpen("queue", { title: "Autopilot", items: sendable.map((x) => ({ studentId: x.studentId, student: x.student, template: x.template, key: x.key, extra: x.extra })) }),
+            { big: true, solid: true, tone: "success", key: "all" })
+          : null,
+      ),
+      shown.length === 0
+        ? React.createElement("div", { key: "e", style: { color: c.success, fontSize: 12 } }, "✓ Nothing due — every follow-up for today is done.")
+        : React.createElement(
+            "div",
+            { key: "t" },
+            llqaTable(
+              ["Family", "Message", "Why", ""],
+              shown.map((x) => {
+                const s = x.student;
+                const digits = llqaPhone(s.phone, s.country);
+                return React.createElement(
+                  "tr",
+                  { key: x.key },
+                  llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, s.name), llqaSmall((s.parent || "—") + (digits ? " · +" + digits : " · ⚠ no usable number"), digits ? null : c.danger, "p")], "a"),
+                  llqaTd(llqaPill(llqaTplName(x.template), x.prio <= 1 ? c.danger : x.prio <= 2 ? c.warn : c.accent), "b"),
+                  llqaTd(x.reason, "c", { color: c.textSec, fontSize: 11 }),
+                  llqaTd(
+                    React.createElement(
+                      "div",
+                      { style: { display: "flex", gap: 5, justifyContent: "flex-end" } },
+                      llqaMini("💬 Send", () => llqaOpen("message", { studentId: s.id, student: s, template: x.template, extra: x.extra, msgKey: x.key }), { key: "s", tone: "success", disabled: !digits }),
+                      llqaMini("📞", () => llqaCall(digits, { studentId: s.id, name: s.name, template: x.template, key: x.key }), { key: "c", disabled: !digits, title: "Call (counts as done)" }),
+                      llqaMini("✓ Done", () => llqaPilotDone(x), { key: "d", title: "Handled another way — don't suggest it again" }),
+                    ),
+                    "d",
+                    { whiteSpace: "nowrap" },
+                  ),
+                );
+              }),
+            ),
+          ),
+    ]),
+    llqaCard([
+      llqaH("⚠ At-risk radar", "Students who may leave: absences, no class logged for 10+ days (holidays don't count), attendance under 70%, a trial that isn't moving, or fee overdue."),
+      React.createElement(
+        "div",
+        { key: "c", style: { marginBottom: 10 } },
+        llqaChips([["high", "High", risky.filter((x) => x.r.level === "high").length], ["medium", "Medium", risky.filter((x) => x.r.level === "medium").length], ["low", "Low", risky.filter((x) => x.r.level === "low").length], ["all", "All", risky.length]], lv, setLv),
+      ),
+      riskShown.length === 0
+        ? React.createElement("div", { key: "e", style: { color: c.success, fontSize: 12 } }, "✓ No students at this level.")
+        : React.createElement(
+            "div",
+            { key: "t" },
+            llqaTable(
+              ["Student", "Risk", "Why", "Last class", "Suggested", ""],
+              riskShown.map(({ s, r }) => {
+                const digits = llqaPhone(s.phone, s.country);
+                return React.createElement(
+                  "tr",
+                  { key: s.id },
+                  llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, s.name), llqaSmall([s.parent, s.teacher].filter(Boolean).join(" · "), null, "p")], "a"),
+                  llqaTd(llqaPill(r.level + " · " + r.score, lvCol[r.level]), "b"),
+                  llqaTd(r.reasons.join(" · "), "c", { color: c.textSec, fontSize: 11 }),
+                  llqaTd(r.lastDay ? llqaDateLabel(r.lastDay) : "—", "d", { whiteSpace: "nowrap" }),
+                  llqaTd(r.action, "e", { color: c.textSec, fontSize: 11 }),
+                  llqaTd(
+                    React.createElement(
+                      "div",
+                      { style: { display: "flex", gap: 5, justifyContent: "flex-end" } },
+                      llqaMini("💬", () => llqaOpen("message", { studentId: s.id, template: r.reasons.some((x) => /fee/.test(x)) && r.reasons.length === 1 ? "feeDue" : "checkIn" }), { key: "m", tone: "success", disabled: !digits, title: "Message" }),
+                      llqaMini("📞", () => llqaCall(digits, { studentId: s.id, name: s.name }), { key: "c", disabled: !digits, title: "Call" }),
+                      llqaMini("📅", () => llqaOpen("reschedule", { studentId: s.id }), { key: "r", title: "Change classes" }),
+                    ),
+                    "f",
+                    { whiteSpace: "nowrap" },
+                  ),
+                );
+              }),
+            ),
+          ),
+    ]),
+  );
+};
+
+/* ---------- Sales: Fee Cycle ---------- */
+const LLQA_FEE_STATES = {
+  overdue: ["Overdue", "danger"],
+  due: ["Due", "warn"],
+  partial: ["Part paid", "warn"],
+  upcoming: ["Upcoming", "textSec"],
+  paid: ["Paid", "success"],
+};
+const LLQAFeeCycleTab = (props) => {
+  const ctx = llqaCtx(props);
+  const today = todayPK();
+  const [f, setF] = useState("all");
+  const [q, setQ] = useState("");
+  const live = (ctx.students || []).filter((s) => s && s.status !== "quit");
+  const rows = live.map((s) => ({ s, cy: llqaFeeCycle(s, ctx.arPayments, today) })).filter((x) => x.cy);
+  const noFee = live.filter((s) => !llqaInTrial(s) && !(Number(s.fee_amount) > 0) && s.fee !== "n/a").length;
+  const sum = (list, pick) => {
+    const by = {};
+    list.forEach((x) => {
+      const v = pick(x);
+      if (v > 0) by[x.cy.cur] = Math.round(((by[x.cy.cur] || 0) + v) * 100) / 100;
+    });
+    const ks = Object.keys(by);
+    return ks.length ? ks.map((k) => by[k] + " " + k).join(" · ") : "0";
+  };
+  const month = today.slice(0, 7);
+  const collected = sum(rows, (x) => x.cy.months.filter((m) => m.ym === month).reduce((a, m) => a + m.paid, 0));
+  const ql = q.trim().toLowerCase();
+  const FILT = [
+    ["all", "All", () => true],
+    ["overdue", "Overdue", (x) => x.cy.status === "overdue"],
+    ["due", "Due now", (x) => x.cy.status === "due"],
+    ["partial", "Part paid", (x) => x.cy.status === "partial"],
+    ["upcoming", "Upcoming", (x) => x.cy.status === "upcoming"],
+    ["paid", "Paid", (x) => x.cy.status === "paid"],
+  ];
+  const test = (FILT.find((x) => x[0] === f) || FILT[0])[2];
+  const order = { overdue: 0, due: 1, partial: 2, upcoming: 3, paid: 4 };
+  const shown = rows
+    .filter((x) => test(x) && (!ql || [x.s.name, x.s.parent, x.s.code, x.s.phone].some((v) => String(v || "").toLowerCase().includes(ql))))
+    .sort((a, b) => order[a.cy.status] - order[b.cy.status] || String(a.cy.due).localeCompare(String(b.cy.due)));
+  const remind = shown.filter((x) => (x.cy.status === "overdue" || x.cy.status === "due" || x.cy.status === "partial") && llqaPhone(x.s.phone, x.s.country));
+  const setDay = (s, v) => {
+    const d = Math.min(28, Math.max(1, parseInt(v, 10) || 1));
+    const fields = { billDay: d };
+    ctx.setStudents((prev) => (prev || []).map((x) => (String(x.id) === String(s.id) ? { ...x, ...fields } : x)));
+    if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster([{ ...s, ...fields }]);
+  };
+  const feeTxt = (x) => {
+    const cy = x.cy;
+    if (cy.owed.length) return { fee: cy.owed.reduce((a, m) => a + m.left, 0) + " " + cy.cur + " (" + cy.owed.map((m) => llqaMonthLabel(m.ym)).reverse().join(", ") + ")" };
+    if (cy.current) return { fee: cy.current.left + " " + cy.cur + " for " + llqaMonthLabel(cy.current.ym) + " (due " + llqaDateLabel(cy.current.due) + ")" };
+    return null;
+  };
+  const stPill = (st) => {
+    const d = LLQA_FEE_STATES[st] || [st, "textSec"];
+    return llqaPill(d[0], c[d[1]]);
+  };
+  return React.createElement(
+    "div",
+    null,
+    llqaAutoSwitch(
+      "feeAuto",
+      "Automatic Fee Status",
+      "Each paying student's fee is due every month on their due day (the day they enrolled, up to the 28th). Unpaid " + LLQA_FEE_GRACE + " days after the due day, the Fee Status becomes “overdue”; a part payment makes it “partial”; once the month is paid it goes back to “paid”. Payments recorded here or in Accounts Receivable count. If you change a Fee Status by hand, it's left alone for that month.",
+      "Fee Status is not changed by itself. The cycle below still shows who owes what, and Autopilot still suggests reminders.",
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      llqaStat("Overdue", rows.filter((x) => x.cy.status === "overdue").length, sum(rows.filter((x) => x.cy.status === "overdue"), (x) => x.cy.owed.reduce((a, m) => a + m.left, 0)), rows.some((x) => x.cy.status === "overdue") ? c.danger : c.text),
+      llqaStat("Due now", rows.filter((x) => x.cy.status === "due" || x.cy.status === "partial").length, "within the " + LLQA_FEE_GRACE + " grace days", rows.some((x) => x.cy.status === "due") ? c.warn : c.text),
+      llqaStat("Collected — " + llqaMonthLabel(month), collected, "for this month's fees", c.success),
+      llqaStat("Paying students", rows.length, noFee ? noFee + " without a fee amount" : "all have a fee amount", noFee ? c.warn : c.text),
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 } },
+      llqaSearch(q, setQ, "Search name, parent, code, phone…"),
+      remind.length
+        ? llqaMini("💬 Remind " + remind.length, () =>
+            llqaOpen("queue", {
+              title: "Fee reminders",
+              items: remind.map((x) => ({
+                studentId: x.s.id,
+                student: x.s,
+                template: "feeDue",
+                extra: feeTxt(x),
+                key: x.cy.owed.length
+                  ? "fee:" + x.s.id + ":" + x.cy.owed[x.cy.owed.length - 1].ym + ":over" + Math.max(0, Math.floor((llqaDays(x.cy.owed[x.cy.owed.length - 1].over, today) || 0) / 7))
+                  : "fee:" + x.s.id + ":" + x.cy.current.ym + ":due",
+              })),
+            }),
+          { big: true, tone: "success", key: "r" })
+        : null,
+    ),
+    React.createElement("div", { style: { marginBottom: 10 } }, llqaChips(FILT.map(([k, l, t]) => [k, l, rows.filter(t).length]), f, setF)),
+    llqaCard(
+      shown.length === 0
+        ? React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, rows.length ? "Nobody here." : "No paying students with a fee amount yet. Trials join the cycle when they're enrolled as paid.")
+        : llqaTable(
+            ["Student", "Fee", "Due day", "Latest bill", "Owed", "Status", ""],
+            shown.map((x) => {
+              const s = x.s;
+              const cy = x.cy;
+              const digits = llqaPhone(s.phone, s.country);
+              const cur = cy.current;
+              return React.createElement(
+                "tr",
+                { key: s.id },
+                llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, s.name), llqaSmall([s.parent, s.code].filter(Boolean).join(" · ") + " · since " + llqaDateLabel(cy.start), null, "p")], "a"),
+                llqaTd(cy.amt + " " + cy.cur, "b", { whiteSpace: "nowrap" }),
+                llqaTd(
+                  llqaCanManage()
+                    ? llqaSel(String(cy.day), (v) => setDay(s, v), Array.from({ length: 28 }, (_, i) => [String(i + 1), "Day " + (i + 1)]), { key: "dd", title: "Fee due on this day each month" })
+                    : "Day " + cy.day,
+                  "c",
+                ),
+                llqaTd(
+                  cur
+                    ? [React.createElement("div", { key: "m" }, llqaMonthLabel(cur.ym) + " · due " + llqaDateLabel(cur.due)), llqaSmall(cur.paid ? "paid " + cur.paid + " " + cy.cur : "nothing paid yet", cur.paid ? c.success : null, "p")]
+                    : "starts " + llqaDateLabel(cy.due),
+                  "d",
+                ),
+                llqaTd(
+                  cy.left
+                    ? [React.createElement("div", { key: "l", style: { fontWeight: 700, color: cy.owed.length ? c.danger : c.text } }, cy.left + " " + cy.cur), cy.owed.length ? llqaSmall("overdue: " + cy.owed.map((m) => llqaMonthLabel(m.ym)).reverse().join(", "), c.danger, "o") : null]
+                    : React.createElement("span", { style: { color: c.success } }, "—"),
+                  "e",
+                ),
+                llqaTd([stPill(cy.status), s.fee !== llqaFeeTarget(cy) && LLQA_FEE_AUTO_SET.includes(s.fee) ? llqaSmall("Fee Status now: " + s.fee, c.warn, "fs") : null], "f"),
+                llqaTd(
+                  React.createElement(
+                    "div",
+                    { style: { display: "flex", gap: 5, justifyContent: "flex-end" } },
+                    llqaMini("💰 Record", () => llqaOpen("payment", { studentId: s.id }), { key: "p", tone: "success" }),
+                    cy.left ? llqaMini("💬", () => llqaOpen("message", { studentId: s.id, template: "feeDue", extra: feeTxt(x) }), { key: "m", disabled: !digits, title: "Fee reminder" }) : null,
+                    llqaMini("📞", () => llqaCall(digits, { studentId: s.id, name: s.name }), { key: "c", disabled: !digits, title: "Call" }),
+                  ),
+                  "g",
+                  { whiteSpace: "nowrap" },
+                ),
+              );
+            }),
+          ),
+    ),
+  );
+};
+
+/* ---------- Sales: parent requests & approvals ---------- */
+const LLQARequestsTab = (props) => {
+  const ctx = llqaCtx(props);
+  const [f, setF] = useState("open");
+  const [reply, setReply] = useState({});
+  const list = (ctx.parentRequests || []).filter(Boolean).slice().sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const FILT = [
+    ["open", "Waiting for you", (r) => r.status === "pending" && r.type !== "proposal"],
+    ["asked", "Waiting for parents", (r) => r.status === "pending" && r.type === "proposal"],
+    ["answered", "Answered by parents", (r) => r.type === "proposal" && r.status !== "pending"],
+    ["done", "Done", (r) => r.status !== "pending" && r.type !== "proposal"],
+    ["all", "All", () => true],
+  ];
+  const shown = list.filter((FILT.find((x) => x[0] === f) || FILT[0])[2]);
+  const answer = (r, decision) => {
+    const s = llqaFindStudent(r.studentId);
+    if (!s) return;
+    llqaOpen("message", { studentId: s.id, template: "requestReply", extra: { request: (LLQA_REQ_KINDS[r.type] || "request").toLowerCase() + (r.type === "leave" ? " " + llqaRangeLabel(r.from, r.to) : ""), decision } });
+  };
+  const decide = (r, status, how) => {
+    const note = String(reply[r.id] || "").trim();
+    if (r.type === "leave" && status === "approved") {
+      if (!llqaApproveLeave(r, note)) {
+        alert("This student is no longer in the list.");
+        return;
+      }
+    } else llqaDecide(r.id, { status, reply: note });
+    if (how !== false)
+      answer(r, (status === "approved" ? (r.type === "leave" ? "approved — no classes " + llqaRangeLabel(r.from, r.to) + ", and they continue as usual after that" : "done") : "we're sorry, we can't arrange this") + (note ? ". " + note : ""));
+  };
+  const card = (r) => {
+    const s = llqaFindStudent(r.studentId);
+    const digits = s ? llqaPhone(s.phone, s.country) : "";
+    const open = r.status === "pending";
+    const col = r.status === "approved" ? c.success : r.status === "declined" ? c.danger : r.type === "proposal" ? c.accent : c.warn;
+    return llqaCard(
+      [
+        React.createElement(
+          "div",
+          { key: "h", style: { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "flex-start" } },
+          React.createElement(
+            "div",
+            null,
+            React.createElement(
+              "div",
+              { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" } },
+              llqaPill(LLQA_REQ_KINDS[r.type] || r.type, col, null, "k"),
+              React.createElement("b", { key: "n", style: { color: c.text, fontSize: 13 } }, r.student + (r.parent ? " — " + r.parent : "")),
+              llqaPill(LLQA_REQ_SOURCES[r.source] || r.source || "—", c.textSec, null, "s"),
+            ),
+            React.createElement("div", { style: { color: c.text, fontSize: 12, marginTop: 6, whiteSpace: "pre-wrap" } }, llqaReqText(r)),
+            llqaSmall(
+              (r.type === "proposal" ? "Asked " : "Received ") + llqaAgo(r.createdAt) + (r.createdBy && r.createdBy !== "parent" ? " · by " + r.createdBy : "") +
+                (!open ? " · " + r.status + (r.decidedBy ? " by " + (r.decidedBy === "parent" ? "the parent" : r.decidedBy) : "") + " " + llqaAgo(r.decidedAt) : "") +
+                (r.reply ? " · “" + r.reply + "”" : ""),
+              null,
+              "m",
+            ),
+          ),
+          React.createElement("div", { style: { color: col, fontSize: 11, fontWeight: 700 } }, open ? (r.type === "proposal" ? "Waiting for the parent" : "Waiting for you") : r.status === "approved" ? "✓ Approved" : r.status === "declined" ? "✕ Declined" : "✓ Done"),
+        ),
+        open && r.type !== "proposal"
+          ? React.createElement("input", {
+              key: "r",
+              value: reply[r.id] || "",
+              onChange: (e) => setReply({ ...reply, [r.id]: e.target.value }),
+              placeholder: "Note for the parent (optional) — shown in their portal",
+              style: { ...llqaSelectStyle, width: "100%", boxSizing: "border-box", marginTop: 8, padding: "7px 10px" },
+            })
+          : null,
+        React.createElement(
+          "div",
+          { key: "b", style: { display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 } },
+          open && r.type === "leave" ? llqaMini("✓ Approve leave", () => decide(r, "approved"), { key: "a", tone: "success", solid: true }) : null,
+          open && r.type === "time" && s
+            ? llqaMini("📅 Change classes", () =>
+                llqaOpen("reschedule", {
+                  studentId: s.id,
+                  want: r.wantDay && r.wantTime ? { day: r.wantDay, time: r.wantTime } : null,
+                  onDone: () => llqaDecide(r.id, { status: "approved", reply: String(reply[r.id] || "").trim() }),
+                }),
+              { key: "t", tone: "success", solid: true })
+            : null,
+          open && (r.type === "message" || r.type === "time") ? llqaMini("✓ Done", () => decide(r, "approved", false), { key: "d", tone: "success" }) : null,
+          open && r.type !== "proposal" ? llqaMini("✕ Decline", () => decide(r, "declined"), { key: "x", tone: "danger" }) : null,
+          open && r.type === "proposal" && s
+            ? llqaMini("🔗 Send the link again", () =>
+                llqaOpen("message", { studentId: s.id, template: "approvalAsk", extra: { proposal: r.text, approvalLink: llqaApprovalLink(s, r.id) } }), { key: "l" })
+            : null,
+          open && r.type === "proposal" ? llqaMini("✓ Parent agreed (replied)", () => llqaDecide(r.id, { status: "approved", reply: "agreed on WhatsApp / call" }), { key: "pa", tone: "success" }) : null,
+          open && r.type === "proposal" ? llqaMini("✕ Parent said no", () => llqaDecide(r.id, { status: "declined", reply: "declined on WhatsApp / call" }), { key: "pd", tone: "danger" }) : null,
+          s ? llqaMini("💬", () => llqaOpen("message", { studentId: s.id, template: "custom" }), { key: "m", disabled: !digits, title: "Message" }) : null,
+          s ? llqaMini("📞", () => llqaCall(digits, { studentId: s.id, name: s.name }), { key: "c", disabled: !digits, title: "Call" }) : null,
+          !s ? llqaSmall("Student no longer in the list", c.warn, "ns") : null,
+        ),
+      ],
+      { key: r.id, border: open ? col + "66" : c.border },
+    );
+  };
+  return React.createElement(
+    "div",
+    null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 } },
+      llqaMini("＋ Log a request (WhatsApp / call)", () => llqaOpen("logRequest", {}), { big: true, tone: "accent", key: "l" }),
+      llqaMini("✉ Ask a parent to approve", () => llqaOpen("ask", {}), { big: true, tone: "success", key: "a" }),
+      React.createElement("div", { style: { color: c.textMuted, fontSize: 11 } }, "Parents can also send requests themselves in the Parent Portal → Requests."),
+    ),
+    React.createElement("div", { style: { marginBottom: 10 } }, llqaChips(FILT.map(([k, l, t]) => [k, l, list.filter(t).length]), f, setF)),
+    shown.length === 0 ? llqaCard(React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "Nothing here.")) : null,
+    ...shown.map(card),
+  );
+};
+
+/* ---------- Parent Portal: requests & approvals ---------- */
+const LLQAParentRequests = ({ stu, user }) => {
+  const ctx = LLQAApp.ctx;
+  const B = LLQABooking;
+  const isParent = user && user.role === "parent";
+  const kids = isParent ? (ctx.students || []).filter((s) => s && s.parentId && String(s.parentId).toUpperCase() === String(user.parentId || "").toUpperCase() && s.status !== "quit") : stu ? [stu] : [];
+  const [sid, setSid] = useState(stu ? String(stu.id) : kids[0] ? String(kids[0].id) : "");
+  const [type, setType] = useState("leave");
+  const [f, setF] = useState({ from: todayPK(), to: todayPK(), wantDay: "Mon", wantTime: "0500 PM", text: "" });
+  const [note, setNote] = useState({});
+  const [msg, setMsg] = useState("");
+  const s = kids.find((k) => String(k.id) === sid) || stu;
+  const ids = new Set(kids.map((k) => String(k.id)));
+  if (stu) ids.add(String(stu.id));
+  const mine = (ctx.parentRequests || []).filter((r) => r && ids.has(String(r.studentId))).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const asks = mine.filter((r) => r.type === "proposal" && r.status === "pending");
+  const linkReq = llqaLinkRequest();
+  const send = () => {
+    if (!s) return;
+    if (type === "leave" && (!f.from || (f.to && f.to < f.from))) {
+      setMsg("Please check the dates.");
+      return;
+    }
+    if (type === "message" && !f.text.trim()) {
+      setMsg("Please write your message.");
+      return;
+    }
+    const data = { type, text: f.text.trim(), source: isParent ? "portal" : "academy" };
+    if (type === "leave") Object.assign(data, { from: f.from, to: f.to || f.from });
+    if (type === "time") Object.assign(data, { wantDay: f.wantDay, wantTime: f.wantTime });
+    const rec = llqaAddRequest(s, data);
+    if (rec) {
+      setF({ ...f, text: "" });
+      setMsg("✓ Sent to the academy. You'll see the answer here.");
+    } else setMsg("Couldn't send — please try again or message the academy on WhatsApp.");
+  };
+  const box = (kids2, opt) => llqaCard(kids2, opt);
+  const status = (r) =>
+    r.status === "pending" ? ["Waiting", c.warn] : r.status === "approved" ? [r.type === "proposal" ? "You approved" : "Approved", c.success] : r.status === "declined" ? [r.type === "proposal" ? "You declined" : "Declined", c.danger] : [r.status, c.textSec];
+  return React.createElement(
+    "div",
+    null,
+    asks.length
+      ? box(
+          [
+            llqaH("✋ Needs your approval", "The academy asked you about the following. Tap Approve or Decline."),
+            ...asks.map((r) =>
+              React.createElement(
+                "div",
+                { key: r.id, style: { padding: "10px 12px", border: "1px solid " + (r.id === linkReq ? c.accent : c.border), borderRadius: 10, marginBottom: 8, background: r.id === linkReq ? c.accentBg : "transparent" } },
+                React.createElement("div", { style: { color: c.textSec, fontSize: 11, marginBottom: 4 } }, r.student + " · " + llqaAgo(r.createdAt)),
+                React.createElement("div", { style: { color: c.text, fontSize: 13, whiteSpace: "pre-wrap", marginBottom: 8 } }, r.text),
+                React.createElement("input", {
+                  value: note[r.id] || "",
+                  onChange: (e) => setNote({ ...note, [r.id]: e.target.value }),
+                  placeholder: "Add a note (optional)",
+                  style: { ...llqaSelectStyle, width: "100%", boxSizing: "border-box", marginBottom: 8, padding: "7px 10px" },
+                }),
+                React.createElement(
+                  "div",
+                  { style: { display: "flex", gap: 8 } },
+                  llqaMini("✓ Approve", () => llqaDecide(r.id, { status: "approved", reply: String(note[r.id] || "").trim() }), { key: "a", big: true, solid: true, tone: "success" }),
+                  llqaMini("✕ Decline", () => llqaDecide(r.id, { status: "declined", reply: String(note[r.id] || "").trim() }), { key: "d", big: true, tone: "danger" }),
+                ),
+              ),
+            ),
+          ],
+          { border: c.accent + "88", key: "asks" },
+        )
+      : null,
+    box(
+      [
+        llqaH("📨 Send a request to the academy", "Leave, a different class time, or anything else."),
+        kids.length > 1
+          ? React.createElement("div", { key: "k", style: { maxWidth: 320 } }, React.createElement(Inp, { label: "For", value: sid, onChange: setSid, options: kids.map((k) => ({ value: String(k.id), label: k.name })) }))
+          : null,
+        React.createElement(
+          "div",
+          { key: "t", style: { marginBottom: 10 } },
+          llqaChips([["leave", "🏖 Leave"], ["time", "🕐 Change class time"], ["message", "✉ Other"]], type, (k) => {
+            setType(k);
+            setMsg("");
+          }),
+        ),
+        type === "leave"
+          ? React.createElement(
+              "div",
+              { key: "l", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0 10px" } },
+              React.createElement(Inp, { label: "From", type: "date", value: f.from, onChange: (v) => setF({ ...f, from: v, to: f.to && f.to < v ? v : f.to }) }),
+              React.createElement(Inp, { label: "To", type: "date", value: f.to, onChange: (v) => setF({ ...f, to: v }) }),
+            )
+          : null,
+        type === "time"
+          ? React.createElement(
+              "div",
+              { key: "w", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0 10px" } },
+              React.createElement(Inp, { label: "Day (your day)", value: f.wantDay, onChange: (v) => setF({ ...f, wantDay: v }), options: B.DAYS }),
+              React.createElement(Inp, { label: "Time (your time)", value: f.wantTime, onChange: (v) => setF({ ...f, wantTime: v }), options: B.TIMES.map((t) => ({ value: t, label: B.timeLabel(t) })) }),
+            )
+          : null,
+        React.createElement("textarea", {
+          key: "x",
+          value: f.text,
+          onChange: (e) => setF({ ...f, text: e.target.value }),
+          rows: 3,
+          placeholder: type === "leave" ? "Reason (optional)" : type === "time" ? "Anything else we should know (optional)" : "Your message",
+          style: llqaTextStyle,
+        }),
+        React.createElement(
+          "div",
+          { key: "b", style: { display: "flex", gap: 8, alignItems: "center", marginTop: 8, flexWrap: "wrap" } },
+          llqaMini("Send request", send, { big: true, solid: true, tone: "accent", key: "s" }),
+          msg ? React.createElement("span", { key: "m", style: { color: /^✓/.test(msg) ? c.success : c.warn, fontSize: 12 } }, msg) : null,
+        ),
+      ],
+      { key: "new" },
+    ),
+    box(
+      [
+        llqaH("Your requests", mine.length ? "" : "Nothing yet."),
+        ...mine
+          .filter((r) => r.type !== "proposal" || r.status !== "pending")
+          .map((r) => {
+            const [label, col] = status(r);
+            return React.createElement(
+              "div",
+              { key: r.id, style: { display: "flex", justifyContent: "space-between", gap: 10, padding: "8px 0", borderTop: "1px solid " + c.border + "55" } },
+              React.createElement(
+                "div",
+                null,
+                React.createElement("div", { style: { color: c.text, fontSize: 12 } }, r.type === "proposal" ? "Academy asked: " + r.text : r.type === "message" ? "Message: " + r.text : llqaReqText(r)),
+                React.createElement("div", { style: { color: c.textMuted, fontSize: 10, marginTop: 2 } }, r.student + " · " + llqaAgo(r.createdAt) + (r.reply ? " · “" + r.reply + "”" : "")),
+              ),
+              React.createElement("div", { style: { color: col, fontSize: 11, fontWeight: 700, whiteSpace: "nowrap" } }, label),
+            );
+          }),
+      ],
+      { key: "hist" },
+    ),
+  );
+};
+
+// Approval requests from the academy waiting for this family.
+const llqaParentAskCount = (stu, user) => {
+  const ctx = LLQAApp.ctx;
+  const pid = user && user.role === "parent" ? String(user.parentId || "").toUpperCase() : "";
+  const ids = new Set(
+    (ctx.students || []).filter((s) => s && (pid ? String(s.parentId || "").toUpperCase() === pid : stu && String(s.id) === String(stu.id))).map((s) => String(s.id)),
+  );
+  if (stu) ids.add(String(stu.id));
+  return (ctx.parentRequests || []).filter((r) => r && r.type === "proposal" && r.status === "pending" && ids.has(String(r.studentId))).length;
+};
+const llqaParentAskBanner = (stu, user, tab, open) => {
+  const n = llqaParentAskCount(stu, user);
+  if (!n || tab === "requests") return null;
+  return React.createElement(
+    "div",
+    {
+      key: "llqa-ask",
+      onClick: open,
+      style: { cursor: "pointer", background: c.accentBg, border: "1px solid " + c.accent, borderRadius: 10, padding: "10px 14px", marginBottom: 12, color: c.text, fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 },
+    },
+    React.createElement("span", null, "✋ The academy is asking for your approval (" + n + "). "),
+    React.createElement("b", { style: { color: c.accent } }, "Open →"),
   );
 };

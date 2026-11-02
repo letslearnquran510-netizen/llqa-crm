@@ -18,9 +18,7 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
   const CURRENCIES = ["USD", "CAD", "GBP", "EUR", "AED", "PKR"];
   const pays = arPayments || [];
   const roster = (students || []).filter((s) => s.status !== "quit");
-  const monthPays = pays.filter(
-    (p) => String(p.paidDate || "").slice(0, 7) === month,
-  );
+  const monthPays = pays.filter((p) => llqaPayMonth(p) === month); // v66: month paid for (else month paid in)
   const num = (n) => Number(n || 0);
   const fmt = (n) =>
     num(n).toLocaleString(void 0, {

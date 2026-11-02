@@ -129,7 +129,7 @@ const TimetableMod = ({
               cell.a || "",
               cell.c || "",
               cell.l || "",
-              cell.t || "",
+              llqaCellTime(cell.t),
               (cell.f || []).join("; "),
             ]);
           } else if (cell === "F") {
@@ -396,7 +396,7 @@ const TimetableMod = ({
             "<br><small>" +
             escHTML(cell.c || "") +
             "</small><br><small>" +
-            escHTML(cell.t || "") +
+            escHTML(llqaCellTime(cell.t)) +
             "</small></td>";
         } else if (cell === "F") {
           html += "<td class=free>FREE</td>";
@@ -800,6 +800,8 @@ const TimetableMod = ({
           padding: 3,
           marginBottom: 12,
           width: "fit-content",
+          maxWidth: "100%",
+          flexWrap: "wrap", // v66
         },
       },
       [
@@ -808,6 +810,9 @@ const TimetableMod = ({
         ["smartfinder", "Smart Finder"],
         ["analytics", "Analytics"],
         ["today", "📋 Today's Classes"], // v65
+        ["leavecover", "🔁 Leave Cover"], // v66
+        ["holidays", "🗓 Holidays"],
+        ["scorecards", "🏆 Scorecards"],
       ]
         .filter(
           (tb) => !(user && user.role === "teacher") || tb[0] === "individual" || tb[0] === "today",
@@ -1700,7 +1705,7 @@ const TimetableMod = ({
                                   fontWeight: 500,
                                 },
                               },
-                              cell.t,
+                              llqaCellTime(cell.t), // v66
                             ),
                             cell.f &&
                               cell.f.length > 0 &&
@@ -2641,6 +2646,10 @@ const TimetableMod = ({
     mode === "smartfinder" && React.createElement(SmartFinder, null),
     mode === "today" &&
       React.createElement(LLQATodayClasses, { teachers: appTeachers, students, dailyProgress, arPayments }),
+    // v66
+    mode === "leavecover" && !(user && user.role === "teacher") && React.createElement(LLQALeaveCoverTab, null),
+    mode === "holidays" && !(user && user.role === "teacher") && React.createElement(LLQAHolidaysTab, null),
+    mode === "scorecards" && !(user && user.role === "teacher") && React.createElement(LLQAScorecardsTab, null),
     quickBook &&
       React.createElement(
         "div",
@@ -3517,7 +3526,7 @@ const TimetableMod = ({
                     flexWrap: "wrap",
                   },
                 },
-                cellModal.cell.t,
+                llqaCellTime(cellModal.cell.t), // v66
                 (() => {
                   const _state =
                     cellModal.cell.state ||
@@ -3596,7 +3605,7 @@ const TimetableMod = ({
               cellModal.cell.s === "Self"
                 ? ["Parent / Lead", cellModal.cell.l]
                 : null,
-              ["USA Time", cellModal.cell.t || "Not set"],
+              ["USA Time", llqaCellTime(cellModal.cell.t) || "Not set"],
               [
                 "Pakistan Time",
                 (() => {
