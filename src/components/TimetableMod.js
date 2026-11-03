@@ -823,6 +823,9 @@ const TimetableMod = ({
         ["leavecover", "🔁 Leave Cover"], // v66
         ["holidays", "🗓 Holidays"],
         ["scorecards", "🏆 Scorecards"],
+        ["makeup", "🧩 Make-ups"], // v67
+        ["teacherday", "🧑‍🏫 Teacher Day"],
+        ["capacity", "🌡 Capacity"],
       ]
         .filter(
           (tb) => !(user && user.role === "teacher") || tb[0] === "individual" || tb[0] === "today",
@@ -2660,6 +2663,10 @@ const TimetableMod = ({
     mode === "leavecover" && !(user && user.role === "teacher") && React.createElement(LLQALeaveCoverTab, null),
     mode === "holidays" && !(user && user.role === "teacher") && React.createElement(LLQAHolidaysTab, null),
     mode === "scorecards" && !(user && user.role === "teacher") && React.createElement(LLQAScorecardsTab, null),
+    // v67
+    mode === "makeup" && !(user && user.role === "teacher") && React.createElement(LLQAMakeupTab, null),
+    mode === "teacherday" && !(user && user.role === "teacher") && React.createElement(LLQATeacherDayTab, null),
+    mode === "capacity" && !(user && user.role === "teacher") && React.createElement(LLQACapacityTab, { shift }),
     quickBook &&
       React.createElement(
         "div",

@@ -254,7 +254,10 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
   };
 
   const items = rows.map(conv).filter(Boolean);
-  const ranked = isQuran ? B.rankTeachers(teachers, items, { filter: deptOk, own }) : [];
+  // v67: best match first (asked teacher gender, siblings' teacher, scorecard, lighter week, leave coming up)
+  const rank = (its) => (typeof llqaRankSmart === "function" ? llqaRankSmart(teachers, its, { filter: deptOk, own }, pf) : B.rankTeachers(teachers, its, { filter: deptOk, own }));
+  const why = (x) => (x && x.reasons ? " — match " + x.score + ": " + x.reasons.join(", ") : " (lightest timetable that is free for every slot)");
+  const ranked = isQuran ? rank(items) : [];
   const noShift = teachers.filter(
     (t) =>
       t.status !== "resigned" &&
@@ -269,13 +272,13 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
         setNotice("No teacher is free for every chosen slot — change a day or time.");
         return;
       }
-      commit(rows.map((r) => ({ ...r, teacher: ranked[0].t.name })), "✨ Best match: " + ranked[0].t.name + " (lightest timetable that is free for every slot).");
+      commit(rows.map((r) => ({ ...r, teacher: ranked[0].t.name })), "✨ Best match: " + ranked[0].t.name + why(ranked[0]) + ".");
       return;
     }
     commit(
       rows.map((r) => {
         const pk = conv(r);
-        const best = pk ? B.rankTeachers(teachers, [pk], { filter: deptOk, own })[0] : null;
+        const best = pk ? rank([pk])[0] : null;
         return best ? { ...r, teacher: best.t.name } : r;
       }),
       "✨ Best free teacher picked for each slot.",
@@ -337,6 +340,20 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
       React.createElement(
         "div",
         { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
+        // v67: the family's wish for the teacher, used by the matching
+        React.createElement(
+          "select",
+          {
+            key: "tg",
+            value: pf.teacherGender || "",
+            title: "Teacher the family asked for",
+            onChange: (e) => setPf({ ...pf, teacherGender: e.target.value }),
+            style: { padding: "5px 8px", background: c.bgDeep, border: "1px solid " + c.border, borderRadius: 14, color: c.text, fontSize: 11 },
+          },
+          React.createElement("option", { value: "" }, "Teacher: any"),
+          React.createElement("option", { value: "Female" }, "Teacher: female"),
+          React.createElement("option", { value: "Male" }, "Teacher: male"),
+        ),
         chip("✨ Auto-assign best teacher", autoAssign, false),
         chip("+ Add Slot", addRow, false),
       ),
@@ -352,9 +369,9 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
       const pk = conv(r);
       const rowTeachers =
         !isQuran && pk
-          ? B.rankTeachers(teachers, [pk], { filter: deptOk, own }).map((x, k) => ({
+          ? rank([pk]).map((x, k) => ({
               value: x.t.name,
-              label: (k === 0 ? "★ " : "") + x.t.name + " — " + x.load.booked + " booked",
+              label: (k === 0 ? "★ " : "") + x.t.name + " — " + (x.score != null ? "match " + x.score + " · " : "") + x.load.booked + " booked",
             }))
           : [];
       if (!isQuran && r.teacher && !rowTeachers.some((o) => o.value === r.teacher))
@@ -442,7 +459,7 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
           { value: "", label: ranked.length ? "-- Select Master Teacher (" + ranked.length + " free for every slot) --" : "-- No teacher is free for every slot --" },
           ...ranked.map((x, k) => ({
             value: x.t.name,
-            label: (k === 0 ? "★ " : "") + x.t.name + " — " + x.load.booked + " booked · " + x.load.free + " free" + (x.t.location ? " (" + x.t.location + ")" : ""),
+            label: (k === 0 ? "★ " : "") + x.t.name + " — " + (x.score != null ? "match " + x.score + " · " : "") + x.load.booked + " booked · " + x.load.free + " free" + (x.t.location ? " (" + x.t.location + ")" : ""),
           })),
         ],
       }),
