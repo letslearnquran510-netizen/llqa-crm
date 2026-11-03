@@ -66,7 +66,10 @@ const llqaClose = () => {
 };
 const llqaToast = (t) => {
   const id = "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-  LLQAUI.toasts = [...LLQAUI.toasts.filter((x) => !(t.key && x.key === t.key)), { ...t, id, at: Date.now() }].slice(-8);
+  const next = [...LLQAUI.toasts.filter((x) => !(t.key && x.key === t.key)), { ...t, id, at: Date.now() }];
+  // the newest 8; a sticky one (new version out) is never pushed out
+  const sticky = next.filter((x) => x.sticky);
+  LLQAUI.toasts = [...sticky, ...next.filter((x) => !x.sticky).slice(-Math.max(1, 8 - sticky.length))];
   llqaUIChanged();
   // short confirmations close by themselves; questions wait for the admin
   if (t.ttl) setTimeout(() => llqaDismiss(id), t.ttl);
@@ -467,7 +470,7 @@ const llqaClassesOn = (date, teachers, students, dailyProgress) => {
   return llqaCachedFor(
     teachers,
     "cls:" + date,
-    [students, dailyProgress, ctx.leaves, ctx.covers, ctx.calendar, n(teachers), n(students), n(dailyProgress), n(ctx.leaves), n(ctx.covers)],
+    [students, dailyProgress, ctx.leaves, ctx.covers, ctx.calendar, ctx.makeups, n(teachers), n(students), n(dailyProgress), n(ctx.leaves), n(ctx.covers), n(ctx.makeups)],
     () => llqaClassesOnRaw(date, teachers, students, dailyProgress),
   );
 };
@@ -536,6 +539,8 @@ const llqaClassesOnRaw = (date, teachers, students, dailyProgress) => {
       by: hasSub && !subAway ? cover.cover : c.teacher,
     });
   });
+  // v67: make-up classes booked for this date
+  if (typeof llqaMakeupItems === "function") llqaMakeupItems(date, tById, byId, dpx, holiday).forEach((x) => out.push(x));
   out.sort((a, b) => a.min - b.min || String(a.teacher).localeCompare(String(b.teacher)));
   return out;
 };
@@ -1445,8 +1450,9 @@ const LLQA_FRESH_MS = 12000;
 const LLQAToasts = () => {
   const now = Date.now();
   const all = LLQAUI.toasts;
-  const fresh = all.filter((t) => now - (t.at || 0) < LLQA_FRESH_MS);
-  const list = LLQAUI.open ? all : fresh.slice(-2);
+  // v67: a sticky notice (a new version is out) stays on screen until acted on
+  const fresh = all.filter((t) => t.sticky || now - (t.at || 0) < LLQA_FRESH_MS);
+  const list = LLQAUI.open ? all : [...fresh.filter((t) => t.sticky), ...fresh.filter((t) => !t.sticky).slice(-2)];
   const rest = all.length - list.length;
   useEffect(() => {
     const waits = fresh.map((t) => LLQA_FRESH_MS - (now - (t.at || 0))).filter((ms) => ms > 0);
@@ -1597,6 +1603,15 @@ const LLQAToasts = () => {
                 }, { key: "st", tone: "accent" }),
               ]
             : null,
+          // v67: any notice can carry its own buttons
+          Array.isArray(t.actions)
+            ? t.actions.map((a, i) =>
+                llqaMini(a.label, () => {
+                  llqaDismiss(t.id);
+                  a.run();
+                }, { key: "ac" + i, tone: a.tone || "accent" }),
+              )
+            : null,
           llqaMini("✕", () => llqaDismiss(t.id), { key: "x", title: "Dismiss" }),
         ),
       ),
@@ -1636,6 +1651,7 @@ const LLQAToasts = () => {
 // Returns true when a quick re-check is worth it.
 const llqaClockTick = (state) => {
   let again = false;
+  if (LLQAUI.stale) return false; // v67: a newer version is published — this tab leaves the work to it
   const job = (fn) => {
     try {
       if (fn()) again = true;
@@ -1790,12 +1806,15 @@ const LLQAHost = () => {
       } else quickN = 0;
     };
     const first = setTimeout(tick, 15000);
+    const vc = setTimeout(llqaVersionCheck, 60000); // v67
     const again = setInterval(() => {
       quickN = 0;
+      llqaVersionCheck();
       tick();
     }, 5 * 60 * 1000);
     return () => {
       clearTimeout(first);
+      clearTimeout(vc);
       clearInterval(again);
       if (quick) clearTimeout(quick);
     };
@@ -1818,6 +1837,8 @@ const LLQAHost = () => {
     k === "ask" ? React.createElement(LLQAAskModal, { key: m.key, ...d, onClose: llqaClose }) : null,
     k === "billing" ? React.createElement(LLQABillingModal, { key: m.key, ...d, onClose: llqaClose }) : null,
     k === "teacherLeave" ? React.createElement(LLQATeacherLeaveModal, { key: m.key, ...d, onClose: llqaClose }) : null,
+    // v67
+    k && typeof LLQA_MODALS3 !== "undefined" && LLQA_MODALS3[k] ? React.createElement(LLQA_MODALS3[k], { key: m.key, ...d, onClose: llqaClose }) : null,
     LLQAUI.toasts.length ? React.createElement(LLQAToasts, null) : null,
   );
 };
@@ -1977,10 +1998,13 @@ const llqaTabBadge = (k) => {
     // v66
     if (k === "autopilot") return llqaAutopilot().length;
     if (k === "fees")
-      return llqaCached("feeBadge", [ctx.students, ctx.arPayments, todayPK(), llqaLen(ctx.students), llqaLen(ctx.arPayments)], () =>
+      return llqaCached("feeBadge", [ctx.students, ctx.arPayments, ctx.rewards, todayPK(), llqaLen(ctx.students), llqaLen(ctx.arPayments)], () =>
         (ctx.students || []).filter((s) => (llqaFeeCycle(s, ctx.arPayments) || {}).status === "overdue").length,
       );
     if (k === "requests") return llqaPendingRequests(ctx.parentRequests).length;
+    // v67
+    if (k === "leads") return llqaLeadStats().due;
+    if (k === "winback") return llqaReferralRewards().filter((x) => x.state === "earned").length;
   } catch (e) {}
   return 0;
 };
@@ -1999,7 +2023,7 @@ const LLQASalesTab = (props) =>
               ? React.createElement(LLQAFeeCycleTab, props)
               : props.tab === "requests"
                 ? React.createElement(LLQARequestsTab, props)
-                : null;
+                : React.createElement(LLQASalesTab3, props); // v67
 
 /* ---------- Trial Pipeline ---------- */
 const LLQATrialCard = ({ x, ctx }) => {
@@ -2878,6 +2902,7 @@ const LLQATodayClasses = (props) => {
                           ? llqaPill(it.trial.stage === "complete" ? "Trial done" : "Trial " + it.trial.done + "/" + it.trial.target, it.trial.stage === "complete" ? c.warn : c.danger, null, "tr")
                           : null,
                         s ? null : llqaPill("not linked to a student", c.warn, null, "nl"),
+                        it.makeup ? llqaPill("🧩 Make-up" + (it.makeup.missedDate ? " for " + llqaDateLabel(it.makeup.missedDate) : ""), c.accent, null, "mk") : null,
                       ),
                     ], "s"),
                     td([
@@ -3473,7 +3498,10 @@ const llqaFeeCycle = (s, pays, today) => {
   // Anything above a bill's fee carries on to the next open bill.
   // The fee of a bill is what it was when its first payment was recorded (a
   // later fee change doesn't reopen a month already paid), else today's fee.
-  const feeOf = (b) => b.fee || amt;
+  // v67: referral rewards come off that month's bill
+  const offs = typeof llqaRewardOff === "function" ? llqaRewardOff(s.id) : null;
+  const offOf = (ym) => (offs && offs.get(ym)) || 0;
+  const feeOf = (b) => Math.max(0, Math.round(((b.fee || amt) - offOf(b.ym)) * 100) / 100);
   const isFull = (b) => b.other || b.paid >= feeOf(b) - 0.005;
   const put = (b, p, v) => {
     if (!b.fee && Number(p.feeAmount) > 0) b.fee = Number(p.feeAmount);
@@ -3524,7 +3552,7 @@ const llqaFeeCycle = (s, pays, today) => {
     const paid = Math.round(b.paid * 100) / 100;
     const full = b.other || paid >= fee - 0.005;
     const state = full ? "paid" : t >= over ? "overdue" : paid > 0 ? "partial" : t < b.due ? "upcoming" : "due";
-    return { ym: b.ym, due: b.due, over, paid, fee, left: full ? 0 : Math.round((fee - paid) * 100) / 100, state, pays: b.pays };
+    return { ym: b.ym, due: b.due, over, paid, fee, off: offOf(b.ym), left: full ? 0 : Math.round((fee - paid) * 100) / 100, state, pays: b.pays };
   });
   const current = months[0];
   const owed = months.filter((m) => m.state === "overdue");
@@ -3694,7 +3722,7 @@ const llqaAutopilot = (opt) => {
   if (Object.keys(o).some((k) => k !== "today")) return llqaAutopilotRaw(o);
   return llqaCached(
     "pilot",
-    [c0.students, c0.dailyProgress, c0.messageLog, c0.arPayments, c0.covers, c0.calendar, t, llqaLen(c0.students), llqaLen(c0.dailyProgress), llqaLen(c0.messageLog), llqaLen(c0.arPayments), llqaLen(c0.covers)],
+    [c0.students, c0.dailyProgress, c0.messageLog, c0.arPayments, c0.covers, c0.calendar, c0.rewards, c0.automation, t, llqaLen(c0.students), llqaLen(c0.dailyProgress), llqaLen(c0.messageLog), llqaLen(c0.arPayments), llqaLen(c0.covers), llqaLen(c0.rewards)],
     () => llqaAutopilotRaw(o),
   );
 };
@@ -3744,19 +3772,13 @@ const llqaAutopilotRaw = (opt) => {
       mine
         .filter((p) => /^absent/i.test(String(p.attended || "")) && p.date <= today && llqaDays(p.date, today) <= 2)
         .forEach((p) => add(s, "missedClass", "miss:" + s.id + ":" + p.date, "Absent on " + llqaDateLabel(p.date), { date: llqaDateLabel(p.date) }, 2));
+    // v67: step-by-step reminders — each stage once, by days since the oldest unpaid bill fell due
     const cy = llqaFeeCycle(s, ctx.arPayments, today);
-    if (cy && cy.current) {
-      const feeTxt = (x) => x + " " + cy.cur;
-      if (cy.owed.length) {
-        const oldest = cy.owed[cy.owed.length - 1];
-        const week = Math.max(0, Math.floor((llqaDays(oldest.over, today) || 0) / 7));
-        const owed = Math.round(cy.owed.reduce((a, m) => a + m.left, 0) * 100) / 100;
-        add(s, "feeDue", "fee:" + s.id + ":" + oldest.ym + ":over" + week, "Fee overdue since " + llqaDateLabel(oldest.over) + " (" + feeTxt(owed) + ")",
-          { fee: feeTxt(owed) + " (" + cy.owed.map((m) => llqaMonthLabel(m.ym)).reverse().join(", ") + ")" }, 1);
-      } else if (cy.current.state === "due" || cy.current.state === "partial") {
-        add(s, "feeDue", "fee:" + s.id + ":" + cy.current.ym + ":due", "Fee due " + llqaDateLabel(cy.current.due) + " (" + feeTxt(cy.current.left) + ")",
-          { fee: feeTxt(cy.current.left) + " for " + llqaMonthLabel(cy.current.ym) }, 2);
-      }
+    const fs = cy && cy.current ? llqaFeeStage(s, cy, today) : null;
+    if (fs && !s.feeHold) {
+      add(s, fs.tpl, fs.key,
+        fs.name + " (" + (fs.days ? fs.days + " day" + (fs.days === 1 ? "" : "s") + " since " : "due ") + llqaDateLabel(fs.oldest.due) + "): " + fs.owed + " " + cy.cur,
+        { fee: llqaFeeText(fs, cy), deadline: llqaDateLabel(llqaAddDays(today, 3)), stage: fs.n }, fs.n >= 2 ? 1 : 2);
     }
     if (booked && !away)
       soon.forEach((d) =>
@@ -3776,6 +3798,8 @@ const llqaAutopilotRaw = (opt) => {
     if (risk && risk.level === "high" && (!lastCheck || llqaDays(llqaAtDay(lastCheck.at), today) >= 7))
       add(s, "checkIn", "risk:" + s.id + ":" + today, "At risk: " + risk.reasons.join(", "), null, 1);
   });
+  // v67: win-back for families who left, thank-yous for referral rewards
+  if (typeof llqaPilotMore === "function") llqaPilotMore(ctx, today, add, last);
   out.sort((a, b) => a.prio - b.prio || String(a.student.name).localeCompare(String(b.student.name)));
   // one message per family a day: brothers and sisters share a number
   const seen = new Set();
@@ -5040,7 +5064,13 @@ const LLQAFeeCycleTab = (props) => {
   const shown = rows
     .filter((x) => test(x) && (!ql || [x.s.name, x.s.parent, x.s.code, x.s.phone].some((v) => String(v || "").toLowerCase().includes(ql))))
     .sort((a, b) => order[a.cy.status] - order[b.cy.status] || String(a.cy.due).localeCompare(String(b.cy.due)));
-  const remind = shown.filter((x) => (x.cy.status === "overdue" || x.cy.status === "due" || x.cy.status === "partial") && llqaPhone(x.s.phone, x.s.country));
+  // v67: Remind sends what is due now — not a stage already sent, not a family on fee hold
+  const sentKeys = llqaLogIndex(ctx.messageLog).keys;
+  const remind = shown.filter((x) => {
+    if (!(x.cy.status === "overdue" || x.cy.status === "due" || x.cy.status === "partial") || !llqaPhone(x.s.phone, x.s.country) || x.s.feeHold) return false;
+    const fs = typeof llqaFeeStage === "function" ? llqaFeeStage(x.s, x.cy, today) : null;
+    return !fs || !sentKeys.has(fs.key);
+  });
   const setDay = (s, v) => {
     const d = Math.min(28, Math.max(1, parseInt(v, 10) || 1));
     const fields = { billDay: d };
@@ -5082,15 +5112,13 @@ const LLQAFeeCycleTab = (props) => {
         ? llqaMini("💬 Remind " + remind.length, () =>
             llqaOpen("queue", {
               title: "Fee reminders",
-              items: remind.map((x) => ({
-                studentId: x.s.id,
-                student: x.s,
-                template: "feeDue",
-                extra: feeTxt(x),
-                key: x.cy.owed.length
-                  ? "fee:" + x.s.id + ":" + x.cy.owed[x.cy.owed.length - 1].ym + ":over" + Math.max(0, Math.floor((llqaDays(x.cy.owed[x.cy.owed.length - 1].over, today) || 0) / 7))
-                  : "fee:" + x.s.id + ":" + x.cy.current.ym + ":due",
-              })),
+              // v67: each family gets the message of their stage (once per stage)
+              items: remind.map((x) => {
+                const fs = llqaFeeStage(x.s, x.cy, today);
+                return fs
+                  ? { studentId: x.s.id, student: x.s, template: fs.tpl, extra: { fee: llqaFeeText(fs, x.cy), deadline: llqaDateLabel(llqaAddDays(today, 3)) }, key: fs.key }
+                  : { studentId: x.s.id, student: x.s, template: "feeDue", extra: feeTxt(x) };
+              }),
             }),
           { big: true, tone: "success", key: "r" })
         : null,
@@ -5106,6 +5134,12 @@ const LLQAFeeCycleTab = (props) => {
               const cy = x.cy;
               const digits = llqaPhone(s.phone, s.country);
               const cur = cy.current;
+              const fs = llqaFeeStage(s, cy, today); // v67
+              const sentN = fs ? llqaFeeStageSent(s, fs.oldest.ym) : 0;
+              // v67: referral rewards — on a bill, or waiting for the next one
+              const offMap = typeof llqaRewardOff === "function" ? llqaRewardOff(s.id) : null;
+              const oldestYm = cy.months.length ? cy.months[cy.months.length - 1].ym : "";
+              const offs = offMap ? [...offMap.entries()].filter(([ym, v]) => v > 0 && ym >= oldestYm).sort((a, b) => a[0].localeCompare(b[0])).map(([ym, off]) => ({ ym, off })) : cy.months.filter((m) => m.off > 0);
               return React.createElement(
                 "tr",
                 { key: s.id },
@@ -5129,17 +5163,34 @@ const LLQAFeeCycleTab = (props) => {
                 ),
                 llqaTd(
                   cy.left
-                    ? [React.createElement("div", { key: "l", style: { fontWeight: 700, color: cy.owed.length ? c.danger : c.text } }, cy.left + " " + cy.cur), cy.owed.length ? llqaSmall("overdue: " + cy.owed.map((m) => llqaMonthLabel(m.ym)).reverse().join(", "), c.danger, "o") : null]
-                    : React.createElement("span", { style: { color: c.success } }, "—"),
+                    ? [React.createElement("div", { key: "l", style: { fontWeight: 700, color: cy.owed.length ? c.danger : c.text } }, cy.left + " " + cy.cur), cy.owed.length ? llqaSmall("overdue: " + cy.owed.map((m) => llqaMonthLabel(m.ym)).reverse().join(", "), c.danger, "o") : null, offs.length ? llqaSmall("🎁 " + offs.map((m) => m.off + " off " + llqaMonthLabel(m.ym)).join(", "), c.success, "rw") : null]
+                    : [React.createElement("span", { key: "d", style: { color: c.success } }, "—"), offs.length ? llqaSmall("🎁 " + offs.map((m) => m.off + " off " + llqaMonthLabel(m.ym)).join(", "), c.success, "rw") : null],
                   "e",
                 ),
-                llqaTd([stPill(cy.status), s.fee !== llqaFeeTarget(cy) && LLQA_FEE_AUTO_SET.includes(s.fee) ? llqaSmall("Fee Status now: " + s.fee, c.warn, "fs") : null], "f"),
+                llqaTd([
+                  stPill(cy.status),
+                  s.fee !== llqaFeeTarget(cy) && LLQA_FEE_AUTO_SET.includes(s.fee) ? llqaSmall("Fee Status now: " + s.fee, c.warn, "fs") : null,
+                  // v67: reminder stage and what was sent
+                  fs ? llqaSmall("Reminder " + fs.n + " of 4 · " + fs.name + (sentN ? " · #" + sentN + " sent" : " · not sent yet"), fs.n >= 3 ? c.danger : c.warn, "st") : null,
+                  s.feeHold ? llqaSmall("⏸ classes paused (fee hold)", c.danger, "fh") : null,
+                ], "f"),
                 llqaTd(
                   React.createElement(
                     "div",
                     { style: { display: "flex", gap: 5, justifyContent: "flex-end" } },
                     llqaMini("💰 Record", () => llqaOpen("payment", { studentId: s.id }), { key: "p", tone: "success" }),
-                    cy.left ? llqaMini("💬", () => llqaOpen("message", { studentId: s.id, template: "feeDue", extra: feeTxt(x) }), { key: "m", disabled: !digits, title: "Fee reminder" }) : null,
+                    cy.left
+                      ? llqaMini("💬", () => llqaOpen("message", fs ? { studentId: s.id, template: fs.tpl, extra: { fee: llqaFeeText(fs, cy), deadline: llqaDateLabel(llqaAddDays(today, 3)) }, msgKey: fs.key } : { studentId: s.id, template: "feeDue", extra: feeTxt(x) }), { key: "m", disabled: !digits, title: fs ? "Reminder " + fs.n + ": " + fs.name : "Fee reminder" })
+                      : null,
+                    // v67: final stage — pause classes until paid; resume once paid
+                    llqaCanManage() && fs && fs.n >= 4 && !s.feeHold
+                      ? llqaMini("⏸ Pause", () => {
+                          if (confirm("Pause " + s.name + "'s classes until the fee is paid? The student goes on leave (Fee hold); the class times stay booked.")) llqaFeeHold(s);
+                        }, { key: "h", tone: "danger", title: "Final notice sent: pause classes until paid" })
+                      : null,
+                    llqaCanManage() && s.feeHold
+                      ? llqaMini("▶ Resume", () => llqaFeeResume(s), { key: "rs", tone: cy.status === "overdue" ? undefined : "success", title: cy.status === "overdue" ? "Still overdue — resume anyway" : "Paid — resume classes" })
+                      : null,
                     llqaMini("📞", () => llqaCall(digits, { studentId: s.id, name: s.name }), { key: "c", disabled: !digits, title: "Call" }),
                   ),
                   "g",
@@ -5582,4 +5633,2015 @@ const llqaApproveTeacherLeave = (id) => {
   ctx.setLeaves((prev) => (prev || []).map((x) => (String(x.id) === String(id) ? { ...x, status: "approved" } : x)));
   llqaLeaveApproved({ ...l, status: "approved" });
   return true;
+};
+
+/* ============================================================
+   v67 — Part 6: logic. Timetable: make-up classes, teachers'
+   daily schedules, smart teacher matching, capacity heatmap.
+   Sales: leads & follow-ups, revenue & churn, step-by-step fee
+   reminders, win-back and referral rewards. A tab running an
+   older version stops its automatic work.
+   ============================================================ */
+// Settings (settings/automation) with their defaults.
+const LLQA_V67_DEFAULTS = {
+  makeupPolicy: { teacherLeave: true, excused: true, absent: false, holiday: false },
+  makeupDays: 14,
+  feeStages: [0, 5, 12, 20],
+  winback: [14, 45, 90],
+  winbackOffer: "",
+  referralReward: 10,
+  fx: {},
+};
+const llqaOpt = (k) => {
+  const a = LLQAApp.ctx.automation || {};
+  return a[k] != null ? a[k] : LLQA_V67_DEFAULTS[k];
+};
+const llqaSetOpt = (patch) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setAutomation !== "function") return false;
+  ctx.setAutomation({ ...(ctx.automation || {}), ...patch });
+  return true;
+};
+const llqaPad2 = (n) => String(n).padStart(2, "0");
+const llqaHm = (min) => llqaPad2(Math.floor(min / 60)) + ":" + llqaPad2(min % 60);
+// "0500 PM" (as saved in schedules) from minutes after midnight
+const llqaUsTime = (min) => {
+  const h = Math.floor(min / 60);
+  let dh = h % 12;
+  if (dh === 0) dh = 12;
+  return llqaPad2(dh) + llqaPad2(min % 60) + " " + (h >= 12 ? "PM" : "AM");
+};
+const llqaZoneShort = (tz) => {
+  const z = llqaZoneLabel(tz) || "";
+  return z ? z + " time" : "family time";
+};
+
+/* ---------- message templates (v67) ---------- */
+(() => {
+  const fam = [
+    ["makeupBooked", "Make-up class booked",
+      "Assalamu Alaikum {parent}, {student}'s make-up class is booked for {makeupWhen} ({zone} time) with {teacher}. JazakAllah Khair!", "ctx"],
+    ["feeOverdue", "Fee reminder — overdue",
+      "Assalamu Alaikum {parent}, a reminder that {student}'s fee ({fee}) is now overdue. Please send it when you can and let us know. JazakAllah Khair!"],
+    ["feeFirm", "Fee reminder — second notice",
+      "Assalamu Alaikum {parent}, {student}'s fee ({fee}) is still unpaid. Please clear it this week so classes continue without a break. If anything is difficult, just reply and we'll work it out together. JazakAllah Khair!"],
+    ["feeFinal", "Fee reminder — final notice",
+      "Assalamu Alaikum {parent}, this is a final reminder: {student}'s fee ({fee}) is unpaid. If it isn't cleared by {deadline}, classes will be paused until it is. Please reply if you need help. JazakAllah Khair!"],
+    ["winBack1", "Win-back — we miss you",
+      "Assalamu Alaikum {parent}, we miss {student} at {academy}! If the timing or anything else didn't suit you, reply and we'll find a better fit. JazakAllah Khair!"],
+    ["winBack2", "Win-back — offer",
+      "Assalamu Alaikum {parent}, we'd love to have {student} back. {offer}Reply and we'll book a time that suits you. JazakAllah Khair!"],
+    ["winBack3", "Win-back — last check-in",
+      "Assalamu Alaikum {parent}, checking in one last time — {student} is always welcome back at {academy}. Reply anytime and we'll set it up. JazakAllah Khair!"],
+    ["referralThanks", "Referral reward — thank you",
+      "Assalamu Alaikum {parent}, JazakAllah Khair for referring {referred} to {academy}! As a thank-you, {reward} comes off {student}'s next fee.", "ctx"],
+    ["leadWelcome", "New inquiry — welcome",
+      "Assalamu Alaikum {parent}, thank you for your interest in {academy}! We offer a free trial with a qualified teacher at a time that suits you. Which days and times work best for {student}?", "ctx"],
+    ["leadFollowUp", "Inquiry — follow-up",
+      "Assalamu Alaikum {parent}, following up about {student}'s classes at {academy}. Shall we book the free trial? Just reply with a day and time that suit you.", "ctx"],
+  ];
+  const staff = [
+    ["teacherDay", "Teachers — your classes",
+      "Assalamu Alaikum {name}, your classes for {day} (Pakistan time):\n{classes}\n\nJazakAllah Khair!", "staff"],
+    ["makeupTeacher", "Teachers — make-up class",
+      "Assalamu Alaikum {name}, a make-up class is booked with you: {makeupPkt} (Pakistan time) — {student}. It is in your Today's Classes. JazakAllah Khair!", "staff"],
+  ];
+  const have = new Set(LLQA_TEMPLATES.map((x) => x[0]));
+  const at = LLQA_TEMPLATES.findIndex((x) => x[0] === "custom");
+  LLQA_TEMPLATES.splice(at < 0 ? LLQA_TEMPLATES.length : at, 0, ...fam.filter((x) => !have.has(x[0])));
+  staff.filter((x) => !have.has(x[0])).forEach((x) => LLQA_TEMPLATES.push(x));
+})();
+
+/* ---------- make-up classes ---------- */
+const LLQA_MAKEUP_WHY = { teacherLeave: "Teacher on leave", excused: "Excused absence", absent: "Absent", holiday: "Holiday", other: "Arranged" };
+const llqaMakeups = () => (LLQAApp.ctx.makeups || []).filter((m) => m && m.id);
+const llqaMakeupPolicy = () => ({ ...LLQA_V67_DEFAULTS.makeupPolicy, ...((LLQAApp.ctx.automation || {}).makeupPolicy || {}) });
+// Why a class is owed as a make-up (null = not owed).
+const llqaMissedWhy = (it, pol) => {
+  if (!it || !it.stu || it.quit || it.onLeave || it.makeup) return null;
+  if (it.holiday) return pol.holiday ? "holiday" : null;
+  if (it.off || (it.tLeave && !it.covered && !it.kept && !it.entry)) return pol.teacherLeave ? "teacherLeave" : null;
+  const a = String((it.entry && it.entry.attended) || "").toLowerCase();
+  if (a === "excused") return pol.excused ? "excused" : null;
+  if (a === "absent") return pol.absent ? "absent" : null;
+  return null;
+};
+// Classes owed as make-ups: the last 2 weeks (and classes already set "off"
+// for the next 2 days), minus those booked, done or waived.
+const llqaMakeupOwed = (today) => {
+  const ctx = LLQAApp.ctx;
+  const t = today || todayPK();
+  return llqaCached(
+    "owed:" + t,
+    [ctx.teachers, ctx.students, ctx.dailyProgress, ctx.covers, ctx.leaves, ctx.calendar, ctx.makeups, ctx.automation, llqaLen(ctx.dailyProgress), llqaLen(ctx.covers), llqaLen(ctx.makeups)],
+    () => {
+      const pol = llqaMakeupPolicy();
+      const back = Math.max(1, Math.min(60, Number(llqaOpt("makeupDays")) || 14));
+      const taken = new Set(llqaMakeups().map((m) => m.missedKey).filter(Boolean));
+      const out = [];
+      llqaDatesIn(llqaAddDays(t, -back), llqaAddDays(t, 2)).forEach((date) => {
+        const ahead = date >= t;
+        llqaClassesOn(date, ctx.teachers, ctx.students, ctx.dailyProgress).forEach((it) => {
+          if (ahead && !it.off) return; // later classes: only those already set "class off"
+          const why = llqaMissedWhy(it, pol);
+          if (!why) return;
+          const key = date + "|" + it.key;
+          if (taken.has(key)) return;
+          out.push({ key, date, it, why, stu: it.stu });
+        });
+      });
+      return out.sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.it.min - b.it.min);
+    },
+  );
+};
+// Teachers busy at each slot of a Pakistan date: their own classes (unless
+// covered by someone else, off, a holiday, or the student is away), the
+// classes they cover, and make-ups.
+const llqaBusyIndex = (date) => {
+  const ctx = LLQAApp.ctx;
+  return llqaCached(
+    "busy:" + date,
+    [ctx.teachers, ctx.students, ctx.dailyProgress, ctx.covers, ctx.makeups, ctx.leaves, ctx.calendar, llqaLen(ctx.makeups), llqaLen(ctx.covers)],
+    () => {
+      const busy = new Set();
+      llqaClassesOn(date, ctx.teachers, ctx.students, ctx.dailyProgress).forEach((x) => {
+        if (x.holiday || x.off || x.onLeave || x.quit) return;
+        if (x.covered) busy.add(String(x.cover.coverId) + "|" + x.slot);
+        else busy.add(String(x.teacherId) + "|" + x.slot);
+      });
+      return busy;
+    },
+  );
+};
+// The family's date, Timetable row (their weekday) and clock for a Pakistan date + slot.
+const llqaFamAt = (date, slot, tz) => {
+  const B = LLQABooking;
+  const ref = new Date(date + "T07:00:00Z");
+  const diff = B.offsetAt("Asia/Karachi", ref) - B.offsetAt(tz, ref);
+  const famMin0 = llqaSlotMin(slot) - diff;
+  const back = famMin0 < 0 ? -1 : famMin0 >= 1440 ? 1 : 0;
+  const famMin = ((famMin0 % 1440) + 1440) % 1440;
+  const famDate = llqaAddDays(date, back);
+  return { famDate, rowDay: llqaWeekday(famDate), famMin, famTime: B.fmt12(llqaHm(famMin)), time: llqaUsTime(famMin) };
+};
+// Times for a make-up: the next week, inside the teacher's own Timetable
+// (shift days and slots), when they are free, not on leave, not a holiday,
+// on a day the student has no class, between 8 AM and 9:30 PM for the family,
+// closest to the usual class time; the usual teacher first.
+const llqaMakeupOptions = (stu, opt) => {
+  const ctx = LLQAApp.ctx;
+  const B = LLQABooking;
+  const o = opt || {};
+  const today = o.today || todayPK();
+  const tz = (stu && (stu.tz || B.timezoneFor(stu.country, stu.state))) || "";
+  if (!stu) return { error: "Student not found.", list: [] };
+  if (!tz) return { error: "No time zone for " + stu.name + " — set their State / Province first.", list: [] };
+  const rows = llqaRowsOf(stu);
+  const usual = rows.map((r) => parseUSTime(r.time)).filter(Boolean).map((p) => p.hour * 60 + p.minute);
+  const own = (rows[0] && rows[0].teacher) || (stu.teacher && stu.teacher !== "Unassigned" ? stu.teacher : "");
+  const ok = llqaDeptOk(stu.course === "Subject" ? "Subject" : "Quran", Array.isArray(stu.specificSubject) ? stu.specificSubject : []);
+  const pool = (ctx.teachers || []).filter((t) => t && B.isActive(t) && ok(t) && (o.anyTeacher || !own || t.name === own));
+  const nowMin = o.nowMin != null ? o.nowMin : llqaNowPkMin();
+  const all = [];
+  for (let k = 0; k <= (o.days || 7); k++) {
+    const date = llqaAddDays(today, k);
+    if (llqaHolidayOn(date, "holiday")) continue;
+    const day = llqaClassesOn(date, ctx.teachers, ctx.students, ctx.dailyProgress);
+    // one class a day for a student (one class log a day)
+    if (day.some((x) => x.stu && String(x.stu.id) === String(stu.id) && !x.off && !x.holiday)) continue;
+    const busy = llqaBusyIndex(date);
+    pool.forEach((t) => {
+      if (llqaLeaveOn(t, date)) return;
+      const seen = new Set();
+      B.shiftsOf(t).forEach((sh) =>
+        TT_DATA[sh].slots.forEach((slot) => {
+          if (seen.has(slot)) return;
+          seen.add(slot);
+          if (k === 0 && llqaSlotMin(slot) <= nowMin + 60) return; // today: at least an hour ahead
+          if (busy.has(String(t.id) + "|" + slot)) return;
+          const f = llqaFamAt(date, slot, tz);
+          if (f.famMin < 480 || f.famMin > 1290) return;
+          const cell = B.rawCell(t, f.rowDay, slot);
+          if (cell === undefined || (typeof cell === "string" && cell !== "F")) return; // not a working slot
+          const dist = usual.length ? Math.min(...usual.map((u) => Math.abs(u - f.famMin))) : 0;
+          all.push({ date, slot, t, f, dist, own: !!own && t.name === own, tz });
+        }),
+      );
+    });
+  }
+  all.sort((a, b) => b.own - a.own || a.dist - b.dist || String(a.date).localeCompare(String(b.date)) || a.slot.localeCompare(b.slot));
+  // the best time on each day first, then the rest — a choice of days, not a wall of times
+  const pick = [];
+  const days = new Set();
+  all.forEach((x) => {
+    if (pick.length < 6 && !days.has(x.date)) {
+      days.add(x.date);
+      pick.push(x);
+    }
+  });
+  all.forEach((x) => {
+    if (pick.length < (o.max || 10) && !pick.includes(x)) pick.push(x);
+  });
+  return { list: pick.sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.slot.localeCompare(b.slot)), own, tz };
+};
+const llqaMakeupWhen = (m) => (m ? llqaDateLabel(m.famDate || m.date) + " at " + (m.famTime || "") : "");
+const llqaMakeupPkt = (m) => (m ? llqaDateLabel(m.date) + " " + LLQABooking.fmt12(m.slot) : "");
+// Book a make-up (checked again first: the Timetable may have changed).
+const llqaBookMakeup = (stu, x, missed, note) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setMakeups !== "function") return { error: "Make-ups can't be saved here." };
+  if (!stu || !x) return { error: "Pick a time first." };
+  if (llqaBusyIndex(x.date).has(String(x.t.id) + "|" + x.slot)) return { error: x.t.name + " is no longer free then — pick another time." };
+  if (llqaLeaveOn(x.t, x.date)) return { error: x.t.name + " is on leave that day." };
+  const u = ctx.user || {};
+  const rec = {
+    id: llqaUid("mk"),
+    sid: stu.id,
+    student: stu.name || "",
+    parent: stu.parent || "",
+    course: stu.course || "",
+    country: stu.country || "",
+    state: stu.state || "",
+    teacherId: x.t.id,
+    teacher: x.t.name,
+    date: x.date,
+    slot: x.slot,
+    rowDay: x.f.rowDay,
+    famDate: x.f.famDate,
+    famTime: x.f.famTime,
+    time: x.f.time,
+    tz: x.tz || stu.tz || "",
+    status: "booked",
+    reason: missed ? missed.why : "other",
+    missedDate: missed ? missed.date : "",
+    missedKey: missed ? missed.key : "",
+    note: note || "",
+    by: u.name || u.role || "",
+    at: new Date().toISOString(),
+  };
+  ctx.setMakeups((prev) => [...(prev || []), rec]);
+  return { rec };
+};
+const llqaSetMakeup = (id, patch) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setMakeups !== "function") return false;
+  ctx.setMakeups((prev) => (prev || []).map((m) => (m && m.id === id ? { ...m, ...patch } : m)));
+  return true;
+};
+// Not owed after all (e.g. the family didn't want one): never suggested again.
+const llqaWaiveMissed = (missed, why) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setMakeups !== "function" || !missed) return false;
+  const u = ctx.user || {};
+  const s = missed.stu || {};
+  ctx.setMakeups((prev) => [
+    ...(prev || []),
+    { id: llqaUid("mk"), sid: s.id, student: s.name || "", status: "waived", reason: missed.why, missedDate: missed.date, missedKey: missed.key, note: why || "", by: u.name || u.role || "", at: new Date().toISOString() },
+  ]);
+  return true;
+};
+// booked → done (class logged) / not logged (date passed) / upcoming
+const llqaMakeupState = (m, today) => {
+  if (!m) return "";
+  if (m.status !== "booked") return m.status;
+  const t = today || todayPK();
+  const logged = llqaDpIndex(LLQAApp.ctx.dailyProgress).byKey.get(String(m.sid) + "|" + m.date);
+  if (logged) return String(logged.attended || "").toLowerCase() === "absent" ? "absent" : "done";
+  return m.date < t ? "missing" : m.date === t ? "today" : "upcoming";
+};
+// Make-up classes as entries of a day's class list (same shape as Timetable classes).
+const llqaMakeupItems = (date, tById, byId, dpx, holiday) =>
+  ((LLQAApp.ctx && LLQAApp.ctx.makeups) || [])
+    .filter((m) => m && m.status === "booked" && m.date === date)
+    .map((m) => {
+      const stu = byId.get(String(m.sid)) || null;
+      const t = tById.get(String(m.teacherId)) || { id: m.teacherId, name: m.teacher };
+      const tLeave = llqaLeaveOn(t, date);
+      const rec = llqaCoverOn(date, m.teacherId, m.rowDay, m.slot);
+      const stale = !!rec && rec.leaveId != null && rec.leaveId !== "" && !(tLeave && String(tLeave.id) === String(rec.leaveId));
+      const cover = stale ? null : rec;
+      const hasSub = !!(cover && cover.coverId != null && cover.coverId !== "");
+      const subAway = hasSub && !!llqaLeaveOn(tById.get(String(cover.coverId)) || { id: cover.coverId, name: cover.cover }, date);
+      const country = (stu && stu.country) || m.country || "";
+      const onLeave =
+        !!stu &&
+        (stu.status === "leave"
+          ? (!stu.lvFrom || stu.lvFrom <= date) && (!stu.lvTo || stu.lvTo >= date)
+          : !!stu.lvPlanned && !!stu.lvFrom && stu.lvFrom <= date && (!stu.lvTo || stu.lvTo >= date));
+      return {
+        key: "mk|" + m.id,
+        teacherId: m.teacherId,
+        teacher: m.teacher,
+        rowDay: m.rowDay,
+        slot: m.slot,
+        min: llqaSlotMin(m.slot),
+        cell: {
+          s: m.student || (stu && stu.name) || "",
+          a: stu ? String(parseInt(stu.age, 10) || "") : "",
+          c: m.course || (stu && stu.course) || "",
+          sub: "",
+          l: m.parent || (stu && stu.parent) || "",
+          t: (m.time || "") + (country === "USA" ? " USA" : country === "Canada" ? " CA" : ""),
+          country,
+          state: (stu && stu.state) || m.state || "",
+          phone: (stu && stu.phone) || "",
+          f: [],
+          sid: m.sid,
+          day: m.rowDay,
+        },
+        tz: m.tz || "",
+        famTime: m.famTime || "",
+        stu,
+        entry: stu ? dpx.byKey.get(String(stu.id) + "|" + date) || null : null,
+        onLeave,
+        quit: !!stu && stu.status === "quit",
+        tLeave,
+        cover,
+        covered: hasSub && !subAway,
+        subAway,
+        off: !!(cover && cover.cancelled),
+        kept: !!(cover && cover.keep),
+        holiday,
+        by: hasSub && !subAway ? cover.cover : m.teacher,
+        makeup: m,
+      };
+    });
+
+/* ---------- teachers' daily schedule ---------- */
+// Each teacher's classes on a Pakistan date: their own, the ones they cover,
+// make-ups. Not: holidays, classes off, students away, classes someone else
+// covers. Classes still needing a teacher are listed apart.
+const llqaTeacherDay = (date) => {
+  const ctx = LLQAApp.ctx;
+  const items = llqaClassesOn(date, ctx.teachers, ctx.students, ctx.dailyProgress);
+  const tById = new Map((ctx.teachers || []).map((t) => [String(t.id), t]));
+  const holiday = llqaHolidayOn(date, "holiday");
+  const by = new Map();
+  const needs = [];
+  const add = (t, row) => {
+    const k = String(t.id);
+    if (!by.has(k)) by.set(k, { t, rows: [] });
+    by.get(k).rows.push(row);
+  };
+  if (!holiday)
+    items.forEach((it) => {
+      if (it.quit || it.onLeave || it.off) return;
+      const base = {
+        date,
+        min: it.min,
+        slot: it.slot,
+        student: it.cell.s,
+        course: (it.cell.c || "") + (it.cell.sub ? " · " + it.cell.sub : ""),
+        fam: it.famTime ? it.famTime + " " + llqaZoneShort(it.tz) : "",
+        it,
+      };
+      if (it.covered) {
+        const sub = tById.get(String(it.cover.coverId)) || { id: it.cover.coverId, name: it.cover.cover };
+        add(sub, { ...base, kind: "cover", note: "cover for " + it.teacher });
+        return;
+      }
+      if (it.tLeave && !it.kept) {
+        needs.push(base);
+        return;
+      }
+      const t = tById.get(String(it.teacherId)) || { id: it.teacherId, name: it.teacher };
+      add(t, { ...base, kind: it.makeup ? "makeup" : "own", note: it.makeup ? "make-up" : "" });
+    });
+  const list = [...by.values()]
+    .map((x) => ({ ...x, date, rows: x.rows.sort((a, b) => a.min - b.min) }))
+    .sort((a, b) => a.rows[0].min - b.rows[0].min || String(a.t.name).localeCompare(String(b.t.name)));
+  return { date, holiday, list, needs };
+};
+// Each teacher's next classes: from now for 24 hours. In the afternoon a Night
+// teacher gets tonight's classes (tomorrow's Pakistan date), not last night's.
+const llqaTeacherNext = (nowMin) => {
+  const today = todayPK();
+  const now = nowMin != null ? nowMin : llqaNowPkMin();
+  const tomorrow = llqaAddDays(today, 1);
+  const a = llqaTeacherDay(today);
+  const b = llqaTeacherDay(tomorrow);
+  const by = new Map();
+  const put = (day, keep) =>
+    day.list.forEach((x) => {
+      const rows = x.rows.filter((r) => keep(r.min));
+      if (!rows.length) return;
+      const k = String(x.t.id);
+      if (!by.has(k)) by.set(k, { t: x.t, rows: [] });
+      by.get(k).rows.push(...rows);
+    });
+  put(a, (m) => m >= now);
+  put(b, (m) => m < now);
+  const at = (r) => r.date + " " + llqaHm(r.min);
+  const list = [...by.values()]
+    .map((x) => ({ ...x, date: x.rows[0].date }))
+    .sort((p, q) => at(p.rows[0]).localeCompare(at(q.rows[0])) || String(p.t.name).localeCompare(String(q.t.name)));
+  const needs = [...a.needs.filter((r) => r.min >= now), ...b.needs.filter((r) => r.min < now)];
+  return { date: today, next: true, from: now, holiday: a.holiday && b.holiday ? a.holiday : null, list, needs };
+};
+const llqaRowDates = (rows) => [...new Set((rows || []).map((r) => r.date).filter(Boolean))];
+// One line per class; classes on two Pakistan dates (the next 24 hours) carry their date.
+const llqaDayLines = (rows) => {
+  const multi = llqaRowDates(rows).length > 1;
+  return rows
+    .map((r) => "• " + (multi ? llqaDateLabel(r.date) + " " : "") + LLQABooking.fmt12(r.slot) + " — " + r.student + (r.course ? " (" + r.course + ")" : "") + (r.fam ? " · " + r.fam : "") + (r.note ? " — " + r.note : ""))
+    .join("\n");
+};
+// "Tue 3 Nov" — for night classes (before 8 AM) also the night it is;
+// "Tue 3 Nov – Wed 4 Nov" when the classes are on two dates.
+const llqaDayTitle = (date, rows) => {
+  const ds = llqaRowDates(rows);
+  if (ds.length > 1) return llqaDateLabel(ds[0]) + " – " + llqaDateLabel(ds[ds.length - 1]);
+  const d = ds[0] || date;
+  return rows && rows.length && rows[0].min < 480
+    ? llqaDateLabel(d) + " (the night of " + llqaDateLabel(llqaAddDays(d, -1)).split(" ")[0] + "→" + llqaDateLabel(d).split(" ")[0] + ")"
+    : llqaDateLabel(d);
+};
+const llqaDayKey = (t, date) => "tday:" + t.id + ":" + date;
+// The WhatsApp queue for a day (a date, or llqaTeacherNext()): one message a
+// teacher, never twice (key = teacher + Pakistan date of their first class).
+const llqaTeacherDayItems = (dateOrDay, only) => {
+  const logx = llqaLogIndex(LLQAApp.ctx.messageLog);
+  const day = dateOrDay && typeof dateOrDay === "object" ? dateOrDay : llqaTeacherDay(dateOrDay);
+  return day.list
+    .filter((x) => (!only || only.includes(String(x.t.id))) && !logx.keys.has(llqaDayKey(x.t, x.date)))
+    .map((x) => llqaTeacherDayItem(x));
+};
+const llqaTeacherDayItem = (x, again) => ({
+  student: { name: x.t.name || "Teacher", parent: x.t.name || "", phone: x.t.phone || "", country: "Pakistan" },
+  template: "teacherDay",
+  key: again ? undefined : llqaDayKey(x.t, x.date),
+  extra: { name: x.t.name || "", day: llqaDayTitle(x.date, x.rows), classes: llqaDayLines(x.rows) },
+});
+
+/* ---------- smart teacher matching ---------- */
+// Asked-for teacher gender: the form's choice, else the notes / flags
+// ("female teacher", "female only").
+const llqaWantGender = (p) => {
+  if (!p) return "";
+  if (p.teacherGender === "Female" || p.teacherGender === "Male") return p.teacherGender;
+  const txt = [p.notes, ...(Array.isArray(p.f) ? p.f : [])].filter(Boolean).join(" ").toLowerCase();
+  if (/female\s*(teacher|only|ustadha)|lady teacher|\bustadha\b/.test(txt)) return "Female";
+  if (/(^|[^e])male\s*(teacher|only)/.test(txt)) return "Male";
+  return "";
+};
+// Brothers and sisters: same Parent ID, WhatsApp number or family group.
+const llqaFamilyOf = (p, students) => {
+  if (!p) return [];
+  const me = String(p.editingId != null ? p.editingId : p.id != null ? p.id : "");
+  const digits = llqaPhone(p.phone, p.country);
+  return (students || []).filter(
+    (s) =>
+      s && s.status !== "quit" && String(s.id) !== me &&
+      ((p.parentId && s.parentId === p.parentId) || (digits && llqaPhone(s.phone, s.country) === digits) || (p.family && s.family && s.family === p.family)),
+  );
+};
+// 0–100 with the reasons: asked gender, teaches a brother / sister, already
+// their teacher, last month's scorecard, a lighter timetable, leave coming up.
+const llqaMatchScore = (t, p, o) => {
+  const ctx = LLQAApp.ctx;
+  const today = todayPK();
+  const reasons = [];
+  let score = 50;
+  const want = llqaWantGender(p);
+  if (want) {
+    if (t.gender === want) {
+      score += 20;
+      reasons.push(want.toLowerCase() + " teacher, as asked");
+    } else {
+      score -= 40;
+      reasons.push("not the " + want.toLowerCase() + " teacher asked for");
+    }
+  }
+  const sib = ((o && o.family) || []).find((s) => s.teacher === t.name);
+  if (sib) {
+    score += 15;
+    reasons.push("teaches " + sib.name);
+  }
+  if (o && o.current && o.current === t.name) {
+    score += 10;
+    reasons.push("already the teacher");
+  }
+  // last month's scorecard counts, but no more than a lighter week does
+  const sc = o && o.scores ? o.scores.get(t.name) : null;
+  if (sc != null) {
+    score += Math.max(-10, Math.min(10, Math.round((sc - 70) / 3)));
+    reasons.push("scorecard " + sc);
+  }
+  const load = llqaLoadOf(t).booked;
+  score += Math.max(-10, Math.round(10 - load / 4));
+  reasons.push(load + " class" + (load === 1 ? "" : "es") + " a week");
+  const soon = llqaAddDays(today, 14);
+  const lv = (ctx.leaves || []).find(
+    (l) =>
+      l && l.from && String(l.status || "pending") !== "rejected" &&
+      ((l.teacherId != null && String(l.teacherId) === String(t.id)) || l.teacherName === t.name) &&
+      (l.to || l.from) >= today && l.from <= soon,
+  );
+  if (lv) {
+    score -= 10;
+    reasons.push("on leave " + llqaRangeLabel(lv.from, lv.to || lv.from));
+  }
+  return { score: Math.max(0, Math.min(100, score)), reasons };
+};
+// Teachers free for every slot, best match first (lighter week breaks ties).
+const llqaRankSmart = (teachers, items, opts, p) => {
+  const B = LLQABooking;
+  const ctx = LLQAApp.ctx;
+  const ranked = B.rankTeachers(teachers, items, opts);
+  if (!ranked.length) return ranked;
+  let scores = new Map();
+  try {
+    const month = llqaMonthAdd(todayPK().slice(0, 7), -1);
+    // a few classes say little: only teachers with 4+ classes last month
+    scores = new Map(llqaScorecards(month).filter((r) => r.score != null && r.scheduled >= 4).map((r) => [r.name, r.score]));
+  } catch (e) {}
+  const family = llqaFamilyOf(p || {}, ctx.students);
+  const cur = p && p.editingId != null ? llqaFindStudent(p.editingId) : opts && opts.own ? opts.own : null;
+  const current = cur && cur.teacher && cur.teacher !== "Unassigned" ? cur.teacher : "";
+  return ranked
+    .map((x) => ({ ...x, ...llqaMatchScore(x.t, p || {}, { scores, family, current }) }))
+    .sort((a, b) => b.score - a.score || a.load.booked - b.load.booked || String(a.t.name).localeCompare(String(b.t.name)));
+};
+
+/* ---------- capacity heatmap ---------- */
+const LLQA_ZONES = [
+  ["America/New_York", "New York"],
+  ["America/Chicago", "Chicago"],
+  ["America/Los_Angeles", "Los Angeles"],
+  ["America/Toronto", "Toronto"],
+  ["Europe/London", "London"],
+  ["Australia/Sydney", "Sydney"],
+  ["Asia/Dubai", "Dubai"],
+];
+// For one shift: free teachers and bookings at every day and slot, and the
+// waitlist families who want that time.
+const llqaCapacity = (sh) => {
+  const ctx = LLQAApp.ctx;
+  const B = LLQABooking;
+  return llqaCached("cap:" + sh, [ctx.teachers, ctx.waitlist, llqaLen(ctx.teachers), llqaLen(ctx.waitlist)], () => {
+    const sd = TT_DATA[sh];
+    if (!sd) return null;
+    const days = sh === "Weekend" ? ["Sat", "Sun"] : ["Mon", "Tue", "Wed", "Thu", "Fri"];
+    const byCode = new Map((ctx.teachers || []).map((t) => [t.code, t]));
+    const list = llqaShiftTeachers(sh).filter((t) => {
+      const a = byCode.get(t.code);
+      return !a || B.isActive(a);
+    });
+    const cells = {};
+    let free = 0;
+    let booked = 0;
+    days.forEach((d) =>
+      sd.slots.forEach((s) => {
+        const c0 = { free: [], booked: 0 };
+        list.forEach((t) => {
+          const v = (t.schedule[d] || {})[s];
+          if (v === undefined || v === "F") c0.free.push(t.name);
+          else if (v && typeof v === "object" && v.s) c0.booked++;
+        });
+        free += c0.free.length;
+        booked += c0.booked;
+        cells[d + "|" + s] = c0;
+      }),
+    );
+    const demand = {};
+    (ctx.waitlist || []).forEach((w) => {
+      if (!w || w.status !== "waiting") return;
+      const m = llqaWaitMatch(w, ctx.teachers);
+      if (!m.pk || !days.includes(m.pk.rowDay) || !sd.slots.includes(m.pk.slot)) return;
+      const k = m.pk.rowDay + "|" + m.pk.slot;
+      demand[k] = (demand[k] || 0) + 1;
+    });
+    return { sh, days, slots: sd.slots, cells, demand, teachers: list.length, free, booked };
+  });
+};
+// Family-friendly times with the most free teachers, for one family time zone.
+const llqaBestTimes = (cap, tz, n) => {
+  if (!cap) return [];
+  const B = LLQABooking;
+  const ref = new Date();
+  const diff = B.offsetAt("Asia/Karachi", ref) - B.offsetAt(tz, ref);
+  const out = [];
+  cap.days.forEach((d) =>
+    cap.slots.forEach((s) => {
+      const c0 = cap.cells[d + "|" + s];
+      if (!c0 || !c0.free.length) return;
+      const fam = (((llqaSlotMin(s) - diff) % 1440) + 1440) % 1440;
+      const weekend = d === "Sat" || d === "Sun";
+      if (weekend ? fam < 540 || fam > 1200 : fam < 900 || fam > 1260) return; // 9 AM–8 PM weekends, 3–9 PM weekdays
+      out.push({ day: d, slot: s, fam, famTime: B.fmt12(llqaHm(fam)), free: c0.free.length });
+    }),
+  );
+  return out.sort((a, b) => b.free - a.free || a.fam - b.fam).slice(0, n || 6);
+};
+
+/* ---------- leads & follow-ups ---------- */
+const LLQA_LEAD_SOURCES = ["Website", "WhatsApp", "Facebook", "Instagram", "Google", "Referral", "Phone call", "Walk-in", "Other"];
+const LLQA_LEAD_STAGES = [
+  ["new", "New"],
+  ["contacted", "Contacted"],
+  ["trial", "Trial booked"],
+  ["won", "Enrolled"],
+  ["lost", "Lost"],
+];
+const LLQA_LEAD_LOST = ["No reply", "Price / fee", "Timing", "Chose another academy", "Not ready yet", "Other"];
+const llqaLeads = () => (LLQAApp.ctx.leads || []).filter((l) => l && l.id);
+// The status follows the student once the trial is booked.
+const llqaLeadStatus = (l) => {
+  if (!l) return "new";
+  if (l.status === "lost") return "lost";
+  if (l.studentId != null && l.studentId !== "") {
+    const s = llqaFindStudent(l.studentId);
+    if (s) {
+      if (s.status === "quit") return "lost";
+      if (!llqaInTrial(s) && (s.fee === "paid" || s.fee === "overdue" || s.fee === "partial" || s.convertedAt)) return "won";
+      return "trial";
+    }
+    if (l.status === "won" || l.status === "trial") return l.status;
+  }
+  return l.status === "contacted" ? "contacted" : "new";
+};
+const llqaLeadDue = (l, today) => {
+  const st = llqaLeadStatus(l);
+  return (st === "new" || st === "contacted") && (!l.next || l.next <= (today || todayPK()));
+};
+const llqaLeadAsStudent = (l) => ({
+  id: "lead:" + l.id,
+  name: l.name || "your child",
+  parent: l.parent || "",
+  phone: l.phone || "",
+  country: l.country || "",
+  state: l.state || "",
+  course: l.course || "Quran",
+});
+const llqaSaveLead = (lead) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setLeads !== "function" || !lead) return null;
+  const u = ctx.user || {};
+  const rec = lead.id ? { ...lead } : { ...lead, id: llqaUid("ld"), createdAt: new Date().toISOString(), createdBy: u.name || u.role || "", status: lead.status || "new", log: lead.log || [] };
+  ctx.setLeads((prev) => [...(prev || []).filter((x) => x.id !== rec.id), rec]);
+  return rec;
+};
+const llqaLeadNote = (l, text, next, outcome) => {
+  if (!l) return null;
+  const u = LLQAApp.ctx.user || {};
+  const entry = { at: new Date().toISOString(), by: u.name || u.role || "", text: [outcome, text].filter(Boolean).join(" — ") };
+  return llqaSaveLead({ ...l, status: l.status === "new" || !l.status ? "contacted" : l.status, next: next || l.next || "", log: [...(Array.isArray(l.log) ? l.log : []), entry], lastAt: entry.at });
+};
+const llqaLeadLost = (l, reason) => llqaSaveLead({ ...l, status: "lost", lostReason: reason || "Other", lostAt: todayPK() });
+// Add Student filled in from a lead (the form books the trial).
+const llqaLeadForm = (l) => {
+  const rows = l.wantDay && l.wantTime ? [{ id: 1, day: l.wantDay, time: l.wantTime, teacher: "" }] : [{ id: 1, day: "Mon", time: "", teacher: "" }];
+  return {
+    name: l.name || "",
+    age: l.age || "",
+    gender: l.gender || "",
+    parent: l.parent || "",
+    country: l.country || "USA",
+    state: l.state || "",
+    course: l.course || "Quran",
+    specificSubject: [],
+    teacher: "",
+    fee: "trial",
+    time: "",
+    dor: todayPK(),
+    phone: l.phone || "",
+    email: l.email || "",
+    hoursPerWeek: "",
+    classType: "Trial",
+    fee_amount: "",
+    currency: "USD",
+    notes: l.notes || "",
+    family: "",
+    referredBy: l.source === "Referral" ? l.referredBy || "" : "",
+    schedule: rows,
+    _leadId: l.id,
+  };
+};
+// Called after Add Student saved a student made from a lead.
+const llqaLeadBooked = (leadId, stu) => {
+  const l = llqaLeads().find((x) => x.id === leadId);
+  if (!l || !stu) return null;
+  return llqaSaveLead({ ...l, status: "trial", studentId: stu.id, bookedAt: todayPK() });
+};
+const llqaLeadStats = (today) => {
+  const t = today || todayPK();
+  const all = llqaLeads();
+  const st = all.map((l) => llqaLeadStatus(l));
+  const since = (d, n) => !!d && String(d).slice(0, 10) >= llqaAddDays(t, -n);
+  const won90 = all.filter((l, i) => st[i] === "won" && since(l.bookedAt || l.createdAt, 90)).length;
+  const lost90 = all.filter((l, i) => st[i] === "lost" && since(l.lostAt || l.createdAt, 90)).length;
+  return {
+    open: st.filter((x) => x === "new" || x === "contacted").length,
+    due: all.filter((l) => llqaLeadDue(l, t)).length,
+    week: all.filter((l) => since(l.createdAt, 7)).length,
+    trial: st.filter((x) => x === "trial").length,
+    rate: won90 + lost90 ? Math.round((won90 / (won90 + lost90)) * 100) : null,
+  };
+};
+
+/* ---------- revenue & churn ---------- */
+const llqaPaidOn = (s) => (s && s.convertedAt ? String(s.convertedAt).slice(0, 10) : s && !llqaInTrial(s) && s.fee !== "trial" ? String(s.billStart || s.dor || "").slice(0, 10) : "");
+// Every month (last n): fees billed and collected per currency, new students,
+// quits, churn, trial results; this month's expected fees and what is owed.
+const llqaRevenue = (n) => {
+  const ctx = LLQAApp.ctx;
+  const today = todayPK();
+  return llqaCached("rev:" + (n || 6), [ctx.students, ctx.arPayments, ctx.rewards, today, llqaLen(ctx.students), llqaLen(ctx.arPayments)], () => {
+    const cur = today.slice(0, 7);
+    const yms = [];
+    for (let i = (n || 6) - 1; i >= 0; i--) yms.push(llqaMonthAdd(cur, -i));
+    const M = new Map(yms.map((ym) => [ym, { ym, billed: {}, collected: {}, newPaid: 0, quits: 0, quitPaid: 0, reasons: {}, trialsWon: 0, trialsLost: 0, startActive: 0 }]));
+    const addTo = (o, k, v) => {
+      o[k] = Math.round(((o[k] || 0) + v) * 100) / 100;
+    };
+    const students = ctx.students || [];
+    const pays = ctx.arPayments || [];
+    const owed = {};
+    const expected = {};
+    let paying = 0;
+    let trials = 0;
+    students.forEach((s) => {
+      if (!s) return;
+      const curcy = s.currency || "USD";
+      const quit = s.status === "quit";
+      const qd = quit ? String(s.qDate || "").slice(0, 10) : "";
+      // bills: a student who left is billed up to the day they left
+      const cy = llqaFeeCycle(quit ? { ...s, status: "active" } : s, pays, quit && qd ? (qd < today ? qd : today) : today);
+      if (cy) {
+        cy.months.forEach((m) => {
+          const row = M.get(m.ym);
+          if (row) addTo(row.billed, cy.cur, m.fee);
+        });
+        if (!quit && cy.left > 0) addTo(owed, cy.cur, cy.left);
+      }
+      if (!quit && llqaInTrial(s)) trials++;
+      if (!quit && !llqaInTrial(s) && Number(s.fee_amount) > 0 && s.fee !== "n/a") {
+        paying++;
+        addTo(expected, curcy, Number(s.fee_amount));
+      }
+      const start = llqaPaidOn(s);
+      if (start && !llqaExisting(s)) {
+        const row = M.get(start.slice(0, 7));
+        if (row) row.newPaid++;
+      }
+      if (quit && qd) {
+        const row = M.get(qd.slice(0, 7));
+        if (row) {
+          row.quits++;
+          if (start && start < qd) row.quitPaid++;
+          const r = s.qReason || "Not given";
+          row.reasons[r] = (row.reasons[r] || 0) + 1;
+          if (s.trialOutcome === "quit") row.trialsLost++;
+        }
+      }
+      if (s.convertedAt && s.trialOutcome === "converted") {
+        const row = M.get(String(s.convertedAt).slice(0, 7));
+        if (row) row.trialsWon++;
+      }
+      // paying at the start of each month (for churn)
+      yms.forEach((ym) => {
+        const first = ym + "-01";
+        if (start && start < first && (!qd || qd >= first)) M.get(ym).startActive++;
+      });
+    });
+    pays.forEach((p) => {
+      if (!p || p.type === "reward") return;
+      const row = M.get(String(p.paidDate || "").slice(0, 7));
+      if (row) addTo(row.collected, p.currency || "USD", Number(p.amount) || 0);
+    });
+    const months = yms.map((ym) => {
+      const r = M.get(ym);
+      return { ...r, churn: r.startActive ? Math.round((r.quitPaid / r.startActive) * 1000) / 10 : null, conv: r.trialsWon + r.trialsLost ? Math.round((r.trialsWon / (r.trialsWon + r.trialsLost)) * 100) : null };
+    });
+    return { months, owed, expected, paying, trials, cur };
+  });
+};
+// One total in USD when a rate is set for every currency (rates are the admin's).
+const llqaToUsd = (byCur, fx) => {
+  const rates = { USD: 1, ...(fx || llqaOpt("fx") || {}) };
+  let sum = 0;
+  for (const [k, v] of Object.entries(byCur || {})) {
+    const r = Number(rates[k]);
+    if (!(r > 0)) return null;
+    sum += v * r;
+  }
+  return Math.round(sum);
+};
+const llqaMoney = (byCur) =>
+  Object.entries(byCur || {})
+    .filter(([, v]) => v)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => v.toLocaleString("en-US", { maximumFractionDigits: 2 }) + " " + k)
+    .join(" · ") || "0";
+
+/* ---------- step-by-step fee reminders ---------- */
+const LLQA_FEE_TPL = ["feeDue", "feeOverdue", "feeFirm", "feeFinal"];
+const LLQA_FEE_STAGE_NAME = ["Due", "Overdue", "Second notice", "Final notice"];
+const llqaFeeStages = () => {
+  const s = llqaOpt("feeStages");
+  const v = Array.isArray(s) && s.length === 4 ? s.map((x) => Math.max(0, parseInt(x, 10) || 0)) : LLQA_V67_DEFAULTS.feeStages;
+  return v.map((x, i) => (i && x <= v[i - 1] ? v[i - 1] + 1 : x));
+};
+// Where a family is: days since the oldest unpaid bill fell due → stage 1–4.
+const llqaFeeStage = (s, cy, today) => {
+  const t = today || todayPK();
+  if (!s || !cy || !cy.months || !cy.months.length) return null;
+  const open = cy.months.filter((m) => m.left > 0 && m.due <= t);
+  if (!open.length) return null;
+  const oldest = open[open.length - 1];
+  const days = llqaDays(oldest.due, t) || 0;
+  let n = 0;
+  llqaFeeStages().forEach((d, i) => {
+    if (days >= d) n = i + 1;
+  });
+  if (!n) return null;
+  const owed = Math.round(open.reduce((a, m) => a + m.left, 0) * 100) / 100;
+  return { n, tpl: LLQA_FEE_TPL[n - 1], name: LLQA_FEE_STAGE_NAME[n - 1], days, oldest, owed, open, key: "fee:" + s.id + ":" + oldest.ym + ":s" + n };
+};
+// "95 USD (Sep 2026, Oct 2026)" / "45 USD for Nov 2026"
+const llqaFeeText = (fs, cy) =>
+  fs.owed + " " + cy.cur + (fs.open.length > 1 ? " (" + fs.open.map((m) => llqaMonthLabel(m.ym)).reverse().join(", ") + ")" : " for " + llqaMonthLabel(fs.oldest.ym));
+// The last stage already sent for that bill (0 = none).
+const llqaFeeStageSent = (s, ym) => {
+  const keys = llqaLogIndex(LLQAApp.ctx.messageLog).keys;
+  for (let n = 4; n >= 1; n--) if (keys.has("fee:" + s.id + ":" + ym + ":s" + n)) return n;
+  return 0;
+};
+// Final stage: pause classes until the fee is paid (slots stay booked).
+// The family's own leave (current or planned) is kept and comes back on resume.
+const LLQA_LV_KEEP = ["status", "lvType", "lvFrom", "lvTo", "lvReason", "lvPlanned"];
+const llqaFeeHold = (s) => {
+  const ctx = LLQAApp.ctx;
+  if (!s || typeof ctx.setStudents !== "function") return false;
+  const prev = {};
+  LLQA_LV_KEEP.forEach((k) => {
+    prev[k] = s[k] == null ? "" : s[k];
+  });
+  const fields = { status: "leave", lvType: "Fee hold", lvFrom: todayPK(), lvTo: "", lvReason: "Fee unpaid", feeHold: true, lvPlanned: false, feeHoldPrev: s.feeHold ? s.feeHoldPrev || null : prev };
+  ctx.setStudents((list) => (list || []).map((x) => (String(x.id) === String(s.id) ? { ...x, ...fields } : x)));
+  if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster([{ ...s, ...fields }]);
+  return true;
+};
+const llqaFeeResume = (s) => {
+  const ctx = LLQAApp.ctx;
+  if (!s || typeof ctx.setStudents !== "function") return false;
+  const today = todayPK();
+  const p = s.feeHoldPrev && typeof s.feeHoldPrev === "object" ? s.feeHoldPrev : null;
+  const none = { status: "active", lvType: "", lvFrom: "", lvTo: "", lvReason: "", lvPlanned: false };
+  const back =
+    p && p.status === "leave" && (!p.lvTo || p.lvTo >= today)
+      ? { status: "leave", lvType: p.lvType || "", lvFrom: p.lvFrom || "", lvTo: p.lvTo || "", lvReason: p.lvReason || "", lvPlanned: false }
+      : p && p.lvPlanned && p.lvFrom && (p.lvTo || p.lvFrom) >= today
+        ? { status: "active", lvType: p.lvType || "", lvFrom: p.lvFrom, lvTo: p.lvTo || "", lvReason: p.lvReason || "", lvPlanned: true }
+        : none;
+  const fields = { ...back, feeHold: false, feeHoldPrev: null };
+  ctx.setStudents((list) => (list || []).map((x) => (String(x.id) === String(s.id) ? { ...x, ...fields } : x)));
+  if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster([{ ...s, ...fields }]);
+  return true;
+};
+
+/* ---------- win-back ---------- */
+const llqaWinbackDays = () => {
+  const s = llqaOpt("winback");
+  const v = Array.isArray(s) && s.length === 3 ? s.map((x) => Math.max(1, parseInt(x, 10) || 1)) : LLQA_V67_DEFAULTS.winback;
+  return v.map((x, i) => (i && x <= v[i - 1] ? v[i - 1] + 1 : x));
+};
+// Which win-back message is due for a family who left (null = none).
+const llqaWinbackDue = (s, today) => {
+  if (!s || s.status !== "quit" || !s.qDate || s.noWinback) return null;
+  const days = llqaDays(String(s.qDate).slice(0, 10), today || todayPK());
+  if (days == null || days < 0) return null;
+  const st = llqaWinbackDays();
+  if (days > st[2] + 30) return null; // stop a month after the last one
+  let n = 0;
+  st.forEach((d, i) => {
+    if (days >= d) n = i + 1;
+  });
+  if (!n) return null;
+  return { n, tpl: "winBack" + n, key: "winback:" + s.id + ":" + n, days };
+};
+const llqaWinbackOffer = () => {
+  const o = String(llqaOpt("winbackOffer") || "").trim();
+  return o ? o.replace(/\s*$/, "") + " " : "";
+};
+// A family coming back: active again, billed from today (not for the months away).
+const llqaWinbackReturn = (s) => {
+  const ctx = LLQAApp.ctx;
+  if (!s || typeof ctx.setStudents !== "function") return false;
+  const today = todayPK();
+  const fields = { status: "active", returnedAt: today, wonBack: true, billStart: today, qDate: "", qReason: s.qReason ? "(returned) " + s.qReason : "" };
+  ctx.setStudents((prev) => (prev || []).map((x) => (String(x.id) === String(s.id) ? { ...x, ...fields } : x)));
+  if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster([{ ...s, ...fields }]);
+  return true;
+};
+const llqaNoWinback = (s, on) => {
+  const ctx = LLQAApp.ctx;
+  if (!s || typeof ctx.setStudents !== "function") return false;
+  ctx.setStudents((prev) => (prev || []).map((x) => (String(x.id) === String(s.id) ? { ...x, noWinback: !!on } : x)));
+  if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster([{ ...s, noWinback: !!on }]);
+  return true;
+};
+
+/* ---------- referral rewards ---------- */
+// Discounts applied to a student's bills: month → amount.
+const llqaRewardIndex = llqaMemo((rewards) => {
+  const m = new Map();
+  rewards.forEach((r) => {
+    if (!r || r.status !== "applied" || r.referrerId == null || !r.month) return;
+    const k = String(r.referrerId);
+    if (!m.has(k)) m.set(k, new Map());
+    const mm = m.get(k);
+    mm.set(r.month, Math.round(((mm.get(r.month) || 0) + (Number(r.amount) || 0)) * 100) / 100);
+  });
+  return m;
+});
+const llqaRewardOff = (sid) => llqaRewardIndex(LLQAApp.ctx.rewards || []).get(String(sid)) || null;
+// The family who referred: the linked student, else a student or parent whose
+// full name is "Referred by" or appears in it — one family only (a suggestion
+// to confirm before the reward is given).
+const llqaGuessReferrer = (r) => {
+  const ctx = LLQAApp.ctx;
+  if (!r) return null;
+  if (r.referrerId != null && r.referrerId !== "") return llqaFindStudent(r.referrerId);
+  const norm = (x) => String(x || "").toLowerCase().replace(/[^a-z0-9\u0600-\u06ff]+/g, " ").trim();
+  const by = norm(r.referredBy);
+  if (!by) return null;
+  const pool = (ctx.students || []).filter((s) => s && s.status !== "quit" && String(s.id) !== String(r.studentId));
+  const exact = pool.filter((s) => norm(s.name) === by || norm(s.parent) === by);
+  // "Mrs. Khan (Aisha)", "Aisha Khan's mother": a full name (2+ words) inside the text
+  const inText = (n) => n.split(" ").length >= 2 && (" " + by + " ").includes(" " + n + " ");
+  const hits = exact.length ? exact : pool.filter((s) => inText(norm(s.name)) || inText(norm(s.parent)));
+  // one family only (brothers and sisters share the reward); paying student first
+  const fams = new Set(hits.map((s) => String(s.parentId || llqaPhone(s.phone, s.country) || s.id)));
+  if (fams.size !== 1) return null;
+  return hits.find((s) => !llqaInTrial(s) && Number(s.fee_amount) > 0) || hits[0];
+};
+// Every referral that became a student, with where its reward stands.
+const llqaReferralRewards = () => {
+  const ctx = LLQAApp.ctx;
+  const rewards = (ctx.rewards || []).filter((x) => x && x.referralId);
+  const payIx = llqaPayIndex(ctx.arPayments);
+  return (ctx.salesReferrals || [])
+    .filter((r) => r && r.studentId != null && r.studentId !== "")
+    .map((r) => {
+      const referred = llqaFindStudent(r.studentId);
+      const referrer = llqaGuessReferrer(r);
+      const paying = !!referred && !llqaInTrial(referred) && (payIx.get(String(referred.id)) || []).length > 0;
+      const rec = rewards.find((x) => x.referralId === r.id) || null;
+      return { r, referred, referrer, linked: r.referrerId != null && r.referrerId !== "", paying, rec, state: rec ? rec.status : paying ? (referrer ? "earned" : "noReferrer") : "waiting" };
+    });
+};
+// Apply a reward: it comes off the referrer's next bill that isn't paid.
+const llqaApplyReward = (x, amount) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setRewards !== "function" || !x || !x.referrer) return null;
+  const s = x.referrer;
+  const cy = llqaFeeCycle(s, ctx.arPayments);
+  const month = cy ? llqaFeeNextMonth(cy) : todayPK().slice(0, 7);
+  const u = ctx.user || {};
+  const rec = {
+    id: llqaUid("rw"),
+    referralId: x.r.id,
+    referrerId: s.id,
+    referrer: s.name || "",
+    referredId: x.referred ? x.referred.id : x.r.studentId,
+    referred: x.referred ? x.referred.name : x.r.studentName || "",
+    amount: Math.round((Number(amount != null ? amount : llqaOpt("referralReward")) || 0) * 100) / 100,
+    currency: s.currency || "USD",
+    month,
+    status: "applied",
+    at: new Date().toISOString(),
+    by: u.name || u.role || "",
+  };
+  if (!(rec.amount > 0)) return null;
+  ctx.setRewards((prev) => [...(prev || []), rec]);
+  if (!x.linked && typeof ctx.setSalesReferrals === "function")
+    ctx.setSalesReferrals((prev) => (prev || []).map((r) => (r.id === x.r.id ? { ...r, referrerId: s.id } : r)));
+  return rec;
+};
+const llqaLinkReferrer = (ref, stuId) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setSalesReferrals !== "function" || !ref) return false;
+  ctx.setSalesReferrals((prev) => (prev || []).map((r) => (r.id === ref.id ? { ...r, referrerId: stuId } : r)));
+  return true;
+};
+
+/* ---------- Autopilot additions (v67) ---------- */
+// Family messages added to the day's follow-ups: fee reminder stages,
+// win-back, referral thank-yous.
+const llqaPilotMore = (ctx, today, add, last) => {
+  (ctx.students || []).forEach((s) => {
+    if (!s) return;
+    const wb = llqaWinbackDue(s, today);
+    if (wb) add(s, wb.tpl, wb.key, "Left " + llqaDateLabel(String(s.qDate).slice(0, 10)) + (s.qReason ? " (" + s.qReason + ")" : "") + " — win-back " + wb.n + " of 3", { offer: llqaWinbackOffer() }, 3);
+  });
+  (ctx.rewards || []).forEach((r) => {
+    if (!r || r.status !== "applied" || r.referrerId == null) return;
+    const s = llqaFindStudent(r.referrerId);
+    if (!s || s.status === "quit") return;
+    add(s, "referralThanks", "refthanks:" + r.id, "Referral reward: " + r.amount + " " + r.currency + " off " + llqaMonthLabel(r.month) + " for referring " + r.referred, { referred: r.referred || "", reward: r.amount + " " + r.currency }, 3);
+  });
+};
+
+/* ---------- an older version stops its automatic work ---------- */
+// Every 5 minutes: is a newer CRM published? Then this tab offers a reload and
+// stops its automatic work, so two versions never fight over the same records.
+const llqaVersionCheck = () => {
+  try {
+    const mine = window.__LLQA_VERSION__ || "";
+    if (!mine || LLQAUI.stale) return;
+    fetch(window.location.pathname + "?vc=" + Date.now(), { cache: "no-store" })
+      .then((r) => (r.ok ? r.text() : ""))
+      .then((html) => {
+        const m = /__LLQA_VERSION__\s*=\s*"([^"]+)"/.exec(html || "");
+        if (!m || m[1] === mine) return;
+        LLQAUI.stale = m[1];
+        llqaToast({
+          kind: "update",
+          key: "update",
+          sticky: true,
+          text: "⬆ A new version of the CRM is ready (" + m[1] + "). Reload to use it — this tab has stopped its automatic work until then.",
+          actions: [{ label: "⟳ Reload now", run: () => window.location.reload(), tone: "success" }],
+        });
+        llqaUIChanged();
+      })
+      .catch(() => {});
+  } catch (e) {}
+};
+
+/* ============================================================
+   v67 — Part 7: screens. Timetable: Make-ups, Teacher Day,
+   Capacity. Sales: Leads, Revenue & churn, Win-back &
+   referrals. Pop-ups: make-up finder, lead form, lead note.
+   ============================================================ */
+const llqaCheck = (on, label, onClick, key, disabled) =>
+  React.createElement(
+    "label",
+    { key: key || label, style: { display: "inline-flex", gap: 6, alignItems: "center", fontSize: 12, color: c.text, cursor: disabled ? "default" : "pointer", marginRight: 14 } },
+    React.createElement("input", { type: "checkbox", checked: !!on, disabled: !!disabled, onChange: onClick }),
+    label,
+  );
+const llqaInput = (value, onChange, opt) =>
+  React.createElement("input", {
+    key: (opt && opt.key) || "in",
+    type: (opt && opt.type) || "text",
+    value: value == null ? "" : value,
+    placeholder: (opt && opt.placeholder) || "",
+    onChange: (e) => onChange(e.target.value),
+    style: { padding: "6px 8px", background: c.bgDeep, border: "1px solid " + c.border, borderRadius: 7, color: c.text, fontSize: 12, width: (opt && opt.width) || 90, ...((opt && opt.style) || {}) },
+  });
+const llqaRow = (kids, key) => React.createElement("div", { key, style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } }, kids);
+
+/* ---------- Timetable: Make-ups ---------- */
+const LLQA_MK_STATE = {
+  upcoming: ["Upcoming", "accent"],
+  today: ["Today", "success"],
+  done: ["✓ Done", "success"],
+  absent: ["✗ Absent", "danger"],
+  missing: ["⚠ Not logged", "danger"],
+  cancelled: ["Cancelled", "textSec"],
+  waived: ["Not needed", "textSec"],
+};
+const llqaTellMakeup = (m) => {
+  const s = llqaFindStudent(m.sid);
+  llqaOpen("message", { studentId: m.sid, student: s || undefined, template: "makeupBooked", extra: { makeupWhen: llqaMakeupWhen(m), teacher: m.teacher }, msgKey: "mk:" + m.id });
+};
+const llqaTellMakeupTeacher = (m) => {
+  const t = (LLQAApp.ctx.teachers || []).find((x) => String(x.id) === String(m.teacherId)) || { name: m.teacher };
+  llqaOpen("queue", {
+    title: "Make-up — teacher",
+    items: [{ student: { name: t.name, parent: t.name, phone: t.phone || "", country: "Pakistan" }, template: "makeupTeacher", key: "mkt:" + m.id, extra: { name: t.name, makeupPkt: llqaMakeupPkt(m), student: m.student } }],
+  });
+};
+const LLQAMakeupTab = () => {
+  const ctx = LLQAApp.ctx;
+  const today = todayPK();
+  const manage = llqaCanManage();
+  const [f, setF] = useState("owed");
+  const [q, setQ] = useState("");
+  const owed = llqaMakeupOwed(today);
+  const all = llqaMakeups().filter((m) => m.status === "booked" || m.status === "cancelled");
+  const booked = all.filter((m) => m.status === "booked").sort((a, b) => String(a.date + a.slot).localeCompare(String(b.date + b.slot)));
+  const ahead = booked.filter((m) => m.date >= today);
+  const past = booked.filter((m) => m.date < today).reverse();
+  const pol = llqaMakeupPolicy();
+  const ql = q.trim().toLowerCase();
+  const hit = (txt) => !ql || String(txt || "").toLowerCase().includes(ql);
+  const month = today.slice(0, 7);
+  const doneMonth = past.filter((m) => m.date.slice(0, 7) === month && llqaMakeupState(m, today) === "done").length;
+  const notLogged = past.filter((m) => llqaMakeupState(m, today) === "missing").length;
+  const togg = (k) => manage && llqaSetOpt({ makeupPolicy: { ...pol, [k]: !pol[k] } });
+  const owedRows = owed.filter((x) => hit(x.stu && x.stu.name) || hit(x.it.teacher));
+  return React.createElement(
+    "div",
+    null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      llqaStat("Owed", owed.length, "missed classes to make up", owed.length ? c.warn : c.text),
+      llqaStat("Booked ahead", ahead.length, ahead.filter((m) => m.date === today).length + " today"),
+      llqaStat("Done — " + llqaMonthLabel(month), doneMonth, "make-ups taught and logged", c.success),
+      llqaStat("Not logged", notLogged, "past make-ups without a class log", notLogged ? c.danger : c.text),
+    ),
+    llqaCard([
+      llqaH("🧩 When is a make-up owed?", "Missed classes from the last " + (Number(llqaOpt("makeupDays")) || 14) + " days show up here by themselves. A make-up is a one-time class on a set date: it appears in Today's Classes and the teacher's day, and it is never booked over another class."),
+      React.createElement(
+        "div",
+        { key: "p" },
+        llqaCheck(pol.teacherLeave, "Teacher on leave / class off", () => togg("teacherLeave"), "tl", !manage),
+        llqaCheck(pol.excused, "Excused absence", () => togg("excused"), "ex", !manage),
+        llqaCheck(pol.absent, "Absent (not excused)", () => togg("absent"), "ab", !manage),
+        llqaCheck(pol.holiday, "Holidays", () => togg("holiday"), "ho", !manage),
+      ),
+    ]),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 } },
+      llqaChips([["owed", "Owed", owed.length], ["ahead", "Booked", ahead.length], ["past", "Past", past.length + all.filter((m) => m.status === "cancelled").length]], f, setF),
+      llqaSearch(q, setQ, "Search student or teacher…"),
+      manage ? llqaMini("＋ Arrange a make-up", () => llqaOpen("makeup", {}), { big: true, tone: "accent", key: "add" }) : null,
+    ),
+    f === "owed"
+      ? llqaCard(
+          owedRows.length === 0
+            ? React.createElement("div", { style: { color: c.success, fontSize: 12 } }, "✓ No make-ups owed.")
+            : llqaTable(
+                ["Student", "Missed class", "Why", ""],
+                owedRows.map((x) =>
+                  React.createElement(
+                    "tr",
+                    { key: x.key },
+                    llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, x.stu.name), llqaSmall(x.stu.parent || "", null, "p")], "a"),
+                    llqaTd([React.createElement("div", { key: "d" }, llqaDateLabel(x.date) + " · " + LLQABooking.fmt12(x.it.slot) + " PKT"), llqaSmall((x.it.famTime ? x.it.rowDay + " " + x.it.famTime + " family time · " : "") + x.it.teacher, null, "t")], "b"),
+                    llqaTd(llqaPill(LLQA_MAKEUP_WHY[x.why] || x.why, x.why === "teacherLeave" ? c.warn : c.accent), "c"),
+                    llqaTd(
+                      manage
+                        ? React.createElement(
+                            "div",
+                            { style: { display: "flex", gap: 5, justifyContent: "flex-end" } },
+                            llqaMini("🧩 Find a time", () => llqaOpen("makeup", { studentId: x.stu.id, missed: x }), { key: "f", tone: "success" }),
+                            llqaMini("Not needed", () => llqaWaiveMissed(x, "Not needed"), { key: "w", title: "Never suggest a make-up for this class" }),
+                          )
+                        : null,
+                      "d",
+                      { whiteSpace: "nowrap" },
+                    ),
+                  ),
+                ),
+              ),
+        )
+      : llqaCard(
+          (() => {
+            const list = (f === "ahead" ? ahead : [...past, ...all.filter((m) => m.status === "cancelled")]).filter((m) => hit(m.student) || hit(m.teacher));
+            if (!list.length) return React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, f === "ahead" ? "No make-ups booked ahead." : "No past make-ups.");
+            return llqaTable(
+              ["Student", "When (family)", "Pakistan time · teacher", "For", "", ""],
+              list.map((m) => {
+                const st = llqaMakeupState(m, today);
+                const d = LLQA_MK_STATE[st] || [st, "textSec"];
+                return React.createElement(
+                  "tr",
+                  { key: m.id },
+                  llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, m.student), llqaSmall(m.parent || "", null, "p")], "a"),
+                  llqaTd(llqaMakeupWhen(m) + " " + llqaZoneShort(m.tz), "b"),
+                  llqaTd([React.createElement("div", { key: "p" }, llqaMakeupPkt(m)), llqaSmall(m.teacher, null, "t")], "c"),
+                  llqaTd([llqaPill(LLQA_MAKEUP_WHY[m.reason] || "Arranged", c.textSec, null, "w"), m.missedDate ? llqaSmall("missed " + llqaDateLabel(m.missedDate), null, "md") : null], "d"),
+                  llqaTd(llqaPill(d[0], c[d[1]]), "e"),
+                  llqaTd(
+                    m.status === "booked" && manage
+                      ? React.createElement(
+                          "div",
+                          { style: { display: "flex", gap: 5, justifyContent: "flex-end" } },
+                          llqaMini("💬 Family", () => llqaTellMakeup(m), { key: "fm" }),
+                          llqaMini("💬 Teacher", () => llqaTellMakeupTeacher(m), { key: "tm" }),
+                          m.date >= today
+                            ? llqaMini("✕ Cancel", () => {
+                                if (confirm("Cancel " + m.student + "'s make-up on " + llqaMakeupWhen(m) + "? The missed class shows as owed again.")) llqaSetMakeup(m.id, { status: "cancelled", cancelledAt: new Date().toISOString(), missedKey: "" });
+                              }, { key: "x" })
+                            : null,
+                        )
+                      : null,
+                    "f",
+                    { whiteSpace: "nowrap" },
+                  ),
+                );
+              }),
+            );
+          })(),
+        ),
+  );
+};
+// Pop-up: pick a time for a make-up (for a missed class, or arranged by hand).
+const LLQAMakeupModal = ({ studentId, missed, onClose }) => {
+  const ctx = LLQAApp.ctx;
+  const [sid, setSid] = useState(studentId != null ? String(studentId) : "");
+  const [anyT, setAnyT] = useState(false);
+  const [sel, setSel] = useState(-1);
+  const [note, setNote] = useState("");
+  const [err, setErr] = useState("");
+  const s = sid ? llqaFindStudent(sid) : null;
+  const res = s ? llqaMakeupOptions(s, { anyTeacher: anyT }) : { list: [] };
+  const opts = (ctx.students || []).filter((x) => x && x.status !== "quit" && llqaRowsOf(x).length).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const book = () => {
+    const x = res.list[sel];
+    if (!x) {
+      setErr("Pick a time first.");
+      return;
+    }
+    const r = llqaBookMakeup(s, x, missed || null, note);
+    if (r.error) {
+      setErr(r.error);
+      return;
+    }
+    onClose();
+    const m = r.rec;
+    llqaToast({
+      kind: "makeup",
+      key: "mk-" + m.id,
+      text: "🧩 Make-up booked: " + m.student + " — " + llqaMakeupWhen(m) + " " + llqaZoneShort(m.tz) + " with " + m.teacher + " (" + llqaMakeupPkt(m) + " PKT).",
+      actions: [
+        { label: "💬 Tell the family", run: () => llqaTellMakeup(m), tone: "success" },
+        { label: "💬 Tell " + m.teacher, run: () => llqaTellMakeupTeacher(m) },
+      ],
+    });
+  };
+  return llqaShell(
+    "🧩 Make-up class" + (s ? " — " + s.name : ""),
+    missed ? "For the class missed on " + llqaDateLabel(missed.date) + " (" + (LLQA_MAKEUP_WHY[missed.why] || missed.why) + ")." : "A one-time class on a date you choose.",
+    React.createElement(
+      "div",
+      null,
+      studentId == null
+        ? React.createElement(Inp, { label: "Student", value: sid, onChange: (v) => { setSid(v); setSel(-1); setErr(""); }, options: opts.map((x) => ({ value: String(x.id), label: x.name + (x.teacher ? " — " + x.teacher : "") })) })
+        : null,
+      s
+        ? React.createElement(
+            "div",
+            null,
+            React.createElement(
+              "div",
+              { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 } },
+              React.createElement("div", { style: { color: c.textSec, fontSize: 11 } }, "Usual: " + (llqaRowsOf(s).map((r) => r.day + " " + LLQABooking.timeLabel(r.time)).join(", ") || "—") + " · " + (res.own || "no teacher yet")),
+              llqaCheck(anyT, "Any free teacher (not only " + (res.own || "the usual one") + ")", () => { setAnyT(!anyT); setSel(-1); }, "any"),
+            ),
+            res.error
+              ? React.createElement("div", { style: { color: c.danger, fontSize: 12 } }, res.error)
+              : res.list.length === 0
+                ? React.createElement("div", { style: { color: c.warn, fontSize: 12 } }, "No free time in the next week" + (anyT ? "." : " with " + (res.own || "the usual teacher") + " — tick “Any free teacher”."))
+                : React.createElement(
+                    "div",
+                    { style: { display: "flex", flexDirection: "column", gap: 6, maxHeight: 320, overflowY: "auto" } },
+                    res.list.map((x, i) =>
+                      React.createElement(
+                        "button",
+                        {
+                          key: x.date + x.slot + x.t.id,
+                          type: "button",
+                          onClick: () => {
+                            setSel(i);
+                            setErr("");
+                          },
+                          style: { textAlign: "left", padding: "8px 10px", borderRadius: 8, border: "1px solid " + (sel === i ? c.accent : c.border), background: sel === i ? c.accentBg : c.bgDeep, color: c.text, cursor: "pointer", fontSize: 12 },
+                        },
+                        React.createElement("b", null, llqaDateLabel(x.f.famDate) + " · " + x.f.famTime),
+                        " " + llqaZoneShort(x.tz) + " — " + llqaDateLabel(x.date) + " " + LLQABooking.fmt12(x.slot) + " PKT · " + x.t.name + (x.own ? " (usual teacher)" : ""),
+                      ),
+                    ),
+                  ),
+            React.createElement("div", { style: { marginTop: 10 } }, React.createElement(Inp, { label: "Note (optional)", value: note, onChange: setNote })),
+          )
+        : React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "Choose the student."),
+      err ? React.createElement("div", { style: { color: c.danger, fontSize: 12, marginTop: 8 } }, err) : null,
+    ),
+    [llqaMini("Cancel", onClose, { key: "x", big: true }), llqaMini("✓ Book make-up", book, { key: "ok", big: true, solid: true, tone: "success", disabled: !s || sel < 0 })],
+    { onClose, width: 640 },
+  );
+};
+
+/* ---------- Timetable: each teacher's day ---------- */
+const LLQATeacherDayTab = () => {
+  const ctx = LLQAApp.ctx;
+  const today = todayPK();
+  const manage = llqaCanManage();
+  // "next" = the next 24 hours (today's remaining classes and tonight's)
+  const [date, setDate] = useState("next");
+  const [open, setOpen] = useState({});
+  const next = date === "next";
+  const day = next ? llqaTeacherNext() : llqaTeacherDay(date);
+  const logx = llqaLogIndex(ctx.messageLog);
+  const unsent = day.list.filter((x) => !logx.keys.has(llqaDayKey(x.t, x.date)));
+  const sendable = unsent.filter((x) => llqaPhone(x.t.phone, "Pakistan"));
+  const classes = day.list.reduce((a, x) => a + x.rows.length, 0);
+  const title = next ? "Next 24 hours — from " + LLQABooking.fmt12(llqaHm(day.from)) + " today (Pakistan time)" : llqaDateLabel(date) + " · Pakistan time";
+  const when = (r) => (next && r.date !== today ? llqaDateLabel(r.date) + " " : "") + LLQABooking.fmt12(r.slot);
+  const base = next ? today : date;
+  const printAll = () => {
+    const w = window.open("", "_blank", "width=900,height=700");
+    if (!w) return;
+    const esc = (s) => String(s == null ? "" : s).replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[ch]);
+    w.document.write(
+      "<html><head><title>Teachers — " + esc(title) + "</title><style>body{font-family:sans-serif;font-size:12px}h2{margin:16px 0 4px}td{padding:3px 8px;border-bottom:1px solid #ddd}</style></head><body><h1>Classes — " + esc(title) + "</h1>" +
+        day.list.map((x) => "<h2>" + esc(x.t.name) + "</h2><table>" + x.rows.map((r) => "<tr><td>" + esc(when(r)) + "</td><td>" + esc(r.student) + "</td><td>" + esc(r.course) + "</td><td>" + esc(r.fam) + "</td><td>" + esc(r.note) + "</td></tr>").join("") + "</table>").join("") +
+        "</body></html>",
+    );
+    w.document.close();
+    w.focus();
+    w.print();
+  };
+  return React.createElement(
+    "div",
+    null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 10 } },
+      llqaMini("⏭ Next 24 h", () => setDate("next"), { key: "nx", tone: next ? "accent" : undefined, solid: next, title: "Today's remaining classes and tonight's" }),
+      llqaMini("◀", () => setDate(llqaAddDays(base, -1)), { key: "p", title: "Previous day" }),
+      llqaMini("Today", () => setDate(today), { key: "t", tone: date === today ? "accent" : undefined, solid: date === today }),
+      llqaMini("Tomorrow", () => setDate(llqaAddDays(today, 1)), { key: "tm", tone: date === llqaAddDays(today, 1) ? "accent" : undefined, solid: date === llqaAddDays(today, 1) }),
+      llqaMini("▶", () => setDate(llqaAddDays(base, 1)), { key: "n", title: "Next day" }),
+      React.createElement("div", { key: "d", style: { color: c.text, fontSize: 13, fontWeight: 700, marginLeft: 6 } }, title),
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      llqaStat("Teachers working", day.list.length, classes + " classes"),
+      llqaStat("Schedules not sent", unsent.length, unsent.length - sendable.length ? unsent.length - sendable.length + " without a usable number" : "by WhatsApp, one click each", unsent.length ? c.warn : c.success),
+      llqaStat("Covers", day.list.reduce((a, x) => a + x.rows.filter((r) => r.kind === "cover").length, 0), "classes taken for a teacher on leave"),
+      llqaStat("Need a teacher", day.needs.length, "teacher on leave, no cover yet", day.needs.length ? c.danger : c.text),
+    ),
+    day.holiday
+      ? llqaCard(React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "🗓 " + (day.holiday.name || "Holiday") + " — the academy is closed, no classes."))
+      : null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 } },
+      manage && sendable.length ? llqaMini("💬 Send " + sendable.length + " schedule" + (sendable.length === 1 ? "" : "s") + " — one click each", () => llqaOpen("queue", { title: "Teachers' schedules — " + (next ? "next 24 hours" : llqaDateLabel(date)), items: llqaTeacherDayItems(day) }), { big: true, solid: true, tone: "success", key: "s" }) : null,
+      day.list.length ? llqaMini("⎙ Print all", printAll, { big: true, key: "pr" }) : null,
+      day.needs.length ? llqaMini("🔁 Leave Cover", () => llqaGo("timetable", "leavecover"), { big: true, key: "lc", tone: "warn" }) : null,
+    ),
+    day.needs.length
+      ? llqaCard([
+          llqaH("⚠ Still need a teacher", "These classes are not in anyone's day yet."),
+          React.createElement("div", { key: "l", style: { fontSize: 12, color: c.danger, whiteSpace: "pre-wrap" } }, day.needs.map((r) => "• " + when(r) + " — " + r.student + " (" + r.it.teacher + " on leave)").join("\n")),
+        ])
+      : null,
+    day.list.length === 0 && !day.holiday
+      ? llqaCard(React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "No classes on this day."))
+      : day.list.map((x) => {
+          const sent = logx.keys.has(llqaDayKey(x.t, x.date));
+          const isOpen = open[x.t.id] != null ? open[x.t.id] : day.list.length <= 6;
+          return llqaCard(
+            [
+              React.createElement(
+                "div",
+                { key: "h", style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", cursor: "pointer" }, onClick: () => setOpen({ ...open, [x.t.id]: !isOpen }) },
+                React.createElement(
+                  "div",
+                  null,
+                  React.createElement("span", { style: { fontWeight: 800, color: c.text, fontSize: 13 } }, (isOpen ? "▾ " : "▸ ") + x.t.name),
+                  React.createElement("span", { style: { color: c.textSec, fontSize: 11, marginLeft: 8 } }, x.rows.length + " class" + (x.rows.length === 1 ? "" : "es") + " · " + when(x.rows[0]) + "–" + when(x.rows[x.rows.length - 1])),
+                ),
+                React.createElement(
+                  "div",
+                  { style: { display: "flex", gap: 5 }, onClick: (e) => e.stopPropagation() },
+                  sent ? llqaPill("✓ sent", c.success, null, "ok") : null,
+                  manage
+                    ? llqaMini(sent ? "💬 Send again" : "💬 Send", () =>
+                        llqaOpen("queue", {
+                          title: "Schedule — " + x.t.name,
+                          items: [llqaTeacherDayItem(x, sent)],
+                        }),
+                      { key: "s", tone: "success", disabled: !llqaPhone(x.t.phone, "Pakistan") })
+                    : null,
+                ),
+              ),
+              isOpen
+                ? React.createElement(
+                    "div",
+                    { key: "t", style: { marginTop: 8 } },
+                    llqaTable(
+                      ["Pakistan time", "Student", "Family time", ""],
+                      x.rows.map((r, i) =>
+                        React.createElement(
+                          "tr",
+                          { key: i },
+                          llqaTd(when(r), "a", { whiteSpace: "nowrap", fontWeight: 700 }),
+                          llqaTd([React.createElement("div", { key: "n" }, r.student), llqaSmall(r.course, null, "c")], "b"),
+                          llqaTd(r.fam || "—", "c"),
+                          llqaTd(r.kind === "cover" ? llqaPill("🔁 " + r.note, c.accent) : r.kind === "makeup" ? llqaPill("🧩 make-up", c.accent) : null, "d"),
+                        ),
+                      ),
+                    ),
+                  )
+                : null,
+            ],
+            { key: x.t.id },
+          );
+        }),
+  );
+};
+
+/* ---------- Timetable: capacity heatmap ---------- */
+const LLQACapacityTab = (props) => {
+  const B = LLQABooking;
+  const [sh, setSh] = useState((props && props.shift) || "Night");
+  const [cell, setCell] = useState(null);
+  const cap = llqaCapacity(sh);
+  if (!cap) return null;
+  const max = Math.max(1, ...Object.values(cap.cells).map((x) => x.free.length));
+  const col = (n) => (n === 0 ? c.danger : n <= Math.max(1, Math.round(max * 0.25)) ? c.warn : c.success);
+  const total = cap.free + cap.booked;
+  const pick = cell ? cap.cells[cell] : null;
+  const [pd, ps] = cell ? cell.split("|") : [];
+  const rowsByHour = cap.slots.map((s) => {
+    const n = cap.days.reduce((a, d) => a + cap.cells[d + "|" + s].free.length, 0);
+    return { s, n };
+  });
+  const busiest = rowsByHour.slice().sort((a, b) => a.n - b.n || a.s.localeCompare(b.s)).slice(0, 3);
+  return React.createElement(
+    "div",
+    null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 } },
+      llqaChips(Object.keys(TT_DATA).map((k) => [k, k]), sh, (k) => {
+        setSh(k);
+        setCell(null);
+      }),
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      llqaStat("Teachers", cap.teachers, sh + " shift"),
+      llqaStat("Booked", total ? Math.round((cap.booked / total) * 100) + "%" : "—", cap.booked + " of " + total + " teacher-slots a week"),
+      llqaStat("Free teacher-slots", cap.free, "a week, to sell", cap.free ? c.success : c.danger),
+      llqaStat("Waiting families", Object.values(cap.demand).reduce((a, n) => a + n, 0), "want a time in this shift", Object.keys(cap.demand).length ? c.warn : c.text),
+    ),
+    llqaCard([
+      llqaH("🌡 Free teachers at each time", "Number = teachers free then (Pakistan time, every week). Red = full · amber = nearly full · green = room. ⏳ = families on the waitlist for that time. Click a time to see who is free."),
+      React.createElement(
+        "div",
+        { key: "g", style: { overflowX: "auto" } },
+        React.createElement(
+          "table",
+          { style: { borderCollapse: "separate", borderSpacing: 3, fontSize: 11 } },
+          React.createElement(
+            "thead",
+            null,
+            React.createElement("tr", null, React.createElement("th", { style: { color: c.textSec, fontWeight: 600, padding: 4 } }, ""), cap.slots.map((s) => React.createElement("th", { key: s, style: { color: c.textSec, fontWeight: 600, padding: "4px 2px", whiteSpace: "nowrap", fontSize: 10 } }, B.fmt12(s).replace(":00", "").replace(" ", "")))),
+          ),
+          React.createElement(
+            "tbody",
+            null,
+            cap.days.map((d) =>
+              React.createElement(
+                "tr",
+                { key: d },
+                React.createElement("td", { style: { color: c.text, fontWeight: 700, padding: "4px 6px" } }, d),
+                cap.slots.map((s) => {
+                  const k = d + "|" + s;
+                  const x = cap.cells[k];
+                  const dem = cap.demand[k] || 0;
+                  const n = x.free.length;
+                  return React.createElement(
+                    "td",
+                    {
+                      key: s,
+                      title: d + " " + B.fmt12(s) + " PKT — " + n + " free" + (dem ? " · " + dem + " waiting" : ""),
+                      onClick: () => setCell(cell === k ? null : k),
+                      style: {
+                        minWidth: 34,
+                        height: 30,
+                        textAlign: "center",
+                        cursor: "pointer",
+                        borderRadius: 5,
+                        color: "#fff",
+                        fontWeight: 800,
+                        background: "color-mix(in srgb, " + col(n) + " " + (n === 0 ? 70 : Math.round(30 + (60 * n) / max)) + "%, transparent)",
+                        outline: cell === k ? "2px solid " + c.text : dem ? "2px solid " + c.warn : "none",
+                      },
+                    },
+                    n,
+                    dem ? React.createElement("div", { style: { fontSize: 9, fontWeight: 700 } }, "⏳" + dem) : null,
+                  );
+                }),
+              ),
+            ),
+          ),
+        ),
+      ),
+      pick
+        ? React.createElement(
+            "div",
+            { key: "c", style: { marginTop: 10, fontSize: 12, color: c.text } },
+            React.createElement("b", null, pd + " " + B.fmt12(ps) + " PKT: "),
+            pick.free.length ? pick.free.join(", ") + " free" : "everyone is booked",
+            React.createElement(
+              "div",
+              { style: { color: c.textSec, fontSize: 11, marginTop: 4 } },
+              "Family time: " + LLQA_ZONES.map(([tz, n]) => n + " " + B.fmt12(llqaHm(((llqaSlotMin(ps) - (B.offsetAt("Asia/Karachi", new Date()) - B.offsetAt(tz, new Date()))) % 1440 + 1440) % 1440))).join(" · "),
+            ),
+          )
+        : null,
+      React.createElement("div", { key: "b", style: { color: c.textSec, fontSize: 11, marginTop: 8 } }, "Fullest hours: " + busiest.map((x) => B.fmt12(x.s) + " (" + x.n + " free)").join(", ")),
+    ]),
+    llqaCard([
+      llqaH("🎯 Best times to offer new families", "Family-friendly hours (3–9 PM on weekdays, 9 AM–8 PM at weekends, their own clock) with the most free teachers in this shift."),
+      React.createElement(
+        "div",
+        { key: "z", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(230px, 1fr))", gap: 8 } },
+        LLQA_ZONES.map(([tz, n]) => {
+          const best = llqaBestTimes(cap, tz, 5);
+          return React.createElement(
+            "div",
+            { key: tz, style: { background: c.bgDeep, borderRadius: 8, padding: "8px 10px" } },
+            React.createElement("div", { style: { fontWeight: 700, color: c.text, fontSize: 12 } }, n),
+            best.length
+              ? best.map((x, i) => React.createElement("div", { key: i, style: { fontSize: 11, color: c.textSec } }, x.day + " " + x.famTime + " — " + x.free + " free"))
+              : React.createElement("div", { style: { fontSize: 11, color: c.textMuted } }, "No family-friendly time in this shift"),
+          );
+        }),
+      ),
+    ]),
+  );
+};
+
+/* ---------- Sales: leads ---------- */
+const LLQA_LEAD_COL = { new: "accent", contacted: "warn", trial: "purple", won: "success", lost: "textSec" };
+const LLQALeadsTab = (props) => {
+  const ctx = LLQAApp.ctx;
+  const today = todayPK();
+  const manage = llqaCanManage();
+  const [f, setF] = useState("due");
+  const [q, setQ] = useState("");
+  const leads = llqaLeads();
+  const st = new Map(leads.map((l) => [l.id, llqaLeadStatus(l)]));
+  const stats = llqaLeadStats(today);
+  const ql = q.trim().toLowerCase();
+  const FILT = [
+    ["due", "Follow up today", (l) => llqaLeadDue(l, today)],
+    ["new", "New", (l) => st.get(l.id) === "new"],
+    ["contacted", "Contacted", (l) => st.get(l.id) === "contacted"],
+    ["trial", "Trial booked", (l) => st.get(l.id) === "trial"],
+    ["won", "Enrolled", (l) => st.get(l.id) === "won"],
+    ["lost", "Lost", (l) => st.get(l.id) === "lost"],
+    ["all", "All", () => true],
+  ];
+  const test = (FILT.find((x) => x[0] === f) || FILT[0])[2];
+  const shown = leads
+    .filter((l) => test(l) && (!ql || [l.name, l.parent, l.phone, l.email, l.source, l.country, l.state].some((v) => String(v || "").toLowerCase().includes(ql))))
+    .sort((a, b) => String(a.next || "9999").localeCompare(String(b.next || "9999")) || String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  const due = leads.filter((l) => llqaLeadDue(l, today));
+  const dueSend = due.filter((l) => llqaPhone(l.phone, l.country));
+  const book = (l) => {
+    if (typeof props.openAdd === "function") props.openAdd(llqaLeadForm(l));
+  };
+  return React.createElement(
+    "div",
+    null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      llqaStat("Follow up today", stats.due, "new or contacted, follow-up date reached", stats.due ? c.warn : c.success),
+      llqaStat("Open leads", stats.open, stats.week + " new this week"),
+      llqaStat("Trial booked", stats.trial, "waiting to enrol"),
+      llqaStat("Conversion", stats.rate == null ? "—" : stats.rate + "%", "enrolled ÷ (enrolled + lost), 90 days", c.success),
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 } },
+      llqaSearch(q, setQ, "Search name, parent, phone, source…"),
+      manage ? llqaMini("＋ New lead", () => llqaOpen("lead", {}), { big: true, solid: true, tone: "accent", key: "n" }) : null,
+      manage && dueSend.length
+        ? llqaMini("💬 Follow up " + dueSend.length + " — one click each", () =>
+            llqaOpen("queue", {
+              title: "Leads — follow-ups",
+              items: dueSend.map((l) => ({ student: llqaLeadAsStudent(l), template: st.get(l.id) === "new" ? "leadWelcome" : "leadFollowUp", key: "lead:" + l.id + ":" + today })),
+            }),
+          { big: true, tone: "success", key: "q" })
+        : null,
+    ),
+    React.createElement("div", { style: { marginBottom: 10 } }, llqaChips(FILT.map(([k, l, t]) => [k, l, leads.filter(t).length]), f, setF)),
+    llqaCard(
+      shown.length === 0
+        ? React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, leads.length ? "Nobody here." : "No leads yet. Add every inquiry here (website, WhatsApp, calls): the CRM reminds you to follow up until it becomes a trial — or you mark it lost.")
+        : llqaTable(
+            ["Lead", "Source", "Status", "Next follow-up", "Last note", ""],
+            shown.map((l) => {
+              const s0 = st.get(l.id);
+              const digits = llqaPhone(l.phone, l.country);
+              const last = (Array.isArray(l.log) ? l.log : [])[(l.log || []).length - 1];
+              const late = llqaLeadDue(l, today) && l.next && l.next < today;
+              return React.createElement(
+                "tr",
+                { key: l.id },
+                llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, (l.name || "—") + (l.parent ? " · " + l.parent : "")), llqaSmall((digits ? "+" + digits : l.phone || "no phone") + " · " + [l.state, l.country].filter(Boolean).join(", ") + " · " + (l.course || "Quran") + " · added " + llqaDateLabel(String(l.createdAt || "").slice(0, 10)), digits ? null : c.warn, "p")], "a"),
+                llqaTd(l.source || "—", "b"),
+                llqaTd([llqaPill((LLQA_LEAD_STAGES.find((x) => x[0] === s0) || [s0, s0])[1], c[LLQA_LEAD_COL[s0]] || c.textSec, null, "s"), s0 === "lost" && l.lostReason ? llqaSmall(l.lostReason, null, "r") : null], "c"),
+                llqaTd(s0 === "new" || s0 === "contacted" ? React.createElement("span", { style: { color: late ? c.danger : llqaLeadDue(l, today) ? c.warn : c.text, fontWeight: late ? 700 : 400 } }, l.next ? llqaDateLabel(l.next) + (late ? " · late" : "") : "today") : "—", "d", { whiteSpace: "nowrap" }),
+                llqaTd(last ? [React.createElement("div", { key: "t", style: { fontSize: 11 } }, last.text || "—"), llqaSmall(llqaAgo(last.at) + (last.by ? " · " + last.by : ""), null, "w")] : React.createElement("span", { style: { color: c.textMuted, fontSize: 11 } }, "—"), "e", { maxWidth: 260 }),
+                llqaTd(
+                  manage
+                    ? React.createElement(
+                        "div",
+                        { style: { display: "flex", gap: 4, justifyContent: "flex-end", flexWrap: "wrap" } },
+                        llqaMini("💬", () => llqaOpen("message", { student: llqaLeadAsStudent(l), template: s0 === "new" ? "leadWelcome" : "leadFollowUp", msgKey: "lead:" + l.id + ":" + today }), { key: "m", disabled: !digits, title: "WhatsApp" }),
+                        llqaMini("📞", () => llqaCall(digits, { name: l.name || "", template: "call", key: "leadcall:" + l.id + ":" + today }), { key: "c", disabled: !digits, title: "Call" }),
+                        s0 === "new" || s0 === "contacted" ? llqaMini("✍ Note", () => llqaOpen("leadNote", { leadId: l.id }), { key: "n", tone: "accent" }) : null,
+                        s0 === "new" || s0 === "contacted" ? llqaMini("➜ Book trial", () => book(l), { key: "b", tone: "success", title: "Add Student opens filled in" }) : null,
+                        s0 === "trial" && l.studentId != null ? llqaMini("Trial Pipeline", () => llqaGo("sales", "pipeline"), { key: "tp" }) : null,
+                        llqaMini("Edit", () => llqaOpen("lead", { leadId: l.id }), { key: "e" }),
+                      )
+                    : null,
+                  "f",
+                  { whiteSpace: "nowrap" },
+                ),
+              );
+            }),
+          ),
+    ),
+  );
+};
+const LLQALeadModal = ({ leadId, onClose }) => {
+  const old = leadId ? llqaLeads().find((l) => l.id === leadId) : null;
+  const today = todayPK();
+  const [f, setF] = useState(() => ({ name: "", parent: "", phone: "", email: "", country: "USA", state: "", course: "Quran", source: "WhatsApp", referredBy: "", wantDay: "", wantTime: "", next: today, notes: "", ...(old || {}) }));
+  const [err, setErr] = useState("");
+  const set = (k) => (v) => setF({ ...f, [k]: v });
+  const states = (typeof COUNTRY_STATES !== "undefined" && COUNTRY_STATES[f.country]) || [];
+  const save = () => {
+    if (!String(f.parent || "").trim() && !String(f.name || "").trim()) {
+      setErr("Enter the parent's or the student's name.");
+      return;
+    }
+    if (!String(f.phone || "").trim()) {
+      setErr("Enter a phone / WhatsApp number — follow-ups need it.");
+      return;
+    }
+    const rec = llqaSaveLead({ ...f, status: old ? old.status : "new" });
+    if (!rec) {
+      setErr("Leads can't be saved here.");
+      return;
+    }
+    onClose();
+    if (!old) llqaToast({ kind: "info", ttl: 8000, text: "✓ Lead saved: " + (rec.parent || rec.name) + ". Follow-up " + (rec.next && rec.next > today ? llqaDateLabel(rec.next) : "today") + ".", actions: llqaPhone(rec.phone, rec.country) ? [{ label: "💬 Welcome message", run: () => llqaOpen("message", { student: llqaLeadAsStudent(rec), template: "leadWelcome", msgKey: "lead:" + rec.id + ":" + today }), tone: "success" }] : [] });
+  };
+  return llqaShell(
+    old ? "Edit lead" : "🎯 New lead",
+    "An inquiry before the trial. When the trial is booked (➜ Book trial), it follows the student by itself.",
+    React.createElement(
+      "div",
+      { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "0 10px" } },
+      React.createElement(Inp, { label: "Student name", value: f.name, onChange: set("name") }),
+      React.createElement(Inp, { label: "Parent / guardian", value: f.parent, onChange: set("parent") }),
+      React.createElement(Inp, { label: "Phone / WhatsApp *", value: f.phone, onChange: set("phone"), placeholder: "+1 555 010 1234" }),
+      React.createElement(Inp, { label: "Email", value: f.email, onChange: set("email") }),
+      React.createElement(Inp, { label: "Country", value: f.country, onChange: (v) => setF({ ...f, country: v, state: "" }), options: ["USA", "Canada", "UK", "UAE", "Australia", "Other"] }),
+      states.length ? React.createElement(Inp, { label: "State / Province", value: f.state, onChange: set("state"), options: states }) : React.createElement(Inp, { label: "State / Region", value: f.state, onChange: set("state") }),
+      React.createElement(Inp, { label: "Course", value: f.course, onChange: set("course"), options: ["Quran", "Subject"] }),
+      React.createElement(Inp, { label: "Source", value: f.source, onChange: set("source"), options: LLQA_LEAD_SOURCES }),
+      f.source === "Referral" ? React.createElement(Inp, { label: "Referred by", value: f.referredBy, onChange: set("referredBy") }) : null,
+      React.createElement(Inp, { label: "Wanted day", value: f.wantDay, onChange: set("wantDay"), options: ["", ...LLQABooking.DAYS] }),
+      React.createElement(Inp, { label: "Wanted time (their clock)", value: f.wantTime, onChange: set("wantTime"), options: ["", ...LLQABooking.TIMES].map((t) => ({ value: t, label: t ? LLQABooking.timeLabel(t) : "—" })) }),
+      React.createElement(Inp, { label: "Next follow-up", type: "date", value: f.next, onChange: set("next") }),
+      React.createElement("div", { style: { gridColumn: "1 / -1" } }, React.createElement(Inp, { label: "Notes", value: f.notes, onChange: set("notes") })),
+      err ? React.createElement("div", { style: { gridColumn: "1 / -1", color: c.danger, fontSize: 12 } }, err) : null,
+    ),
+    [
+      old && llqaLeadStatus(old) !== "lost"
+        ? llqaMini("Mark lost…", () => {
+            const r = prompt("Why was it lost? (" + LLQA_LEAD_LOST.join(" / ") + ")", LLQA_LEAD_LOST[0]);
+            if (r == null) return;
+            llqaLeadLost(old, r.trim() || "Other");
+            onClose();
+          }, { key: "l", big: true })
+        : null,
+      llqaMini("Cancel", onClose, { key: "x", big: true }),
+      llqaMini("✓ Save lead", save, { key: "ok", big: true, solid: true, tone: "success" }),
+    ],
+    { onClose, width: 680 },
+  );
+};
+const LLQALeadNoteModal = ({ leadId, onClose }) => {
+  const l = llqaLeads().find((x) => x.id === leadId);
+  const today = todayPK();
+  const [out, setOut] = useState("No answer");
+  const [text, setText] = useState("");
+  const [next, setNext] = useState(llqaAddDays(today, 1));
+  if (!l) return llqaShell("Lead not found", "", null, [llqaMini("Close", onClose, { key: "c", big: true })], { onClose });
+  const save = () => {
+    const saved = llqaLeadNote(l, text, out === "Not interested" ? "" : next, out);
+    if (saved && out === "Not interested") llqaLeadLost(saved, text.trim() || "Not interested");
+    onClose();
+  };
+  return llqaShell(
+    "✍ Follow-up — " + (l.parent || l.name),
+    (Array.isArray(l.log) && l.log.length ? l.log.length + " earlier note" + (l.log.length === 1 ? "" : "s") + " · last " + llqaAgo(l.log[l.log.length - 1].at) : "First contact") + (l.phone ? " · " + l.phone : ""),
+    React.createElement(
+      "div",
+      null,
+      React.createElement("div", { style: { marginBottom: 8 } }, llqaChips(["No answer", "Interested", "Call back later", "Not interested"].map((x) => [x, x]), out, setOut)),
+      React.createElement("textarea", { value: text, onChange: (e) => setText(e.target.value), rows: 3, placeholder: "What was said (optional)", style: llqaTextStyle }),
+      out !== "Not interested"
+        ? React.createElement(
+            "div",
+            { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 8 } },
+            React.createElement("span", { style: { color: c.textSec, fontSize: 11 } }, "Next follow-up:"),
+            [1, 2, 7].map((n) => llqaMini("+" + n + " day" + (n === 1 ? "" : "s"), () => setNext(llqaAddDays(today, n)), { key: "d" + n, tone: next === llqaAddDays(today, n) ? "accent" : undefined, solid: next === llqaAddDays(today, n) })),
+            llqaInput(next, setNext, { type: "date", width: 150, key: "dt" }),
+          )
+        : React.createElement("div", { style: { color: c.textSec, fontSize: 11, marginTop: 8 } }, "Saving marks the lead lost."),
+      Array.isArray(l.log) && l.log.length
+        ? React.createElement("div", { style: { marginTop: 10, maxHeight: 140, overflowY: "auto", fontSize: 11, color: c.textSec } }, l.log.slice().reverse().map((e, i) => React.createElement("div", { key: i }, llqaDateLabel(String(e.at).slice(0, 10)) + " — " + e.text)))
+        : null,
+    ),
+    [llqaMini("Cancel", onClose, { key: "x", big: true }), llqaMini("✓ Save", save, { key: "ok", big: true, solid: true, tone: "success" })],
+    { onClose, width: 560 },
+  );
+};
+
+/* ---------- Sales: revenue & churn ---------- */
+const llqaBars = (data, w, h) => {
+  // data: [{ label, a, b }] — two bars per month (billed, collected)
+  const max = Math.max(1, ...data.flatMap((d) => [d.a || 0, d.b || 0]));
+  const bw = Math.max(8, Math.floor(w / data.length / 3));
+  return React.createElement(
+    "svg",
+    { width: "100%", viewBox: "0 0 " + w + " " + (h + 20), style: { maxWidth: w, display: "block" } },
+    data.map((d, i) => {
+      const x = i * (w / data.length) + 6;
+      const ha = Math.round(((d.a || 0) / max) * h);
+      const hb = Math.round(((d.b || 0) / max) * h);
+      return React.createElement(
+        "g",
+        { key: i },
+        React.createElement("rect", { x, y: h - ha, width: bw, height: ha, rx: 2, fill: "var(--accent)", opacity: 0.55 }),
+        React.createElement("rect", { x: x + bw + 2, y: h - hb, width: bw, height: hb, rx: 2, fill: "var(--success)" }),
+        React.createElement("text", { x: x + bw, y: h + 14, textAnchor: "middle", fontSize: 10, fill: "var(--textSec)" }, d.label),
+      );
+    }),
+  );
+};
+const LLQARevenueTab = () => {
+  const ctx = LLQAApp.ctx;
+  const manage = llqaCanManage();
+  const rev = llqaRevenue(6);
+  const fx = llqaOpt("fx") || {};
+  const [edit, setEdit] = useState(false);
+  const [rates, setRates] = useState(() => ({ ...fx }));
+  const cur = rev.months[rev.months.length - 1];
+  const curs = [...new Set(rev.months.flatMap((m) => [...Object.keys(m.billed), ...Object.keys(m.collected)]).concat(Object.keys(rev.expected)))].filter((k) => k !== "USD").sort();
+  const usd = (o) => llqaToUsd(o, fx);
+  const one = (o) => (usd(o) != null && Object.keys(o).length > 1 ? "≈ " + usd(o).toLocaleString("en-US") + " USD" : llqaMoney(o));
+  const quitReasons = {};
+  rev.months.forEach((m) => Object.entries(m.reasons).forEach(([r, n]) => (quitReasons[r] = (quitReasons[r] || 0) + n)));
+  // by teacher: active paying students and monthly fees
+  const byT = new Map();
+  (ctx.students || []).forEach((s) => {
+    if (!s || s.status === "quit" || llqaInTrial(s) || !(Number(s.fee_amount) > 0)) return;
+    const t = s.teacher && s.teacher !== "Unassigned" ? s.teacher : "Unassigned";
+    if (!byT.has(t)) byT.set(t, { n: 0, fees: {} });
+    const r = byT.get(t);
+    r.n++;
+    r.fees[s.currency || "USD"] = Math.round(((r.fees[s.currency || "USD"] || 0) + Number(s.fee_amount)) * 100) / 100;
+  });
+  const chart = usd ? rev.months.map((m) => ({ label: llqaMonthLabel(m.ym).split(" ")[0].slice(0, 3), a: usd(m.billed), b: usd(m.collected) })) : null;
+  const chartOk = chart && chart.every((d) => d.a != null && d.b != null);
+  return React.createElement(
+    "div",
+    null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      llqaStat("Expected a month", one(rev.expected), rev.paying + " paying students"),
+      llqaStat("Collected — " + llqaMonthLabel(cur.ym), one(cur.collected), "billed " + one(cur.billed), c.success),
+      llqaStat("Owed now", one(rev.owed), "due and overdue, every month", Object.keys(rev.owed).length ? c.warn : c.text),
+      llqaStat("Churn — " + llqaMonthLabel(cur.ym), cur.churn == null ? "—" : cur.churn + "%", cur.quitPaid + " paying student" + (cur.quitPaid === 1 ? "" : "s") + " left of " + cur.startActive, cur.churn ? c.danger : c.text),
+      llqaStat("Trials", rev.trials, cur.conv == null ? "none finished this month" : cur.conv + "% enrolled this month"),
+    ),
+    llqaCard([
+      llqaH("📈 Billed and collected, month by month", "Billed = fee bills due that month (the fee cycle). Collected = payments received that month (Fee Cycle and Accounts Receivable). " + (curs.length ? "Other currencies count in USD with your rates." : "")),
+      chartOk
+        ? React.createElement("div", { key: "ch" }, llqaBars(chart, 560, 120), React.createElement("div", { style: { fontSize: 10, color: c.textSec, marginTop: 2 } }, "■ billed (blue) · ■ collected (green), in USD"))
+        : React.createElement("div", { key: "nc", style: { fontSize: 11, color: c.warn } }, "Set a rate to USD for " + curs.filter((k) => !(Number(fx[k]) > 0)).join(", ") + " to see one chart (amounts per currency are below)."),
+      React.createElement(
+        "div",
+        { key: "t", style: { marginTop: 10 } },
+        llqaTable(
+          ["Month", "Billed", "Collected", "New paying", "Left", "Churn", "Trials enrolled"],
+          rev.months
+            .slice()
+            .reverse()
+            .map((m) =>
+              React.createElement(
+                "tr",
+                { key: m.ym },
+                llqaTd(llqaMonthLabel(m.ym), "a", { fontWeight: 700 }),
+                llqaTd(llqaMoney(m.billed), "b"),
+                llqaTd(llqaMoney(m.collected), "c", { color: c.success }),
+                llqaTd(String(m.newPaid), "d"),
+                llqaTd(String(m.quits), "e", { color: m.quits ? c.danger : c.text }),
+                llqaTd(m.churn == null ? "—" : m.churn + "%", "f"),
+                llqaTd(m.conv == null ? "—" : m.conv + "% (" + m.trialsWon + " of " + (m.trialsWon + m.trialsLost) + ")", "g"),
+              ),
+            ),
+        ),
+      ),
+      manage
+        ? React.createElement(
+            "div",
+            { key: "fx", style: { marginTop: 10, fontSize: 11, color: c.textSec } },
+            edit
+              ? llqaRow([
+                  "1 unit = ? USD:",
+                  ...["CAD", "GBP", "AUD", "AED", "EUR", "PKR"].map((k) => React.createElement("span", { key: k }, k + " ", llqaInput(rates[k] || "", (v) => setRates({ ...rates, [k]: v }), { key: k, width: 70 }))),
+                  llqaMini("✓ Save rates", () => {
+                    const clean = {};
+                    Object.entries(rates).forEach(([k, v]) => {
+                      if (Number(v) > 0) clean[k] = Number(v);
+                    });
+                    llqaSetOpt({ fx: clean });
+                    setEdit(false);
+                  }, { key: "s", tone: "success" }),
+                ], "r")
+              : llqaRow([
+                  "Rates to USD: " + (Object.keys(fx).length ? Object.entries(fx).map(([k, v]) => k + " " + v).join(" · ") : "not set"),
+                  llqaMini("Edit rates", () => setEdit(true), { key: "e" }),
+                ], "r"),
+          )
+        : null,
+    ]),
+    React.createElement(
+      "div",
+      { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 10 } },
+      llqaCard([
+        llqaH("Why families left (6 months)", ""),
+        Object.keys(quitReasons).length
+          ? React.createElement("div", { key: "r", style: { fontSize: 12 } }, Object.entries(quitReasons).sort((a, b) => b[1] - a[1]).map(([r, n]) => React.createElement("div", { key: r, style: { display: "flex", justifyContent: "space-between", padding: "3px 0", borderBottom: "1px solid " + c.border } }, React.createElement("span", null, r), React.createElement("b", null, n))))
+          : React.createElement("div", { key: "n", style: { fontSize: 12, color: c.success } }, "✓ Nobody left."),
+      ], { key: "q" }),
+      llqaCard([
+        llqaH("Paying students by teacher", ""),
+        byT.size
+          ? llqaTable(["Teacher", "Students", "Fees a month"], [...byT.entries()].sort((a, b) => b[1].n - a[1].n).map(([t, r]) => React.createElement("tr", { key: t }, llqaTd(t, "a"), llqaTd(String(r.n), "b"), llqaTd(llqaMoney(r.fees), "c"))))
+          : React.createElement("div", { key: "n", style: { fontSize: 12, color: c.textSec } }, "No paying students yet."),
+      ], { key: "t" }),
+    ),
+  );
+};
+
+/* ---------- Sales: win-back & referral rewards ---------- */
+const LLQAWinbackTab = () => {
+  const ctx = LLQAApp.ctx;
+  const today = todayPK();
+  const manage = llqaCanManage();
+  const [days, setDays] = useState(() => llqaWinbackDays().map(String));
+  const [offer, setOffer] = useState(() => String(llqaOpt("winbackOffer") || ""));
+  const [amt, setAmt] = useState(() => String(llqaOpt("referralReward")));
+  const logx = llqaLogIndex(ctx.messageLog);
+  const left = (ctx.students || [])
+    .filter((s) => s && s.status === "quit" && s.qDate && (llqaDays(String(s.qDate).slice(0, 10), today) || 0) <= 180)
+    .sort((a, b) => String(b.qDate).localeCompare(String(a.qDate)));
+  const back = (ctx.students || []).filter((s) => s && s.wonBack && s.status !== "quit");
+  const refs = llqaReferralRewards();
+  const earned = refs.filter((x) => x.state === "earned");
+  const saveSet = () => {
+    llqaSetOpt({ winback: days.map((x) => parseInt(x, 10) || 1), winbackOffer: offer, referralReward: Number(amt) || 0 });
+    llqaToast({ kind: "info", ttl: 5000, text: "✓ Win-back and referral settings saved." });
+  };
+  return React.createElement(
+    "div",
+    null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      llqaStat("Left (6 months)", left.length, left.filter((s) => !s.noWinback).length + " to win back"),
+      llqaStat("Came back", back.length, "families won back", back.length ? c.success : c.text),
+      llqaStat("Referral rewards to give", earned.length, "referred families now paying", earned.length ? c.warn : c.text),
+      llqaStat("Rewards given", (ctx.rewards || []).filter((r) => r && r.status === "applied").length, "off a referrer's fee"),
+    ),
+    manage
+      ? llqaCard([
+          llqaH("⚙ Settings", "Win-back messages go out by themselves through Autopilot, " + days.join(", ") + " days after a family leaves (not if marked “don't contact”). A referral reward comes off the referring family's next unpaid bill."),
+          llqaRow(
+            [
+              "Win-back after (days):",
+              ...days.map((d, i) => llqaInput(d, (v) => setDays(days.map((x, j) => (j === i ? v : x))), { key: "d" + i, width: 55, type: "number" })),
+              "Offer in the 2nd message:",
+              llqaInput(offer, setOffer, { key: "o", width: 260, placeholder: "e.g. The first week back is free." }),
+              "Referral reward:",
+              llqaInput(amt, setAmt, { key: "a", width: 70, type: "number" }),
+              "(in the referrer's currency)",
+              llqaMini("✓ Save", saveSet, { key: "s", tone: "success", solid: true }),
+            ],
+            "s",
+          ),
+        ])
+      : null,
+    llqaCard([
+      llqaH("↩ Families who left", "Win-back messages are suggested in Autopilot when due. ↩ Re-enroll makes the student active again (billed from today) and opens 📅 Change classes to book times."),
+      left.length === 0
+        ? React.createElement("div", { key: "e", style: { color: c.success, fontSize: 12 } }, "✓ Nobody left in the last 6 months.")
+        : llqaTable(
+            ["Student", "Left", "Why", "Win-back sent", ""],
+            left.map((s) => {
+              const wb = llqaWinbackDue(s, today);
+              const sent = [1, 2, 3].filter((n) => logx.keys.has("winback:" + s.id + ":" + n));
+              const digits = llqaPhone(s.phone, s.country);
+              return React.createElement(
+                "tr",
+                { key: s.id },
+                llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, s.name), llqaSmall(s.parent || "", null, "p")], "a"),
+                llqaTd(llqaDateLabel(String(s.qDate).slice(0, 10)) + " · " + llqaDays(String(s.qDate).slice(0, 10), today) + "d ago", "b", { whiteSpace: "nowrap" }),
+                llqaTd(s.qReason || "—", "c"),
+                llqaTd(s.noWinback ? llqaPill("don't contact", c.textSec) : [sent.length ? sent.map((n) => "#" + n).join(" ") + " sent" : "none yet", wb && !sent.includes(wb.n) ? llqaSmall("#" + wb.n + " due now", c.warn, "d") : null], "d"),
+                llqaTd(
+                  manage
+                    ? React.createElement(
+                        "div",
+                        { style: { display: "flex", gap: 4, justifyContent: "flex-end", flexWrap: "wrap" } },
+                        llqaMini("💬", () => llqaOpen("message", { studentId: s.id, student: s, template: wb ? wb.tpl : "winBack1", extra: { offer: llqaWinbackOffer() }, msgKey: wb ? wb.key : undefined }), { key: "m", disabled: !digits || s.noWinback, title: "Win-back message" }),
+                        llqaMini("↩ Re-enroll", () => {
+                          if (!confirm("Make " + s.name + " active again? Fees start from today; then choose class times.")) return;
+                          llqaWinbackReturn(s);
+                          setTimeout(() => llqaOpen("reschedule", { studentId: s.id }), 300);
+                        }, { key: "r", tone: "success" }),
+                        llqaMini(s.noWinback ? "Contact again" : "Don't contact", () => llqaNoWinback(s, !s.noWinback), { key: "x" }),
+                      )
+                    : null,
+                  "e",
+                  { whiteSpace: "nowrap" },
+                ),
+              );
+            }),
+          ),
+    ]),
+    llqaCard([
+      llqaH("🎁 Referral rewards", "A reward is earned when a referred family becomes a paying student (enrolled and paid). The referrer is the student linked on the referral, or a student / parent whose name matches “Referred by” — confirm it before giving the reward."),
+      refs.length === 0
+        ? React.createElement("div", { key: "e", style: { color: c.textSec, fontSize: 12 } }, "No referrals have become students yet (References → enroll a referral).")
+        : llqaTable(
+            ["Referred", "Referred by", "Reward", ""],
+            refs.map((x) => {
+              const opts = (ctx.students || []).filter((s) => s && s.status !== "quit" && String(s.id) !== String(x.r.studentId)).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+              return React.createElement(
+                "tr",
+                { key: x.r.id },
+                llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, x.referred ? x.referred.name : x.r.studentName || "—"), llqaSmall(x.paying ? "paying" : x.referred && llqaInTrial(x.referred) ? "on trial" : "not paying yet", x.paying ? c.success : null, "p")], "a"),
+                llqaTd([
+                  React.createElement("div", { key: "t" }, x.r.referredBy || "—"),
+                  manage && x.state !== "applied"
+                    ? llqaSel(x.r.referrerId != null ? String(x.r.referrerId) : x.referrer ? String(x.referrer.id) : "", (v) => llqaLinkReferrer(x.r, v ? parseInt(v, 10) || v : ""), [["", "— link the referring student —"], ...opts.map((s) => [String(s.id), s.name + (s.parent ? " (" + s.parent + ")" : "")])], { key: "ln", style: { marginTop: 4, maxWidth: 240 } })
+                    : x.referrer
+                      ? llqaSmall(x.referrer.name, null, "rn")
+                      : null,
+                  !x.linked && x.referrer && x.state !== "applied" ? llqaSmall("matched by name — check it", c.warn, "g") : null,
+                ], "b"),
+                llqaTd(x.rec ? [llqaPill("✓ " + x.rec.amount + " " + x.rec.currency + " off " + llqaMonthLabel(x.rec.month), c.success, null, "a")] : x.state === "earned" ? llqaPill("earned", c.warn) : x.state === "noReferrer" ? llqaPill("link the referrer", c.warn) : llqaPill("when they pay", c.textSec), "c"),
+                llqaTd(
+                  manage && x.state === "earned"
+                    ? llqaMini("🎁 Give " + (Number(llqaOpt("referralReward")) || 0) + " " + ((x.referrer && x.referrer.currency) || "USD") + " off", () => {
+                        const rec = llqaApplyReward(x);
+                        if (rec) llqaToast({ kind: "info", ttl: 10000, text: "🎁 " + rec.amount + " " + rec.currency + " off " + llqaMonthLabel(rec.month) + " for " + rec.referrer + ". Autopilot will suggest the thank-you message." });
+                      }, { key: "g", tone: "success" })
+                    : null,
+                  "d",
+                  { whiteSpace: "nowrap" },
+                ),
+              );
+            }),
+          ),
+    ]),
+  );
+};
+
+/* ---------- Sales tab dispatch, pop-ups, dashboard (v67) ---------- */
+Object.assign(LLQA_SALES_TABS, { leads: 1, revenue: 1, winback: 1 });
+const LLQASalesTab3 = (props) =>
+  props.tab === "leads" ? React.createElement(LLQALeadsTab, props) : props.tab === "revenue" ? React.createElement(LLQARevenueTab, props) : props.tab === "winback" ? React.createElement(LLQAWinbackTab, props) : null;
+const LLQA_MODALS3 = { makeup: LLQAMakeupModal, lead: LLQALeadModal, leadNote: LLQALeadNoteModal };
+// More cards on the Dashboard: make-ups owed, schedules to send, leads due.
+const LLQADashCards3 = () => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user || !llqaCanManage()) return null;
+  const today = todayPK();
+  const owed = llqaMakeupOwed(today).length;
+  const logx = llqaLogIndex(ctx.messageLog);
+  const tday = llqaTeacherNext().list.filter((x) => !logx.keys.has(llqaDayKey(x.t, x.date))).length;
+  const ls = llqaLeadStats(today);
+  const card = (icon, title, value, sub, go, col) =>
+    React.createElement(
+      "div",
+      { key: title, onClick: go, style: { flex: "1 1 200px", cursor: "pointer", background: c.bgCard, border: "1px solid " + (col || c.border), borderRadius: 10, padding: "10px 12px" } },
+      React.createElement("div", { style: { color: c.textSec, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 } }, icon + " " + title),
+      React.createElement("div", { style: { color: col || c.text, fontSize: 20, fontWeight: 800, marginTop: 2 } }, value),
+      React.createElement("div", { style: { color: c.textMuted, fontSize: 10, marginTop: 2 } }, sub),
+    );
+  return React.createElement(
+    "div",
+    { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 } },
+    card("🎯", "Leads", ls.due, ls.due ? "follow-ups due today" : ls.open + " open leads", () => llqaGo("sales", "leads"), ls.due ? c.warn : null),
+    card("🧩", "Make-ups", owed, owed ? "missed classes to make up" : "nothing owed", () => llqaGo("timetable", "makeup"), owed ? c.warn : null),
+    card("🧑‍🏫", "Teachers' day", tday, tday ? "schedules not sent — next 24 hours" : "all sent (or no classes)", () => llqaGo("timetable", "teacherday"), tday ? c.accent : null),
+  );
 };

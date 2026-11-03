@@ -601,6 +601,7 @@ const StudentsMod = ({
         : pf.time || "",
       dor: pf.dor,
       addedAt: todayPK(), // v66: the day they were added to the CRM
+      teacherGender: pf.teacherGender || "", // v67: teacher the family asked for (smart matching)
       phone: pf.phone || "",
       email: pf.email || "",
       hoursPerWeek: pl.items.length
@@ -637,7 +638,15 @@ const StudentsMod = ({
         pktSlot: it.slot,
       })),
       tz: pl.tz || "",
-      parentId: LLQABooking.newParentId(sts),
+      // v67: a brother or sister (same WhatsApp number or Family Group) shares the family's Parent ID
+      parentId: (() => {
+        const digits = typeof llqaPhone === "function" ? llqaPhone(pf.phone, pf.country) : "";
+        const fam = String(pf.family || "").trim().toLowerCase();
+        const sib = (sts || []).find(
+          (x) => x && x.parentId && ((digits && llqaPhone(x.phone, x.country) === digits) || (fam && String(x.family || "").trim().toLowerCase() === fam)),
+        );
+        return sib ? sib.parentId : LLQABooking.newParentId(sts);
+      })(),
       // v65: how many trial classes before the fee (default 3)
       trialTarget: llqaInTrial(pf) ? llqaTrialTarget(pf) : "",
     };

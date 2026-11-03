@@ -371,8 +371,20 @@ const SalesMod = ({
       tz: pl.tz || "",
       specificSubject:
         pf.course === "Subject" && Array.isArray(pf.specificSubject) ? pf.specificSubject : [],
-      parentId: newStudent.parentId || LLQABooking.newParentId(current),
+      // v67: a brother or sister (same WhatsApp number or Family Group) shares the
+      // family's Parent ID — one Parent Portal login for all the children
+      parentId:
+        newStudent.parentId ||
+        (() => {
+          const digits = typeof llqaPhone === "function" ? llqaPhone(pf.phone, pf.country) : "";
+          const fam = String(pf.family || "").trim().toLowerCase();
+          const sib = [...(current || []), ...(master || [])].find(
+            (x) => x && x.parentId && ((digits && llqaPhone(x.phone, x.country) === digits) || (fam && String(x.family || "").trim().toLowerCase() === fam)),
+          );
+          return sib ? sib.parentId : LLQABooking.newParentId(current);
+        })(),
       addedAt: todayPK(), // v66: the day they were added to the CRM
+      teacherGender: pf.teacherGender || "", // v67: teacher the family asked for (smart matching)
       // v65: how many trial classes before the fee (default 3)
       trialTarget: llqaInTrial(pf) ? llqaTrialTarget(pf) : "",
     };
@@ -395,6 +407,8 @@ const SalesMod = ({
     setStudents([...current, stu]);
     // v65: booked from the waitlist → mark that entry booked
     if (pf._waitId) llqaWaitDone(pf._waitId, stu.id);
+    // v67: booked from a lead → the lead follows this student
+    if (pf._leadId && typeof llqaLeadBooked === "function") llqaLeadBooked(pf._leadId, stu);
     if (nextTeachers) setTeachers(nextTeachers);
     if (pf._refId && setSalesReferrals) {
       setSalesReferrals(
@@ -1555,6 +1569,10 @@ const SalesMod = ({
         ["references", "References"],
         ["health", "Booking Health"],
         ["clock", "🕐 Clock Changes" + (llqaTabBadge("clock") ? " · " + llqaTabBadge("clock") : "")],
+        // v67
+        ["leads", "🎯 Leads" + (llqaTabBadge("leads") ? " · " + llqaTabBadge("leads") : "")],
+        ["revenue", "📈 Revenue & churn"],
+        ["winback", "↩ Win-back & referrals" + (llqaTabBadge("winback") ? " · " + llqaTabBadge("winback") : "")],
       ].map(([k, l]) =>
         React.createElement(
           "button",
