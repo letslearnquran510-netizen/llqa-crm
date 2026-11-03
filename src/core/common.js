@@ -1301,6 +1301,15 @@ const LLQACloud = (() => {
           else markChecked(id);
         }
         show(applyFields(v, pend));
+      } else if ((!first || doneMap()[id]) && (hasData(s.data) || pend)) {
+        // v67: this computer has seen the document in the cloud before, so its
+        // copy is only a cache — the document was deleted elsewhere on purpose.
+        // It is not brought back; only this computer's unsent changes are sent.
+        const back = applyFields(fallback || {}, pend);
+        if (first) markChecked(id);
+        show(back);
+        if (pend) sendFields(Object.keys(pend).map((k) => ({ id: k, doc: pend[k] })));
+        return;
       } else if (hasData(fallback) || hasData(base0) || pend) {
         // Nothing in the cloud yet: start it from this computer's copy.
         const seed = applyFields(hasData(base0) ? base0 : fallback, pend);
