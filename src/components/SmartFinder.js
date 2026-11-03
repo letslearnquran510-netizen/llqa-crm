@@ -19,7 +19,7 @@ const SmartFinder = () => {
       const sd = TT_DATA[sh];
       const ds =
         sh === "Weekend" ? ["Sat", "Sun"] : ["Mon", "Tue", "Wed", "Thu", "Fri"];
-      sd.teachers.forEach((t) => {
+      llqaShiftTeachers(sh).forEach((t) => { // v66.2: the same teachers as the grid (was only the built-in list, which is empty)
         if (fTeach && !t.name.toLowerCase().includes(fTeach.toLowerCase()))
           return;
         if (fLoc !== "All" && t.location !== fLoc) return;
@@ -29,7 +29,7 @@ const SmartFinder = () => {
           sd.slots.forEach((sl) => {
             if (fFrom !== "Any" && sl < fFrom) return;
             if (fTo !== "Any" && sl > fTo) return;
-            const cell = sched[sl];
+            const cell = sched[sl] === undefined ? "F" : sched[sl]; // v66.2: shown as FREE in the grid
             if (fm === "freeslots") {
               if (cell === "F")
                 rows.push({
@@ -133,7 +133,7 @@ const SmartFinder = () => {
       });
     });
     return rows;
-  }, [fm, fDay, fFrom, fTo, fLoc, fTeach, fSearch]);
+  }, [fm, fDay, fFrom, fTo, fLoc, fTeach, fSearch, LLQAApp.ctx.teachers]);
   const uT = new Set(results.map((r) => r.teacher)).size;
   const uS =
     fm !== "freeslots"

@@ -575,6 +575,13 @@ function App() {
                   }
                 }
               } catch (_) {}
+              // v66.2: a teacher added in the CRM starts at their own shift's first slot
+              if (!shiftName && llqaShiftStart(t)) {
+                const parts = llqaShiftStart(t).split(":");
+                shiftName = String(t.shift).split(",").map((x) => x.trim()).find((x) => TT_DATA[x]) || String(t.shift);
+                shiftStartH = parseInt(parts[0], 10) || 0;
+                shiftStartM = parseInt(parts[1], 10) || 0;
+              }
               if (!shiftName) {
                 if (t && t.location === "IBA") {
                   shiftStartH = 0;
@@ -585,7 +592,7 @@ function App() {
               const lateThr = (appSettings && appSettings.lateThreshold) || 10;
               const startMin = shiftStartH * 60 + shiftStartM;
               const nowMin = hh * 60 + mm;
-              const diff = nowMin - startMin;
+              const diff = llqaLateBy(nowMin, startMin); // v66.2: across midnight (23:50 for a 00:00 shift is early)
               let status = "Present";
               let lateMin = 0;
               if (diff > lateThr) {

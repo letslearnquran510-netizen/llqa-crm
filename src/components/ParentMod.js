@@ -258,16 +258,20 @@ const ParentMod = ({
       const monthsAgo =
         (now.getFullYear() - cursor.getFullYear()) * 12 +
         (now.getMonth() - cursor.getMonth());
-      const paymentRecord = studentPays.find((p) => llqaPayMonth(p) === ym); // v66: the month it was paid for
-      const hasPaid = !!paymentRecord;
+      // v66.2: each month is the fee cycle's bill for that month (same payments, same fee)
       const _cm = _cy ? _cy.months.find((m) => m.ym === ym) : null;
+      const paymentRecord = _cm ? _cm.pays[0] || null : studentPays.find((p) => llqaPayMonth(p) === ym);
+      const hasPaid = _cm ? _cm.state === "paid" : !!paymentRecord;
       let status = _cm
         ? _cm.state === "paid" ? "paid" : _cm.state === "overdue" ? "overdue" : "pending"
         : hasPaid ? "paid" : monthsAgo > 0 ? "overdue" : "pending";
 
       let amt = null;
       let curr = stu.currency || "USD";
-      if (paymentRecord && parseFloat(paymentRecord.amount) > 0) {
+      if (_cm) {
+        amt = _cm.fee; // v66.2: the bill, not whatever one payment was
+        curr = (_cy && _cy.cur) || curr;
+      } else if (paymentRecord && parseFloat(paymentRecord.amount) > 0) {
         amt = parseFloat(paymentRecord.amount);
         curr = paymentRecord.currency || curr;
       } else if (stu.fee_amount && parseFloat(stu.fee_amount) > 0) {

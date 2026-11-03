@@ -107,7 +107,8 @@ const TimetableMod = ({
       ],
     ];
     const shiftD = TT_DATA[shift];
-    shiftD.teachers.forEach((t) => {
+    // v66.2: every teacher in this shift's grid (the built-in list alone is empty)
+    teachers.forEach((t) => {
       const daysToExport =
         shift === "Weekend"
           ? ["Sat", "Sun"]
@@ -115,7 +116,7 @@ const TimetableMod = ({
       daysToExport.forEach((day) => {
         const sched = t.schedule[day] || {};
         shiftD.slots.forEach((slot) => {
-          const cell = sched[slot];
+          const cell = sched[slot] === undefined ? "F" : sched[slot]; // v66.2: shown as FREE in the grid
           if (cell && cell.s) {
             rows.push([
               t.name,
@@ -171,7 +172,7 @@ const TimetableMod = ({
   };
   const openQuickBook = () => {
     setQbTeacher(0);
-    setQbDay("Mon");
+    setQbDay(shift === "Weekend" ? "Sat" : "Mon"); // v66.2
     setBookForm({
       s: "",
       a: "",
@@ -220,7 +221,15 @@ const TimetableMod = ({
         return;
     }
     if (!bT.schedule[bD]) bT.schedule[bD] = {};
+    // v66.2: editing a booking keeps its link to the student (same name)
+    const _prev = bookModal.editing ? bT.schedule[bD][bS] : null;
+    const _keep = {};
+    if (_prev && typeof _prev === "object" && String(_prev.s || "").trim().toLowerCase() === String(bookForm.s || "").trim().toLowerCase())
+      ["sid", "day", "sub"].forEach((k) => {
+        if (_prev[k] != null && _prev[k] !== "") _keep[k] = _prev[k];
+      });
     bT.schedule[bD][bS] = {
+      ..._keep,
       s: bookForm.s,
       a: bookForm.a || "",
       c: bookForm.c || "Quran",
@@ -297,14 +306,32 @@ const TimetableMod = ({
   };
   const pasteCell = (targetTeacher, targetDay, targetSlot, existingCell) => {
     if (!clipboard) return;
+    // v66.2: a student's class pasted or dragged onto a cell is booked for that
+    // student (their record and the Timetable stay the same) — same time zone
+    // rules and checks as Add Student
+    const _stu = !clipboard._free ? llqaCellStudent(clipboard) : null;
+    if (_stu) {
+      const err = llqaPasteClass(_stu, clipboard, targetTeacher, targetDay, targetSlot, existingCell);
+      if (err) alert(err);
+      return;
+    }
+    // a copy never replaces a student's class (their record would still list it)
+    if (!clipboard._free && existingCell && typeof existingCell === "object" && existingCell.s && llqaCellStudent(existingCell)) {
+      alert("That slot has " + existingCell.s + "'s class. Free it first (Mark as Free), or paste on a free slot.");
+      return;
+    }
     const doIt = () => {
+      // v66.2: a free cell dropped on a booking frees it like Mark as Free
+      if (clipboard._free) {
+        markCellAsFree(targetTeacher, targetDay, targetSlot);
+        return;
+      }
       if (!targetTeacher.schedule[targetDay])
         targetTeacher.schedule[targetDay] = {};
-      targetTeacher.schedule[targetDay][targetSlot] = clipboard._free
-        ? "F"
-        : {
-            ...clipboard,
-          };
+      const _copy = { ...clipboard };
+      delete _copy.sid; // not one of the current students: a plain copy
+      delete _copy.day;
+      targetTeacher.schedule[targetDay][targetSlot] = _copy;
       persistTeacherSchedule(targetTeacher);
       forceRender((n) => n + 1);
     };
@@ -327,28 +354,41 @@ const TimetableMod = ({
     } else doIt();
   };
   const cancelClipboard = () => setClipboard(null);
+  // v66.2: Monday goes to the FREE slots of Tue–Fri; classes booked there stay,
+  // and a student's Monday class is booked for that student on the other days
   const copyMonToWeekdays = (targetTeacher) => {
     const monSched = targetTeacher.schedule && targetTeacher.schedule.Mon;
     if (!monSched) {
       alert("Monday has no schedule to copy.");
       return;
     }
-    if (
-      !confirm(
-        "Copy Monday\u2019s entire schedule to Tue, Wed, Thu, and Fri for " +
-          targetTeacher.name +
-          "?\n\nExisting bookings on those days will be replaced.",
-      )
-    )
+    const done = llqaCopyMonday(targetTeacher);
+    if (done !== null) {
+      forceRender((n) => n + 1);
       return;
+    }
+    // a teacher only in the built-in list: copy into free slots only
+    if (!confirm("Copy Monday to the free slots of Tue–Fri for " + targetTeacher.name + "?\n\nSlots already booked stay as they are.")) return;
+    let n = 0;
     ["Tue", "Wed", "Thu", "Fri"].forEach((d) => {
-      targetTeacher.schedule[d] = {
-        ...monSched,
-      };
+      if (!targetTeacher.schedule[d]) targetTeacher.schedule[d] = {};
+      Object.keys(monSched).forEach((s) => {
+        const cur = targetTeacher.schedule[d][s];
+        const v = monSched[s];
+        if ((cur === undefined || cur === null || cur === "" || cur === "F") && v && v !== "F") {
+          const c2 = typeof v === "object" ? { ...v } : v;
+          if (typeof c2 === "object") {
+            delete c2.sid;
+            delete c2.day;
+          }
+          targetTeacher.schedule[d][s] = c2;
+          n++;
+        }
+      });
     });
     persistTeacherSchedule(targetTeacher);
     forceRender((n) => n + 1);
-    alert("Monday\u2019s schedule copied to Tue-Fri for " + targetTeacher.name);
+    alert("Copied to " + n + " free slot" + (n === 1 ? "" : "s") + " on Tue–Fri for " + targetTeacher.name + ".");
   };
   const printSchedule = (targetTeacher) => {
     const w = window.open("", "_blank", "width=900,height=700");
@@ -420,40 +460,10 @@ const TimetableMod = ({
       targetTeacher.schedule[targetDay] = {};
     const oldCell = targetTeacher.schedule[targetDay][targetSlot];
     targetTeacher.schedule[targetDay][targetSlot] = "F";
-    if (
-      oldCell &&
-      typeof oldCell === "object" &&
-      oldCell.s &&
-      setStudents &&
-      students
-    ) {
-      const sNameLc = String(oldCell.s).trim().toLowerCase();
-      const sParentLc = String(oldCell.l || "")
-        .trim()
-        .toLowerCase();
-      setStudents(
-        students.map((s) => {
-          const nm = String(s.name || "")
-            .trim()
-            .toLowerCase();
-          const pa = String(s.parent || "")
-            .trim()
-            .toLowerCase();
-          if (
-            nm === sNameLc &&
-            (!sParentLc || pa === sParentLc) &&
-            s.teacher === targetTeacher.name
-          ) {
-            return {
-              ...s,
-              teacher: "Unassigned",
-            };
-          }
-          return s;
-        }),
-      );
-    }
     persistTeacherSchedule(targetTeacher);
+    // v66.2: only that class leaves the student's record (their other classes and
+    // teacher stay); was: teacher "Unassigned" for every class, freed one kept
+    llqaClassFreed(oldCell, targetTeacher.name, targetDay, targetSlot);
     forceRender((n) => n + 1);
   };
   const days =
@@ -2813,7 +2823,7 @@ const TimetableMod = ({
                       flexWrap: "wrap",
                     },
                   },
-                  ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((d) =>
+                  (shift === "Weekend" ? ["Sat", "Sun"] : ["Mon", "Tue", "Wed", "Thu", "Fri"]).map((d) => // v66.2: the shift's days only
                     React.createElement(
                       "button",
                       {
