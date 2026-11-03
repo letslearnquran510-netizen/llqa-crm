@@ -147,10 +147,12 @@ const llqaAgo = (iso) => {
   return d === 1 ? "yesterday" : d + " days ago";
 };
 // The family's clock right now: "Tue 4:12 PM".
+// v66.2: from the CRM's own offset (it knows the 2026 Canada rules a browser may not).
 const llqaLocalNow = (tz) => {
   if (!tz) return "";
   try {
-    return new Date().toLocaleString("en-US", { timeZone: tz, weekday: "short", hour: "numeric", minute: "2-digit" });
+    const off = LLQABooking.offsetAt(tz, new Date());
+    return new Date(Date.now() + off * 60000).toLocaleString("en-US", { timeZone: "UTC", weekday: "short", hour: "numeric", minute: "2-digit" });
   } catch (e) {
     return "";
   }
@@ -225,7 +227,9 @@ const llqaPhone = (phone, country) => {
   const raw = String(phone || "").trim();
   if (!raw) return "";
   let d = raw.replace(/\D/g, "");
-  const ok = (x) => (x.length >= 8 && x.length <= 15 ? x : "");
+  // v66.2: +1 (USA / Canada) numbers are always 11 digits — a typo'd one would
+  // open WhatsApp on a number that doesn't exist
+  const ok = (x) => (x.startsWith("1") ? (x.length === 11 ? x : "") : x.length >= 8 && x.length <= 15 ? x : "");
   if (raw.startsWith("+")) return ok(d);
   if (raw.startsWith("00")) return ok(d.slice(2));
   const cc = LLQA_CC[String(country || "").trim().toLowerCase()] || "";
@@ -321,11 +325,11 @@ const llqaNextClass = (s, now) => {
   let wd = "";
   let mins = 0;
   try {
-    const parts = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short", hour: "2-digit", minute: "2-digit", hour12: false })
-      .formatToParts(now || new Date());
-    const g = (t) => (parts.find((p) => p.type === t) || {}).value || "";
-    wd = g("weekday");
-    mins = (parseInt(g("hour"), 10) % 24) * 60 + parseInt(g("minute"), 10);
+    // v66.2: the family's clock from the CRM's own offset (2026 Canada rules included)
+    const at = now || new Date();
+    const loc = new Date(at.getTime() + B.offsetAt(tz, at) * 60000);
+    wd = B.DAYS[(loc.getUTCDay() + 6) % 7];
+    mins = loc.getUTCHours() * 60 + loc.getUTCMinutes();
   } catch (e) {
     return "";
   }
@@ -3456,20 +3460,72 @@ const llqaFeeCycle = (s, pays, today) => {
   if (llqaAddDays(dueOf(curM), -7) > t) curM = llqaMonthAdd(curM, -1);
   if (curM < startM)
     return { amt, cur, day, start, status: "upcoming", months: [], owed: [], current: null, due: dueOf(startM), left: 0 };
-  const months = [];
-  for (let ym = curM, k = 0; ym >= startM && k < 12; ym = llqaMonthAdd(ym, -1), k++) {
-    const due = dueOf(ym);
-    const over = llqaAddDays(due, LLQA_FEE_GRACE);
-    const ps = mine.filter((p) => llqaPayMonth(p) === ym);
-    const other = ps.some((p) => p.currency && p.currency !== cur); // another currency: can't compare, counts as paid
-    const paid = Math.round(ps.filter((p) => !p.currency || p.currency === cur).reduce((a, p) => a + (Number(p.amount) || 0), 0) * 100) / 100;
-    // the fee for that month: what it was when its payment was recorded (a later
-    // fee change doesn't reopen a month already paid), else today's fee
-    const fee = ps.reduce((m, p) => (Number(p.feeAmount) > 0 ? Math.max(m, Number(p.feeAmount)) : m), 0) || amt;
-    const full = other || paid >= fee - 0.005;
-    const state = full ? "paid" : t >= over ? "overdue" : paid > 0 ? "partial" : t < due ? "upcoming" : "due";
-    months.push({ ym, due, over, paid, fee, left: full ? 0 : Math.round((fee - paid) * 100) / 100, state, pays: ps });
-  }
+  // the bills so far (the newest 12), oldest first
+  const bills = [];
+  for (let ym = curM, k = 0; ym >= startM && k < 12; ym = llqaMonthAdd(ym, -1), k++)
+    bills.unshift({ ym, due: dueOf(ym), paid: 0, fee: 0, other: false, pays: [] });
+  // v66.2: which bill a payment pays.
+  // - Saved for a month (Fee Cycle, enrolling): that month.
+  // - Otherwise (Accounts Receivable, imports): the oldest bill still open that
+  //   was out when it was paid — a fee paid a few days late, in the next
+  //   calendar month, still pays the month it was for, and arrears are paid
+  //   oldest first. Paid before any open bill was out = paid in advance.
+  // Anything above a bill's fee carries on to the next open bill.
+  // The fee of a bill is what it was when its first payment was recorded (a
+  // later fee change doesn't reopen a month already paid), else today's fee.
+  const feeOf = (b) => b.fee || amt;
+  const isFull = (b) => b.other || b.paid >= feeOf(b) - 0.005;
+  const put = (b, p, v) => {
+    if (!b.fee && Number(p.feeAmount) > 0) b.fee = Number(p.feeAmount);
+    b.paid += v;
+    if (!b.pays.includes(p)) b.pays.push(p);
+  };
+  const spend = (p, from) => {
+    if (p.currency && p.currency !== cur) {
+      // another currency: can't compare amounts, so it pays that one bill
+      bills[from].other = true;
+      if (!bills[from].pays.includes(p)) bills[from].pays.push(p);
+      return;
+    }
+    let left = Number(p.amount) || 0;
+    for (let i = from; i < bills.length && left > 0.005; i++) {
+      const b = bills[i];
+      if (isFull(b) && i !== from) continue;
+      if (Number(p.feeAmount) > 0 && !b.fee) b.fee = Number(p.feeAmount);
+      const take = i === bills.length - 1 ? left : Math.min(left, Math.max(0, feeOf(b) - b.paid));
+      if (take <= 0.005) continue;
+      put(b, p, take);
+      left -= take;
+    }
+    if (left > 0.005) put(bills[bills.length - 1], p, left); // paid ahead of the bills so far
+  };
+  const byDate = mine
+    .slice()
+    .sort((a, b) => String(a.paidDate || "").localeCompare(String(b.paidDate || "")) || String(a.id).localeCompare(String(b.id)));
+  const firstOut = llqaAddDays(bills[0].due, -7);
+  byDate.forEach((p) => {
+    if (!p.month) return;
+    const i = bills.findIndex((b) => b.ym === String(p.month).slice(0, 7));
+    if (i >= 0) spend(p, i);
+  });
+  byDate.forEach((p) => {
+    if (p.month) return;
+    const d = String(p.paidDate || "").slice(0, 10);
+    // paid before the oldest bill shown was out, while older bills exist: it paid one of those
+    if (bills[0].ym > startM && d && d < firstOut) return;
+    const open = bills.map((b, i) => i).filter((i) => !isFull(bills[i]));
+    if (!open.length) return spend(p, bills.length - 1);
+    const out = open.filter((i) => !d || llqaAddDays(bills[i].due, -7) <= d);
+    spend(p, out.length ? out[0] : open[0]);
+  });
+  const months = bills.reverse().map((b) => {
+    const fee = feeOf(b);
+    const over = llqaAddDays(b.due, LLQA_FEE_GRACE);
+    const paid = Math.round(b.paid * 100) / 100;
+    const full = b.other || paid >= fee - 0.005;
+    const state = full ? "paid" : t >= over ? "overdue" : paid > 0 ? "partial" : t < b.due ? "upcoming" : "due";
+    return { ym: b.ym, due: b.due, over, paid, fee, left: full ? 0 : Math.round((fee - paid) * 100) / 100, state, pays: b.pays };
+  });
   const current = months[0];
   const owed = months.filter((m) => m.state === "overdue");
   return {
@@ -3916,6 +3972,289 @@ const llqaLeaveStartRun = () => {
 };
 // Requests that need the academy (proposals wait for the parent instead).
 const llqaPendingRequests = (list) => (list || []).filter((r) => r && r.status === "pending" && r.type !== "proposal");
+
+/* ---------- v66.2: the Timetable's grid tools keep each student's record right ---------- */
+// The student a booked cell belongs to (by id when the booking has one, else name + parent).
+const llqaCellStudent = (cell) => {
+  if (!cell || typeof cell !== "object" || !cell.s) return null;
+  return (LLQAApp.ctx.students || []).find((s) => s && s.status !== "quit" && LLQABooking.sameStudent(cell, s)) || null;
+};
+// A student's saved classes (only the ones with a day and a time).
+const llqaRowsOf = (s) =>
+  Array.isArray(s.schedule) && s.schedule.length
+    ? s.schedule.filter((r) => r && r.day && r.time).map((r) => ({ ...r, teacher: r.teacher || s.teacher }))
+    : LLQABooking.scheduleOf(s).filter((r) => r.day && r.time);
+// The record fields that follow from a list of classes.
+const llqaClassFields = (rows) => ({
+  schedule: rows.map((r) => ({ day: r.day, time: r.time, teacher: r.teacher, pktDay: r.pktDay || "", pktSlot: r.pktSlot || "" })),
+  time: rows.map((r) => r.day + "|" + r.time).join(", "),
+  teacher: rows.length ? rows[0].teacher : "Unassigned",
+  hoursPerWeek: rows.length ? String(rows.length * 0.5) : "",
+});
+// The record after one class (teacher + Timetable day + slot) is taken off:
+// { fields, row }, or null when that cell isn't one of the student's saved
+// classes. (A Timetable row is the family's day; before / after a clock
+// change the same class can sit on either slot.)
+const llqaWithoutClass = (s, teacherName, rowDay, slot) => {
+  const B = LLQABooking;
+  const tz = B.timezoneFor(s.country, s.state) || s.tz || "";
+  if (!tz) return null;
+  const rows = llqaRowsOf(s);
+  const i = rows.findIndex((r) => r.teacher === teacherName && r.day === rowDay && B.pktOptions(r.day, r.time, tz).some((o) => o.slot === slot));
+  if (i < 0) return null;
+  return { fields: llqaClassFields(rows.filter((r, j) => j !== i)), row: rows[i] };
+};
+const llqaSaveClasses = (s, fields, teachers, text) => {
+  const ctx = LLQAApp.ctx;
+  if (teachers) {
+    const byId = new Map(teachers.map((t) => [String(t.id), t]));
+    ctx.setTeachers((prev) => (prev || []).map((t) => (t && byId.has(String(t.id)) ? byId.get(String(t.id)) : t)));
+  }
+  ctx.setStudents((prev) => (prev || []).map((x) => (String(x.id) === String(s.id) ? { ...x, ...fields } : x)));
+  if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster([{ ...s, ...fields }]);
+  if (text) llqaToast({ kind: "moved", key: "moved-" + s.id, student: { ...s, ...fields }, studentId: s.id, text });
+};
+const llqaWeekText = (n) => (n ? n + " class" + (n === 1 ? "" : "es") + " a week" : "no classes left");
+// Mark as Free on a student's class: only that class leaves their record.
+const llqaClassFreed = (cell, teacherName, rowDay, slot) => {
+  const s = llqaCellStudent(cell);
+  if (!s) return null;
+  const w = llqaWithoutClass(s, teacherName, rowDay, slot);
+  if (!w) return null;
+  const n = w.fields.schedule.length;
+  llqaSaveClasses(s, w.fields, null,
+    "✓ " + s.name + "'s " + rowDay + " " + LLQABooking.timeLabel(w.row.time) + " class is removed — " + llqaWeekText(n) + (n ? " now" : "") + ". Tell the family?");
+  return w.fields;
+};
+// Plan one more class for a student at a Timetable cell, on a teachers list.
+// → { teachers, rows, it } or { error }
+const llqaPlanClassAt = (teachers, s, rows, teacher, rowDay, slot) => {
+  const B = LLQABooking;
+  const tz = B.timezoneFor(s.country, s.state) || s.tz || "";
+  if (!tz) return { error: "No time zone for " + s.name + " — set their State / Province first." };
+  const fam = B.pktDayOf(rowDay, slot, tz).famTime;
+  const time = String(fam || "").replace(":", "");
+  if (!time) return { error: "Can't work out " + s.name + "'s time for that slot." };
+  const isQ = s.course !== "Subject";
+  const master = isQ && rows.length ? rows[0].teacher : "";
+  if (isQ && master && master !== teacher.name)
+    return {
+      error:
+        s.name + "'s Quran classes are with " + master + ". A Quran student keeps one teacher, so this class can't go to " + teacher.name +
+        ".\n\nTo move all of their classes to " + teacher.name + ", use 📅 Change classes.",
+    };
+  if (rows.some((r) => r.day === rowDay && r.time === time)) return { error: s.name + " already has a class on " + rowDay + " at " + B.timeLabel(time) + "." };
+  const pl = B.plan({ rows: [{ day: rowDay, time, teacher: teacher.name }], country: s.country, state: s.state, teachers, isQuran: isQ, master: isQ ? teacher.name : "", own: s });
+  if (pl.problems.length) return { error: pl.problems.join("\n") };
+  const it = pl.items[0];
+  if (!it || String(it.teacherId) !== String(teacher.id) || it.rowDay !== rowDay || it.slot !== slot)
+    return { error: "That cell doesn't match " + s.name + "'s time zone — use 📅 Change classes." };
+  const res = B.book(teachers, [it], { ...s, sub: isQ ? "" : llqaSubjects(s) || "Subject" });
+  if (!res.ok) return { error: res.problems.join("\n") };
+  return { teachers: res.teachers, it, rows: [...rows, { day: it.day, time: it.time, teacher: it.teacher, pktDay: it.pktDay, pktSlot: it.slot }] };
+};
+// The CRM teacher record behind a Timetable teacher.
+const llqaAppTeacher = (tt) => {
+  const id = tt && (tt._appId != null ? tt._appId : tt._overlayAppId);
+  return id == null ? null : (LLQAApp.ctx.teachers || []).find((t) => String(t.id) === String(id)) || null;
+};
+// Paste / drag a student's class onto a cell: book it for the student.
+// Returns an error message, or "" when done.
+const llqaPasteClass = (s, clip, tt, rowDay, slot, existing) => {
+  if (existing && typeof existing === "object" && existing.s) {
+    if (LLQABooking.sameStudent(existing, s)) return "";
+    return "That slot already has " + existing.s + "'s class. Free it first (Mark as Free), or paste on a free slot.";
+  }
+  const at = llqaAppTeacher(tt);
+  if (!at) return (tt && tt.name ? tt.name : "This teacher") + " isn't saved as a teacher in the CRM yet (HR → Teachers), so a student's class can't be booked here.";
+  const p = llqaPlanClassAt(LLQAApp.ctx.teachers || [], s, llqaRowsOf(s), at, rowDay, slot);
+  if (p.error) return p.error;
+  let teachers = p.teachers;
+  // keep the class's notes / flags
+  if (Array.isArray(clip.f) && clip.f.length)
+    teachers = teachers.map((t) => {
+      if (String(t.id) !== String(at.id)) return t;
+      const sch = { ...t._ttSchedule, [rowDay]: { ...(t._ttSchedule[rowDay] || {}) } };
+      sch[rowDay][slot] = { ...sch[rowDay][slot], f: clip.f.slice() };
+      return { ...t, _ttSchedule: sch };
+    });
+  const f = llqaClassFields(p.rows);
+  llqaSaveClasses(s, f, teachers.filter((t) => String(t.id) === String(at.id)),
+    "✓ " + s.name + " now also has " + rowDay + " " + LLQABooking.timeLabel(p.it.time) + " with " + at.name + " — " + llqaWeekText(f.schedule.length) + ". Tell the family?");
+  return "";
+};
+// Copy Monday → Tue–Fri: only free slots are filled. A student's Monday class
+// is booked for that student on the other days (their record follows); other
+// Monday entries are copied as they are. Classes already booked stay.
+// Returns false (cancelled) / null (not a CRM teacher) / a summary.
+const llqaCopyMonday = (tt) => {
+  const B = LLQABooking;
+  const ctx = LLQAApp.ctx;
+  const at = llqaAppTeacher(tt);
+  if (!at) return null;
+  const mon = (tt.schedule && tt.schedule.Mon) || {};
+  const days = ["Tue", "Wed", "Thu", "Fri"];
+  const isBooked = (v) => !!(v && typeof v === "object" && v.s);
+  const isFree = (v) => v === undefined || v === null || v === "" || v === "F";
+  const plan = [];
+  let kept = 0;
+  Object.keys(mon).forEach((slot) => {
+    const v = mon[slot];
+    if (isFree(v)) return;
+    days.forEach((d) => {
+      const cur = tt.schedule[d] ? tt.schedule[d][slot] : undefined;
+      if (isBooked(cur)) {
+        if (!(isBooked(v) && cur.s === v.s && String(cur.l || "") === String(v.l || ""))) kept++;
+        return;
+      }
+      if (!isFree(cur) && !isBooked(v)) return; // same kind of mark already there
+      if (!isFree(cur)) {
+        kept++;
+        return;
+      }
+      plan.push({ d, slot, v });
+    });
+  });
+  const kids = new Map();
+  plan.forEach((x) => {
+    const s = isBooked(x.v) ? llqaCellStudent(x.v) : null;
+    if (s) {
+      if (!kids.has(String(s.id))) kids.set(String(s.id), { s, cells: [] });
+      kids.get(String(s.id)).cells.push(x);
+    }
+  });
+  const plain = plan.filter((x) => !(isBooked(x.v) && llqaCellStudent(x.v)));
+  const nAdd = [...kids.values()].reduce((a, k) => a + k.cells.length, 0);
+  if (!plan.length) {
+    alert("Nothing to copy: every Tue–Fri slot that Monday uses is already the same or booked." + (kept ? "\n\n" + kept + " booked slot(s) were left as they are." : ""));
+    return false;
+  }
+  if (
+    !confirm(
+      "Copy Monday to Tue–Fri for " + at.name + "?\n\n" +
+        "• Only free slots are filled — classes already booked on Tue–Fri stay as they are" + (kept ? " (" + kept + " slot" + (kept === 1 ? "" : "s") + ")" : "") + ".\n" +
+        (kids.size
+          ? "• " + kids.size + " student" + (kids.size === 1 ? "" : "s") + " get" + (kids.size === 1 ? "s" : "") + " " + nAdd + " more class" + (nAdd === 1 ? "" : "es") + " (" +
+            [...kids.values()].map((k) => k.s.name + " +" + k.cells.length).join(", ") + "); their class lists are updated.\n"
+          : "") +
+        (plain.length ? "• " + plain.length + " other entr" + (plain.length === 1 ? "y is" : "ies are") + " copied as they are.\n" : ""),
+    )
+  )
+    return false;
+  let teachers = ctx.teachers || [];
+  const done = [];
+  const skipped = [];
+  kids.forEach(({ s, cells }) => {
+    let rows = llqaRowsOf(s);
+    let added = 0;
+    cells.forEach((x) => {
+      const p = llqaPlanClassAt(teachers, s, rows, at, x.d, x.slot);
+      if (p.error) {
+        skipped.push(s.name + " " + x.d + ": " + p.error.split("\n")[0]);
+        return;
+      }
+      teachers = p.teachers;
+      rows = p.rows;
+      added++;
+    });
+    if (added) done.push({ s, fields: llqaClassFields(rows), added });
+  });
+  if (plain.length)
+    teachers = teachers.map((t) => {
+      if (String(t.id) !== String(at.id)) return t;
+      const sch = JSON.parse(JSON.stringify(t._ttSchedule || tt.schedule || {}));
+      plain.forEach((x) => {
+        if (!sch[x.d]) sch[x.d] = {};
+        if (!isFree(sch[x.d][x.slot])) return;
+        const v = isBooked(x.v) ? { ...x.v } : x.v;
+        if (isBooked(v)) {
+          delete v.sid; // not a current student: a plain copy, not linked to anyone
+          delete v.day;
+        }
+        sch[x.d][x.slot] = v;
+      });
+      return { ...t, _ttSchedule: sch };
+    });
+  const mine = teachers.filter((t) => String(t.id) === String(at.id));
+  if (done.length) done.forEach((x, i) => llqaSaveClasses(x.s, x.fields, i === 0 ? mine : null, ""));
+  else ctx.setTeachers((prev) => (prev || []).map((t) => (t && String(t.id) === String(at.id) ? mine[0] : t)));
+  const nDone = done.reduce((a, x) => a + x.added, 0);
+  llqaToast({
+    kind: done.length === 1 ? "moved" : "info",
+    key: "copymon-" + at.id,
+    ttl: 15000,
+    ...(done.length === 1 ? { student: { ...done[0].s, ...done[0].fields }, studentId: done[0].s.id } : {}),
+    text:
+      "✓ Monday copied to Tue–Fri for " + at.name + ": " +
+      [nDone && nDone + " class" + (nDone === 1 ? "" : "es") + " booked for " + done.map((x) => x.s.name).join(", "), plain.length && plain.length + " other entr" + (plain.length === 1 ? "y" : "ies") + " copied", kept && kept + " booked slot" + (kept === 1 ? "" : "s") + " kept"]
+        .filter(Boolean)
+        .join(", ") + "." +
+      (skipped.length ? " Not booked: " + skipped.join("; ") + "." : "") +
+      (done.length > 1 ? " Tell the families their new times (Contacts & Messages)." : ""),
+  });
+  return { booked: nDone, students: done.length, plain: plain.length, kept, skipped };
+};
+
+/* ---------- v66.2: teachers added in the CRM count everywhere the Timetable does ---------- */
+// One shift's teachers exactly as the Timetable grid lists them: the built-in
+// list (with saved changes) and every teacher added in the CRM for that shift.
+// (Export and Smart Finder read only the built-in list, which is empty.)
+const llqaShiftTeachers = (sh) => {
+  const sd = TT_DATA[sh];
+  if (!sd) return [];
+  const app = LLQAApp.ctx.teachers || [];
+  const base = sd.teachers || [];
+  const codes = new Set(base.map((t) => t.code));
+  const days = sh === "Weekend" ? ["Sat", "Sun"] : ["Mon", "Tue", "Wed", "Thu", "Fri"];
+  const empty = () => {
+    const o = {};
+    days.forEach((d) => {
+      o[d] = {};
+      sd.slots.forEach((s) => {
+        o[d][s] = "F";
+      });
+    });
+    return o;
+  };
+  const over = {};
+  app.forEach((at) => {
+    if (at && at._ttSchedule && at.code) over[at.code] = at;
+  });
+  return [
+    ...base.map((bt) => {
+      const ov = over[bt.code];
+      if (!ov) return bt;
+      const sch = JSON.parse(JSON.stringify(bt.schedule || {}));
+      Object.keys(ov._ttSchedule).forEach((d) => {
+        sch[d] = { ...(sch[d] || {}), ...ov._ttSchedule[d] };
+      });
+      return { ...bt, schedule: sch };
+    }),
+    ...app
+      .filter(
+        (t) =>
+          t && !codes.has(t.code) &&
+          (!t.department || t.department === "Quran" || t.department === "Both") &&
+          (String(t.shift || "").includes(sh) || (!t.shift && sh === "Night")),
+      )
+      .map((t, i) => ({ sno: base.length + i + 1, name: t.name, code: t.code || "", location: t.location || "IBA", lead: t.teamLead || t.lead || "", schedule: t._ttSchedule || empty() })),
+  ];
+};
+// When a teacher's shift starts, "HH:MM" — from the shift saved on the teacher
+// in the CRM (the first one when they work several); "" when unknown.
+const llqaShiftStart = (t) => {
+  const own = String((t && t.shift) || "")
+    .split(",")
+    .map((x) => x.trim())
+    .find((x) => TT_DATA[x] && TT_DATA[x].slots && TT_DATA[x].slots[0]);
+  return own ? TT_DATA[own].slots[0] : "";
+};
+// Minutes late against a shift start, across midnight (signing in at 23:50
+// for a 00:00 shift is 10 minutes early, not 23 hours 50 late).
+const llqaLateBy = (nowMin, startMin) => {
+  const d = nowMin - startMin;
+  return d > 720 ? d - 1440 : d < -720 ? d + 1440 : d;
+};
 
 /* ============================================================
    v66 — Part 5: screens. Timetable: Leave Cover, Holidays,

@@ -263,7 +263,20 @@ const parseUSTime = (timeStr) => {
   };
 };
 
+// v66.2: places that stopped changing clocks after some browsers' time zone data
+// was made (tz 2026b–e): from these moments they keep summer time all year.
+const LLQA_TZ_FIXED = {
+  "America/Vancouver": { from: Date.UTC(2026, 10, 1, 9, 0, 0), off: -420 }, // British Columbia: UTC−7
+  "America/Edmonton": { from: Date.UTC(2026, 10, 1, 8, 0, 0), off: -360 }, // Alberta, Northwest Territories: UTC−6
+  "America/Winnipeg": { from: Date.UTC(2026, 10, 1, 7, 0, 0), off: -300 }, // Manitoba: UTC−5
+};
+const llqaTzFixed = (tz, t) => {
+  const r = LLQA_TZ_FIXED[tz];
+  return r && t >= r.from ? r.off : null;
+};
 const tzOffsetMinutes = (tz, refDate) => {
+  const _fx = llqaTzFixed(tz, refDate ? new Date(refDate).getTime() : Date.now()); // v66.2
+  if (_fx !== null) return _fx;
   try {
     const fmt = new Intl.DateTimeFormat("en-US", {
       timeZone: tz,
@@ -3347,6 +3360,9 @@ const LLQABooking = (() => {
     const key = tz + "|" + Math.floor(t / 60000);
     const hit = offCache.get(key);
     if (hit !== undefined) return hit;
+    // v66.2: places that stopped changing clocks after older browsers' data was made
+    const fx = typeof llqaTzFixed === "function" ? llqaTzFixed(tz, t) : null;
+    if (fx !== null) return fx;
     let v = 0;
     try {
       const f =
