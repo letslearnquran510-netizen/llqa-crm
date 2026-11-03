@@ -372,6 +372,7 @@ const SalesMod = ({
       specificSubject:
         pf.course === "Subject" && Array.isArray(pf.specificSubject) ? pf.specificSubject : [],
       parentId: newStudent.parentId || LLQABooking.newParentId(current),
+      addedAt: todayPK(), // v66: the day they were added to the CRM
       // v65: how many trial classes before the fee (default 3)
       trialTarget: llqaInTrial(pf) ? llqaTrialTarget(pf) : "",
     };
@@ -406,13 +407,18 @@ const SalesMod = ({
     }
     setModal(null);
     alert(LLQABooking.bookingSummary(stu.name, pl.items, stu.parentId));
-    // v65: one click to send the welcome message (class times + Parent ID)
+    // v65: one click to send the welcome message (class times + Parent ID);
+    // v66: a family from before the CRM gets the Parent Portal intro instead
+    const _old = llqaExisting(stu);
     llqaToast({
       kind: "welcome",
       key: "welcome-" + stu.id,
       studentId: stu.id,
       student: stu,
-      text: "✓ " + stu.name + " added. Send the welcome message with the class times and Parent ID?",
+      template: _old ? "portalIntro" : "welcome",
+      text: _old
+        ? "✓ " + stu.name + " added as an existing student (registered " + llqaDateYear(stu.dor) + "). Send the Parent Portal intro with their Parent ID?"
+        : "✓ " + stu.name + " added. Send the welcome message with the class times and Parent ID?",
     });
   };
   const REF_STATUSES = [

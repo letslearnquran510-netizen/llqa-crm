@@ -600,6 +600,7 @@ const StudentsMod = ({
         ? pl.items.map((it) => it.day + "|" + it.time).join(", ")
         : pf.time || "",
       dor: pf.dor,
+      addedAt: todayPK(), // v66: the day they were added to the CRM
       phone: pf.phone || "",
       email: pf.email || "",
       hoursPerWeek: pl.items.length
@@ -663,13 +664,18 @@ const StudentsMod = ({
     if (nextTeachers) setAppTeachers(nextTeachers);
     setModal(null);
     alert(LLQABooking.bookingSummary(newStudent.name, pl.items, newStudent.parentId));
-    // v65: one click to send the welcome message (class times + Parent ID)
+    // v65: one click to send the welcome message (class times + Parent ID);
+    // v66: a family from before the CRM gets the Parent Portal intro instead
+    const _old = llqaExisting(newStudent);
     llqaToast({
       kind: "welcome",
       key: "welcome-" + newStudent.id,
       studentId: newStudent.id,
       student: newStudent,
-      text: "✓ " + newStudent.name + " added. Send the welcome message with the class times and Parent ID?",
+      template: _old ? "portalIntro" : "welcome",
+      text: _old
+        ? "✓ " + newStudent.name + " added as an existing student (registered " + llqaDateYear(newStudent.dor) + "). Send the Parent Portal intro with their Parent ID?"
+        : "✓ " + newStudent.name + " added. Send the welcome message with the class times and Parent ID?",
     });
   };
   const delStudent = (id) => {

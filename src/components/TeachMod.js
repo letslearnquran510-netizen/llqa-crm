@@ -7,7 +7,8 @@ const TeachMod = ({
   teamLeads,
 }) => {
   const [tab, setTab] = useState("All");
-  const [st, setSt] = useState("list");
+  const [st, setSt] = useState(() => llqaTakeTab("teachers", "list"));
+  useEffect(() => llqaOnTab("teachers", setSt), []); // v66
   const [search, setSearch] = useState("");
   const [fs, setFs] = useState("all");
   const [modal, setModal] = useState(null);
