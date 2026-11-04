@@ -1,0 +1,11 @@
+{
+  "crmUrl": "https://letslearnquran510-netizen.github.io/llqa-crm/index.html",
+  "adminPassword": "",
+  "port": 8787,
+  "host": "127.0.0.1",
+  "allowedOrigins": ["https://letslearnquran.net", "https://www.letslearnquran.net"],
+  "leadToken": "",
+  "checkEverySec": 60,
+  "freshStartHours": 24,
+  "headless": true
+}

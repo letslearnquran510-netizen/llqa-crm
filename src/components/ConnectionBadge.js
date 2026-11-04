@@ -115,6 +115,7 @@ const LLQA_LIST_NAMES = {
   waitlist: "Waitlist", messageLog: "Message log", "settings/messaging": "Message templates", "settings/automation": "Automation settings",
   covers: "Leave cover", parentRequests: "Parent requests", "settings/calendar": "Holidays calendar",
   makeups: "Make-up classes", leads: "Leads", rewards: "Referral rewards", // v67
+  "settings/runner": "24/7 runner status", // v67.3
 };
 const llqaListName = (k) => LLQA_LIST_NAMES[k] || k;
 

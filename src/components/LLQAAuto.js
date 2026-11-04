@@ -22,6 +22,89 @@ const llqaCanManage = () => {
   const u = LLQAApp.ctx.user;
   return !u || (u.role !== "teacher" && u.role !== "parent");
 };
+// v67.2: can this user open that page (it is in their menu)? Notices, cards
+// and automatic work for a page they can't open are left out (a Team Lead has
+// no Sales: no fee or follow-up notices, no Sales cards on the Dashboard).
+const llqaCanOpen = (page) => {
+  const ctx = LLQAApp.ctx;
+  const u = ctx.user;
+  if (!u) return false;
+  if (u.role === "superadmin") return true;
+  if (!Array.isArray(ctx.pages)) return llqaCanManage(); // not known yet
+  return ctx.pages.includes(page);
+};
+
+/* ---------- the 24/7 runner (v67.3) ---------- */
+// The server keeps one Super Admin tab open around the clock
+// (index.html?runner=1). It does the saving work — automatic cover, Fee
+// Status, clock changes, leave starts — every 2 minutes and writes a
+// heartbeat. While it is alive, people's own tabs leave that work to it and
+// show what it did once, with the usual buttons (tell substitutes / families).
+const LLQA_RUNNER = (() => {
+  try {
+    return /(^|&)runner=1(&|$)/.test(String(window.location.search || "").replace(/^\?/, ""));
+  } catch (e) {
+    return false;
+  }
+})();
+const LLQA_RUNNER_NAME = "24/7 runner";
+const LLQA_RUNNER_STALE_MS = 5 * 60 * 1000;
+const llqaRunnerAge = () => {
+  const at = Date.parse(((LLQAApp.ctx && LLQAApp.ctx.runnerInfo) || {}).at || "");
+  return isNaN(at) ? null : Math.max(0, Date.now() - at);
+};
+const llqaRunnerAlive = () => {
+  const a = llqaRunnerAge();
+  return a != null && a < LLQA_RUNNER_STALE_MS;
+};
+// The name saved on automatic records: the runner, or the person signed in.
+const llqaByName = () => {
+  if (LLQA_RUNNER) return LLQA_RUNNER_NAME;
+  const u = (LLQAApp.ctx && LLQAApp.ctx.user) || {};
+  return u.name || u.role || "";
+};
+const llqaRunnerBeat = () => {
+  const ctx = LLQAApp.ctx;
+  if (!LLQA_RUNNER || !ctx.user || typeof ctx.setRunnerInfo !== "function") return;
+  let st = {};
+  try {
+    st = (typeof LLQASync !== "undefined" && LLQASync.get && LLQASync.get()) || {};
+  } catch (e) {}
+  ctx.setRunnerInfo({ ...(ctx.runnerInfo || {}), at: new Date().toISOString(), version: window.__LLQA_VERSION__ || "", mode: st.mode || "", waiting: st.pending || 0, saveError: st.writeError || "" });
+};
+const LLQA_RUNNER_SEEN = "llqa_runner_seen_v1";
+const llqaRunnerSeen = () => {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(LLQA_RUNNER_SEEN) || "[]"));
+  } catch (e) {
+    return new Set();
+  }
+};
+const llqaRunnerMark = (keys) => {
+  try {
+    localStorage.setItem(LLQA_RUNNER_SEEN, JSON.stringify([...llqaRunnerSeen(), ...keys].slice(-400)));
+  } catch (e) {}
+};
+// In a person's tab: what the runner did in the last day and a half that needs
+// someone to tell people — shown once in each browser.
+const llqaRunnerNews = () => {
+  const ctx = LLQAApp.ctx;
+  if (LLQA_RUNNER || !ctx.user || !llqaCanManage()) return;
+  const seen = llqaRunnerSeen();
+  const since = Date.now() - 36 * 3600 * 1000;
+  if (llqaCanOpen("timetable")) {
+    const covers = (ctx.covers || []).filter((x) => x && x.auto && x.by === LLQA_RUNNER_NAME && Date.parse(x.at || "") > since && !seen.has("cv:" + x.id + ":" + x.at));
+    if (covers.length) {
+      llqaRunnerMark(covers.map((x) => "cv:" + x.id + ":" + x.at));
+      llqaToast({ kind: "covers", key: "covers", covers, text: "🔁 Teacher on leave: the 24/7 runner gave " + covers.length + " class" + (covers.length === 1 ? "" : "es") + " to a substitute. Tell the substitutes and families?" });
+    }
+  }
+  const run = ctx.automation && ctx.automation.lastRun;
+  if (run && run.by === LLQA_RUNNER_NAME && run.at && Date.parse(run.at) > since && !seen.has("ck:" + run.at) && llqaCanOpen("sales")) {
+    llqaRunnerMark(["ck:" + run.at]);
+    llqaToast({ kind: "clockFixed", key: "clockFixed", run, text: "🕐 Clocks changed — the 24/7 runner moved the classes. " + llqaRunText(run) });
+  }
+};
 
 /* ---------- open a page on a given tab ---------- */
 const llqaGo = (page, tab) => {
@@ -99,7 +182,18 @@ const llqaDays = (a, b) => {
   const pb = llqaDayNum(b);
   return isNaN(pa) || isNaN(pb) ? null : Math.round((pb - pa) / 86400000);
 };
-const llqaAddDays = (d, n) => new Date(Date.parse(d + "T12:00:00Z") + n * 86400000).toISOString().slice(0, 10);
+// v67.2: remembered (asked tens of thousands of times after each data change)
+const llqaAddDaysMemo = new Map();
+const llqaAddDays = (d, n) => {
+  const k = d + "|" + n;
+  let v = llqaAddDaysMemo.get(k);
+  if (v === undefined) {
+    if (llqaAddDaysMemo.size > 50000) llqaAddDaysMemo.clear();
+    v = new Date(Date.parse(d + "T12:00:00Z") + n * 86400000).toISOString().slice(0, 10);
+    llqaAddDaysMemo.set(k, v);
+  }
+  return v;
+};
 const llqaWeekday = (d) => LLQABooking.DAYS[(new Date(d + "T12:00:00Z").getUTCDay() + 6) % 7];
 const llqaDateLabelMemo = new Map();
 const llqaDateLabel = (d) => {
@@ -201,7 +295,7 @@ const llqaTrialStage = (cell, students, arPayments) => {
 // After a class is counted: the moment a trial reaches its target, offer the
 // fee message (once).
 const llqaAfterCount = (before, cnt) => {
-  if (!before || !cnt || !llqaInTrial(before) || !llqaCanManage()) return;
+  if (!before || !cnt || !llqaInTrial(before) || !llqaCanManage() || !llqaCanOpen("sales")) return;
   if (llqaIsPaid(before)) return;
   const target = llqaTrialTarget(before);
   const was = parseInt(before.attended, 10) || 0;
@@ -450,7 +544,18 @@ const llqaCall = (digits, meta) => {
 // v66: the Pakistan weekday and family time of a Timetable slot, given the
 // zone difference (Pakistan minus family, in minutes) — same as
 // LLQABooking.pktDayOf, but the difference is worked out once per date.
+const llqaPktDayMemo = new Map();
 const llqaPktDay = (rowDay, slot, diff) => {
+  const k = rowDay + "|" + slot + "|" + diff;
+  let v = llqaPktDayMemo.get(k);
+  if (v === undefined) {
+    if (llqaPktDayMemo.size > 20000) llqaPktDayMemo.clear();
+    v = llqaPktDayRaw(rowDay, slot, diff);
+    llqaPktDayMemo.set(k, v);
+  }
+  return v;
+};
+const llqaPktDayRaw = (rowDay, slot, diff) => {
   const B = LLQABooking;
   const [h, m] = String(slot || "").split(":").map(Number);
   if (isNaN(h)) return { pktDay: rowDay, shift: 0, famTime: "" };
@@ -462,6 +567,19 @@ const llqaPktDay = (rowDay, slot, diff) => {
     shift,
     famTime: B.fmt12(String(Math.floor(fam / 60)).padStart(2, "0") + ":" + String(fam % 60).padStart(2, "0")),
   };
+};
+// v67.2: every booked cell of the Timetable (with its family time zone), once
+// per version of the teacher list — each day's class list reuses it
+const llqaBookedMemo = new WeakMap();
+const llqaBookedList = (teachers) => {
+  const list = teachers || [];
+  let v = llqaBookedMemo.get(list);
+  if (!v) {
+    v = [];
+    LLQABooking.eachBooked(list, (c) => v.push({ ...c, tz: LLQABooking.timezoneFor(c.cell.country, c.cell.state) }));
+    llqaBookedMemo.set(list, v);
+  }
+  return v;
 };
 // v66: worked out once per data change (screens ask for the same day many times)
 const llqaClassesOn = (date, teachers, students, dailyProgress) => {
@@ -485,9 +603,9 @@ const llqaClassesOnRaw = (date, teachers, students, dailyProgress) => {
   const diffs = new Map();
   const holiday = llqaHolidayOn(date, "holiday");
   const out = [];
-  B.eachBooked(teachers || [], (c) => {
+  llqaBookedList(teachers).forEach((c) => {
     const cell = c.cell;
-    const tz = B.timezoneFor(cell.country, cell.state);
+    const tz = c.tz;
     let pd = { pktDay: c.day, shift: 0, famTime: "" };
     if (tz) {
       if (!diffs.has(tz)) diffs.set(tz, pkOff - B.offsetAt(tz, ref));
@@ -840,10 +958,9 @@ const llqaClockApply = (entries, opt) => {
     if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster(res.moved.map((m) => fixSched(m.s)));
     llqaWaitCheck(before, res.teachers);
   }
-  const u = ctx.user || {};
   const run = {
     at: new Date().toISOString(),
-    by: u.name || u.role || "",
+    by: llqaByName(), // v67.3
     auto: !!o.auto,
     moved: res.moved.map((m) => ({ sid: m.s.id, name: m.s.name || "", zone: m.zone || "", rows: m.rows })),
     skipped: res.skipped.map((k) => ({ sid: k.s.id, name: k.s.name || "", why: k.why })),
@@ -1657,12 +1774,18 @@ const llqaClockTick = (state) => {
       if (fn()) again = true;
     } catch (e) {}
   };
-  job(() => {
-    const run = llqaClockAutoRun();
-    return run && !run.same && ((run.moved || []).length || (run.skipped || []).length);
-  });
+  // v67.2: each job only for people who can open its page
+  const sales = llqaCanOpen("sales");
+  // v67.3: while the 24/7 runner is alive it does the saving work; this tab
+  // shows what it did (once) and the read-only notices
+  const runnerUp = !LLQA_RUNNER && llqaRunnerAlive();
+  if (sales && !runnerUp)
+    job(() => {
+      const run = llqaClockAutoRun();
+      return run && !run.same && ((run.moved || []).length || (run.skipped || []).length);
+    });
   try {
-    if (!state.soon) {
+    if (!state.soon && sales) {
       const soon = llqaClockSoon();
       if (soon) {
         state.soon = true;
@@ -1673,7 +1796,7 @@ const llqaClockTick = (state) => {
   // v66: read-only notices first (leave ended, today's follow-ups), then the
   // jobs that save: teacher leave → cover, fee cycle → Fee Status
   try {
-    if (!state.ended) {
+    if (!state.ended && llqaCanOpen("students")) {
       const ended = llqaLeaveEnded();
       if (ended.length) {
         state.ended = true;
@@ -1685,16 +1808,25 @@ const llqaClockTick = (state) => {
         });
       }
     }
-    if (!state.pilot && llqaCanManage() && LLQAApp.ctx.user && llqaReadyFor(["students", "messageLog", "dailyProgress"])) {
+    if (!state.pilot && sales && llqaCanManage() && LLQAApp.ctx.user && llqaReadyFor(["students", "messageLog", "dailyProgress"])) {
       state.pilot = true;
       const due = llqaAutopilot();
       if (due.length)
         llqaToast({ kind: "pilot", key: "pilot", text: "🤖 " + due.length + " follow-up message" + (due.length === 1 ? " is" : "s are") + " due today (" + [...new Set(due.map((x) => llqaTplName(x.template)))].slice(0, 3).join(", ") + ")." });
     }
   } catch (e) {}
-  job(llqaLeaveStartRun);
-  job(llqaCoverRunAuto);
-  job(llqaFeeRunAuto);
+  if (!runnerUp) {
+    if (llqaCanOpen("students")) job(llqaLeaveStartRun);
+    if (llqaCanOpen("timetable")) job(llqaCoverRunAuto);
+    if (sales) job(llqaFeeRunAuto);
+  } else
+    try {
+      llqaRunnerNews();
+    } catch (e) {}
+  if (LLQA_RUNNER)
+    try {
+      llqaRunnerBeat();
+    } catch (e) {}
   try {
     const st = typeof LLQASync !== "undefined" && LLQASync.get ? LLQASync.get() : null;
     if (st && st.mode === "cloud" && (st.pending || st.sending)) again = true;
@@ -1750,11 +1882,54 @@ const llqaRequestEvents = (list, leaves) => {
 const LLQAHost = () => {
   const [, bump] = useState(0);
   const seen = React.useRef(null);
+  // v67.2: who is signed in — a new person starts with no notices or pop-ups
+  // from the one before (shared office computers)
+  // (kept outside the component: it is not on screen while nobody is signed in)
+  const u0 = LLQAApp.ctx.user;
+  const userKey = u0 ? u0.role + ":" + (u0.name || "") + ":" + (u0.teacherId || "") : "";
+  if (LLQAUI.who !== userKey) {
+    if (LLQAUI.who !== undefined) {
+      seen.current = null;
+      LLQAUI.toasts = [];
+      LLQAUI.open = false;
+      LLQAUI.modal = null;
+    }
+    LLQAUI.who = userKey;
+  }
   useEffect(() => {
     const f = () => bump((n) => n + 1);
     LLQAUI.subs.add(f);
     return () => LLQAUI.subs.delete(f);
   }, []);
+  // v67.3: a notice when an inquiry arrives from the website (through the runner)
+  const leadSeen = React.useRef(null);
+  useEffect(() => {
+    const ctx = LLQAApp.ctx;
+    if (LLQA_RUNNER || !ctx.user || !llqaCanOpen("sales") || typeof llqaLeads !== "function") {
+      leadSeen.current = null;
+      return;
+    }
+    try {
+      if (typeof LLQACloud !== "undefined" && LLQACloud.ready && !LLQACloud.ready("leads")) return;
+    } catch (e) {
+      return;
+    }
+    const web = llqaLeads().filter((l) => l && l.createdBy && l.createdBy === l.source);
+    if (!leadSeen.current) {
+      leadSeen.current = new Set(web.map((l) => l.id));
+      return;
+    }
+    web.forEach((l) => {
+      if (leadSeen.current.has(l.id)) return;
+      leadSeen.current.add(l.id);
+      llqaToast({
+        kind: "info",
+        key: "lead-" + l.id,
+        text: "🎯 New inquiry (" + (l.source || "Website") + "): " + [l.parent, l.name].filter(Boolean).join(" · ") + (l.phone ? " · " + l.phone : "") + " — follow up today.",
+        actions: [{ label: "Open Leads", run: () => llqaGo("sales", "leads"), tone: "success" }],
+      });
+    });
+  });
   // v66: watch parent requests (runs after every App update)
   useEffect(() => {
     const ctx = LLQAApp.ctx;
@@ -1767,10 +1942,11 @@ const LLQAHost = () => {
     } catch (e) {
       return;
     }
-    const ev = llqaRequestEvents(ctx.parentRequests, ctx.leaves);
+    // v67.2: parent requests live in Sales, teacher leave asks in Teachers
+    const ev = llqaRequestEvents(ctx.parentRequests, ctx.leaves).filter((e) => (e.kind === "leaveAsk" ? llqaCanOpen("teachers") || llqaCanOpen("timetable") : llqaCanOpen("sales")));
     if (!seen.current) {
       seen.current = new Set(ev.map((e) => e.id));
-      const waiting = llqaPendingRequests(ctx.parentRequests).length;
+      const waiting = llqaCanOpen("sales") ? llqaPendingRequests(ctx.parentRequests).length : 0;
       if (waiting)
         llqaToast({ kind: "request", key: "req-waiting", text: "📨 " + waiting + " parent request" + (waiting === 1 ? " is" : "s are") + " waiting for an answer." });
       ev.filter((e) => e.kind === "leaveAsk").forEach((e) => llqaToast(llqaLeaveAskToast(e.l)));
@@ -1811,14 +1987,14 @@ const LLQAHost = () => {
       quickN = 0;
       llqaVersionCheck();
       tick();
-    }, 5 * 60 * 1000);
+    }, LLQA_RUNNER ? 2 * 60 * 1000 : 5 * 60 * 1000); // v67.3: the runner checks every 2 minutes
     return () => {
       clearTimeout(first);
       clearTimeout(vc);
       clearInterval(again);
       if (quick) clearTimeout(quick);
     };
-  }, []);
+  }, [userKey]); // v67.2: restarts (fresh) when someone else signs in
   const m = LLQAUI.modal;
   const k = m && m.kind;
   const d = (m && m.data) || {};
@@ -2946,6 +3122,9 @@ const LLQATodayClasses = (props) => {
 const LLQADashCards = (props) => {
   const ctx = llqaCtx(props);
   if (!llqaCanManage()) return null;
+  // v67.2: only cards for pages this person can open
+  const sales = llqaCanOpen("sales");
+  const tt = llqaCanOpen("timetable");
   const today = todayPK();
   const nowMin = llqaNowPkMin();
   const clsAll = llqaClassesOn(today, ctx.teachers, ctx.students, ctx.dailyProgress);
@@ -3006,10 +3185,11 @@ const LLQADashCards = (props) => {
   return React.createElement(
     "div",
     { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 16 } },
-    card("today", "📋", "Today's classes", cls.length, logged + " logged · " + missing + " not logged", missing ? c.danger : null, () => llqaGo("timetable", "today")),
-    card("trials", "🧪", "Trials", active, complete + " fee due · " + stalled + " need follow-up", complete ? c.warn : stalled ? c.danger : null, () => llqaGo("sales", "pipeline")),
-    card("follow", "💬", "Follow-ups", complete + feeDue + stalled, complete + " trial fee · " + feeDue + " fee due · " + stalled + " quiet", complete + feeDue ? c.warn : null, () => llqaGo("sales", "contacts")),
-    card("wait", "⏳", "Waitlist", waiting.length, freeNow ? freeNow + " can be booked now" : "none free yet", freeNow ? c.success : null, () => llqaGo("sales", "waitlist")),
+    tt && card("today", "📋", "Today's classes", cls.length, logged + " logged · " + missing + " not logged", missing ? c.danger : null, () => llqaGo("timetable", "today")),
+    sales && card("trials", "🧪", "Trials", active, complete + " fee due · " + stalled + " need follow-up", complete ? c.warn : stalled ? c.danger : null, () => llqaGo("sales", "pipeline")),
+    sales && card("follow", "💬", "Follow-ups", complete + feeDue + stalled, complete + " trial fee · " + feeDue + " fee due · " + stalled + " quiet", complete + feeDue ? c.warn : null, () => llqaGo("sales", "contacts")),
+    sales && card("wait", "⏳", "Waitlist", waiting.length, freeNow ? freeNow + " can be booked now" : "none free yet", freeNow ? c.success : null, () => llqaGo("sales", "waitlist")),
+    sales &&
     card(
       "clock",
       "🕐",
@@ -3021,11 +3201,12 @@ const LLQADashCards = (props) => {
       () => llqaGo("sales", "clock"),
     ),
     // v66
-    card("pilot", "🤖", "Autopilot", pilot.length, pilot.length ? "follow-up messages due today" : "nothing due — all sent", pilot.length ? c.accent : null, () => llqaGo("sales", "autopilot")),
-    card("risk", "⚠", "At-risk students", highRisk, risky.length - highRisk + " more to watch", highRisk ? c.danger : null, () => llqaGo("sales", "autopilot")),
-    card("fees", "💰", "Fee cycle", feeOver, feeOver + " overdue · " + feeDueNow + " due now" + ((ctx.automation || {}).feeAuto !== false ? " · auto ✓" : " · auto off"), feeOver ? c.danger : feeDueNow ? c.warn : null, () => llqaGo("sales", "fees")),
-    card("cover", "🔁", "Leave cover", needCover, needCover ? "classes need a substitute (today/tomorrow)" : "no teacher away without cover", needCover ? c.danger : null, () => llqaGo("timetable", "leavecover")),
-    card("req", "📨", "Parent requests", reqWaiting, askWaiting + " approval" + (askWaiting === 1 ? "" : "s") + " waiting for parents", reqWaiting ? c.warn : null, () => llqaGo("sales", "requests")),
+    sales && card("pilot", "🤖", "Autopilot", pilot.length, pilot.length ? "follow-up messages due today" : "nothing due — all sent", pilot.length ? c.accent : null, () => llqaGo("sales", "autopilot")),
+    sales && card("risk", "⚠", "At-risk students", highRisk, risky.length - highRisk + " more to watch", highRisk ? c.danger : null, () => llqaGo("sales", "autopilot")),
+    sales && card("fees", "💰", "Fee cycle", feeOver, feeOver + " overdue · " + feeDueNow + " due now" + ((ctx.automation || {}).feeAuto !== false ? " · auto ✓" : " · auto off"), feeOver ? c.danger : feeDueNow ? c.warn : null, () => llqaGo("sales", "fees")),
+    tt && card("cover", "🔁", "Leave cover", needCover, needCover ? "classes need a substitute (today/tomorrow)" : "no teacher away without cover", needCover ? c.danger : null, () => llqaGo("timetable", "leavecover")),
+    sales && card("req", "📨", "Parent requests", reqWaiting, askWaiting + " approval" + (askWaiting === 1 ? "" : "s") + " waiting for parents", reqWaiting ? c.warn : null, () => llqaGo("sales", "requests")),
+    tt &&
     card(
       "hol",
       holNow && (holNow.kind || "holiday") === "ramadan" ? "🌙" : "🗓",
@@ -3158,11 +3339,32 @@ const llqaReadyFor = (names) => {
 };
 const llqaRangeLabel = (from, to) =>
   !from ? "" : !to || to === from ? llqaDateLabel(from) : llqaDateLabel(from) + " – " + llqaDateLabel(to);
+const llqaMonthAddMemo = new Map();
 const llqaMonthAdd = (ym, n) => {
+  const k = ym + "|" + n;
+  let v = llqaMonthAddMemo.get(k);
+  if (v === undefined) {
+    if (llqaMonthAddMemo.size > 20000) llqaMonthAddMemo.clear();
+    v = llqaMonthAddRaw(ym, n);
+    llqaMonthAddMemo.set(k, v);
+  }
+  return v;
+};
+const llqaMonthAddRaw = (ym, n) => {
   const [y, m] = String(ym).split("-").map(Number);
   return new Date(Date.UTC(y, m - 1 + n, 1, 12)).toISOString().slice(0, 7);
 };
+const llqaMonthLabelMemo = new Map();
 const llqaMonthLabel = (ym) => {
+  let v = llqaMonthLabelMemo.get(ym);
+  if (v === undefined) {
+    if (llqaMonthLabelMemo.size > 5000) llqaMonthLabelMemo.clear();
+    v = llqaMonthLabelRaw(ym);
+    llqaMonthLabelMemo.set(ym, v);
+  }
+  return v;
+};
+const llqaMonthLabelRaw = (ym) => {
   try {
     return new Date(ym + "-15T12:00:00Z").toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" });
   } catch (e) {
@@ -3296,7 +3498,7 @@ const llqaCoverRecord = (it, date, patch) => {
     keep: false,
     student: (it.cell && it.cell.s) || "",
     course: (it.cell && it.cell.c) || "",
-    by: u.name || u.role || "",
+    by: typeof llqaByName === "function" ? llqaByName() : u.name || u.role || "", // v67.3
     at: new Date().toISOString(),
     auto: false,
     ...(patch || {}),
@@ -6277,7 +6479,7 @@ const llqaSaveLead = (lead) => {
   const ctx = LLQAApp.ctx;
   if (typeof ctx.setLeads !== "function" || !lead) return null;
   const u = ctx.user || {};
-  const rec = lead.id ? { ...lead } : { ...lead, id: llqaUid("ld"), createdAt: new Date().toISOString(), createdBy: u.name || u.role || "", status: lead.status || "new", log: lead.log || [] };
+  const rec = lead.id ? { ...lead } : { ...lead, id: llqaUid("ld"), createdAt: new Date().toISOString(), createdBy: lead.createdBy || (typeof llqaByName === "function" ? llqaByName() : u.name || u.role || ""), status: lead.status || "new", log: lead.log || [] };
   ctx.setLeads((prev) => [...(prev || []).filter((x) => x.id !== rec.id), rec]);
   return rec;
 };
@@ -6286,6 +6488,43 @@ const llqaLeadNote = (l, text, next, outcome) => {
   const u = LLQAApp.ctx.user || {};
   const entry = { at: new Date().toISOString(), by: u.name || u.role || "", text: [outcome, text].filter(Boolean).join(" — ") };
   return llqaSaveLead({ ...l, status: l.status === "new" || !l.status ? "contacted" : l.status, next: next || l.next || "", log: [...(Array.isArray(l.log) ? l.log : []), entry], lastAt: entry.at });
+};
+// v67.3: an inquiry from the website (posted to the 24/7 runner) becomes a lead,
+// due today. The same WhatsApp number already open as a lead gets a note
+// instead of a second lead; a number that is already a family is marked.
+const llqaLeadIntake = (x) => {
+  const ctx = LLQAApp.ctx;
+  if (!x || typeof ctx.setLeads !== "function") return { error: "not ready" };
+  try {
+    if (typeof LLQACloud !== "undefined" && LLQACloud.ready && (!LLQACloud.ready("leads") || !LLQACloud.ready("students"))) return { error: "not ready" };
+  } catch (e) {}
+  const today = todayPK();
+  const clean = (v, n) => String(v == null ? "" : v).replace(/[\u0000-\u001f\u007f<>]/g, " ").replace(/\s+/g, " ").trim().slice(0, n || 120);
+  const lead = {
+    name: clean(x.name),
+    parent: clean(x.parent),
+    phone: clean(x.phone, 40),
+    email: clean(x.email, 120),
+    country: clean(x.country, 40) || "USA",
+    state: clean(x.state, 60),
+    course: /subject/i.test(String(x.course || "")) ? "Subject" : "Quran",
+    source: clean(x.source, 30) || "Website",
+    referredBy: clean(x.referredBy),
+    wantDay: LLQABooking.DAYS.includes(String(x.wantDay || "")) ? String(x.wantDay) : "",
+    wantTime: /^\d{4} (AM|PM)$/.test(String(x.wantTime || "")) ? String(x.wantTime) : "",
+    notes: clean(x.message || x.notes, 1000),
+    next: today,
+  };
+  if (!lead.phone || (!lead.name && !lead.parent)) return { error: "name and phone needed" };
+  const digits = llqaPhone(lead.phone, lead.country);
+  const open = digits ? llqaLeads().find((l) => /^(new|contacted)$/.test(llqaLeadStatus(l)) && llqaPhone(l.phone, l.country) === digits) : null;
+  if (open) {
+    const saved = llqaLeadNote(open, "New inquiry again (" + lead.source + ")" + (lead.notes ? ": " + lead.notes : ""), today, "");
+    return { ok: true, id: saved ? saved.id : open.id, duplicate: true };
+  }
+  const fam = digits ? (ctx.students || []).find((s) => s && llqaPhone(s.phone, s.country) === digits) : null;
+  const rec = llqaSaveLead({ ...lead, status: "new", createdBy: lead.source, notes: (fam ? "Already a family: " + fam.name + (fam.status === "quit" ? " (left)" : "") + ". " : "") + lead.notes });
+  return rec ? { ok: true, id: rec.id, duplicate: false, family: fam ? fam.name : "" } : { error: "not saved" };
 };
 const llqaLeadLost = (l, reason) => llqaSaveLead({ ...l, status: "lost", lostReason: reason || "Other", lostAt: todayPK() });
 // Add Student filled in from a lead (the form books the trial).
@@ -6656,6 +6895,8 @@ const llqaVersionCheck = () => {
         const m = /__LLQA_VERSION__\s*=\s*"([^"]+)"/.exec(html || "");
         if (!m || m[1] === mine) return;
         LLQAUI.stale = m[1];
+        // v67.3: the 24/7 runner has nobody to click — it reloads by itself
+        if (typeof LLQA_RUNNER !== "undefined" && LLQA_RUNNER) setTimeout(() => window.location.reload(), 5000);
         llqaToast({
           kind: "update",
           key: "update",
@@ -7629,6 +7870,19 @@ const LLQADashCards3 = () => {
   const logx = llqaLogIndex(ctx.messageLog);
   const tday = llqaTeacherNext().list.filter((x) => !logx.keys.has(llqaDayKey(x.t, x.date))).length;
   const ls = llqaLeadStats(today);
+  // v67.3: the 24/7 runner's status
+  const age = llqaRunnerAge();
+  const rInfo = ctx.runnerInfo || {};
+  const runnerLine =
+    age == null
+      ? null
+      : React.createElement(
+          "div",
+          { key: "rn", style: { flexBasis: "100%", fontSize: 11, color: llqaRunnerAlive() ? c.success : c.danger } },
+          llqaRunnerAlive()
+            ? "🤖 24/7 runner online — last check " + llqaAgo(rInfo.at) + (rInfo.saveError ? " · ⚠ save problem: " + rInfo.saveError : "") + " · your tab leaves the automatic work to it"
+            : "⚠ 24/7 runner offline since " + llqaAgo(rInfo.at) + " — this tab does the automatic work while it is down",
+        );
   const card = (icon, title, value, sub, go, col) =>
     React.createElement(
       "div",
@@ -7640,8 +7894,9 @@ const LLQADashCards3 = () => {
   return React.createElement(
     "div",
     { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 } },
-    card("🎯", "Leads", ls.due, ls.due ? "follow-ups due today" : ls.open + " open leads", () => llqaGo("sales", "leads"), ls.due ? c.warn : null),
-    card("🧩", "Make-ups", owed, owed ? "missed classes to make up" : "nothing owed", () => llqaGo("timetable", "makeup"), owed ? c.warn : null),
-    card("🧑‍🏫", "Teachers' day", tday, tday ? "schedules not sent — next 24 hours" : "all sent (or no classes)", () => llqaGo("timetable", "teacherday"), tday ? c.accent : null),
+    llqaCanOpen("sales") && card("🎯", "Leads", ls.due, ls.due ? "follow-ups due today" : ls.open + " open leads", () => llqaGo("sales", "leads"), ls.due ? c.warn : null),
+    llqaCanOpen("timetable") && card("🧩", "Make-ups", owed, owed ? "missed classes to make up" : "nothing owed", () => llqaGo("timetable", "makeup"), owed ? c.warn : null),
+    llqaCanOpen("timetable") && card("🧑‍🏫", "Teachers' day", tday, tday ? "schedules not sent — next 24 hours" : "all sent (or no classes)", () => llqaGo("timetable", "teacherday"), tday ? c.accent : null),
+    runnerLine,
   );
 };

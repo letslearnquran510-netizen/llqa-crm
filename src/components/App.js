@@ -201,6 +201,8 @@ function App() {
   const [covers, setCovers] = useFirestoreCollection("covers", []);
   const [parentRequests, setParentRequests] = useFirestoreCollection("parentRequests", []);
   const [calendar, setCalendar] = useFirestoreDoc("settings/calendar", {});
+  // v67.3: the 24/7 runner (server) — its heartbeat
+  const [runnerInfo, setRunnerInfo] = useFirestoreDoc("settings/runner", {});
   // v67: make-up classes, leads, referral rewards
   const [makeups, setMakeups] = useFirestoreCollection("makeups", []);
   const [leads, setLeads] = useFirestoreCollection("leads", []);
@@ -705,7 +707,7 @@ function App() {
         setStudents(_mb(students, typeof a === "function" ? a(scStudents) : a))
     : setStudents;
   // v65: what the automation screens and pop-ups read
-  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals });
+  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo });
   const render = () => {
     switch (page) {
       case "dashboard":
