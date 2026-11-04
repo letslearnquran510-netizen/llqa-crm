@@ -422,7 +422,7 @@ const ParentMod = ({
               onClick: (e) => e.stopPropagation(),
               style: {
                 background: c.bgCard,
-                border: "1px solid " + color + "44",
+                border: "1px solid " + llqaAlpha(color, "44"),
                 borderRadius: 16,
                 padding: 0,
                 maxWidth: 520,
@@ -430,7 +430,7 @@ const ParentMod = ({
                 maxHeight: "85vh",
                 overflowY: "auto",
                 boxShadow:
-                  "0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px " + color + "22",
+                  "0 20px 60px rgba(0,0,0,0.5), 0 0 0 1px " + llqaAlpha(color, "22"),
                 position: "relative",
               },
             },
@@ -438,7 +438,7 @@ const ParentMod = ({
               style: {
                 height: 5,
                 background:
-                  "linear-gradient(90deg, " + color + ", " + color + "88)",
+                  "linear-gradient(90deg, " + color + ", " + llqaAlpha(color, "88") + ")",
                 borderRadius: "16px 16px 0 0",
               },
             }),
@@ -488,11 +488,12 @@ const ParentMod = ({
                 const sH1 = Math.abs(sHash) % 360;
                 const sH2 = (sH1 + 50) % 360;
                 const sAvatarBg =
-                  "linear-gradient(135deg,hsl(" +
+                  // v68: same lightness for every hue, so the white initials always read
+                  "linear-gradient(135deg,oklch(0.56 0.15 " +
                   sH1 +
-                  ",65%,55%),hsl(" +
+                  "),oklch(0.46 0.15 " +
                   sH2 +
-                  ",70%,45%))";
+                  "))";
                 return React.createElement(
                   "div",
                   {
@@ -624,8 +625,8 @@ const ParentMod = ({
                       width: 54,
                       height: 54,
                       borderRadius: 14,
-                      background: color + "22",
-                      border: "2px solid " + color + "66",
+                      background: llqaAlpha(color, "22"),
+                      border: "2px solid " + llqaAlpha(color, "66"),
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
@@ -848,8 +849,8 @@ const ParentMod = ({
                           "div",
                           {
                             style: {
-                              background: c.warnBg || c.warn + "10",
-                              border: "1px solid " + c.warn + "33",
+                              background: c.warnBg || llqaAlpha(c.warn, "10"),
+                              border: "1px solid " + llqaAlpha(c.warn, "33"),
                               borderLeft: "3px solid " + c.warn,
                               borderRadius: 8,
                               padding: "10px 12px",
@@ -972,7 +973,7 @@ const ParentMod = ({
         {
           style: {
             background: c.accentBg,
-            border: "1px solid " + c.accent + "44",
+            border: "1px solid " + llqaAlpha(c.accent, "44"),
             borderRadius: 8,
             padding: "10px 14px",
             marginBottom: 14,
@@ -1037,11 +1038,12 @@ const ParentMod = ({
       const hue1 = Math.abs(hash) % 360;
       const hue2 = (hue1 + 50) % 360;
       const avatarBg =
-        "linear-gradient(135deg,hsl(" +
+        // v68: same lightness for every hue, so the white initials always read
+        "linear-gradient(135deg,oklch(0.56 0.15 " +
         hue1 +
-        ",65%,55%),hsl(" +
+        "),oklch(0.46 0.15 " +
         hue2 +
-        ",70%,45%))";
+        "))";
       const joinedDate = stu.dor
         ? new Date(stu.dor).toLocaleDateString("en-US", {
             month: "short",
@@ -1195,15 +1197,15 @@ const ParentMod = ({
                           borderRadius: 10,
                           background:
                             stu.status === "active"
-                              ? c.success + "20"
-                              : c.textMuted + "20",
+                              ? llqaAlpha(c.success, "20")
+                              : llqaAlpha(c.textMuted, "20"),
                           color:
                             stu.status === "active" ? c.success : c.textMuted,
                           border:
                             "1px solid " +
                             (stu.status === "active"
-                              ? c.success + "44"
-                              : c.textMuted + "44"),
+                              ? llqaAlpha(c.success, "44")
+                              : llqaAlpha(c.textMuted, "44")),
                           textTransform: "capitalize",
                         },
                       },
@@ -1257,9 +1259,9 @@ const ParentMod = ({
                         fontFamily: "monospace",
                         fontWeight: 700,
                         padding: "6px 12px",
-                        background: c.accent + "15",
+                        background: llqaAlpha(c.accent, "15"),
                         borderRadius: 8,
-                        border: "1px solid " + c.accent + "44",
+                        border: "1px solid " + llqaAlpha(c.accent, "44"),
                         letterSpacing: 0.5,
                       },
                     },
@@ -1273,10 +1275,10 @@ const ParentMod = ({
                       onClick: generateParentId,
                       style: {
                         padding: "9px 14px",
-                        background: c.warn,
+                        background: c.warnFill,
                         border: "none",
                         borderRadius: 8,
-                        color: "#fff",
+                        color: c.warnText,
                         fontSize: 11,
                         fontWeight: 600,
                         cursor: "pointer",
@@ -1317,7 +1319,7 @@ const ParentMod = ({
               ["Location", location],
               ["Joined", joinedDate],
               dobDate ? ["Date of Birth", dobDate] : null,
-              stu.time ? ["Class Time", stu.time] : null,
+              stu.time ? ["Class Time", llqaTimeText(stu.time) || stu.time] : null, // v68: readable
               stu.classType ? ["Class Type", stu.classType] : null,
               stu.hoursPerWeek
                 ? ["Hours/Week", stu.hoursPerWeek + " hrs"]
@@ -1505,7 +1507,7 @@ const ParentMod = ({
                         },
                       },
                       "\uD83D\uDD52 Class at ",
-                      stu.time,
+                      llqaTimeText(stu.time) || stu.time, // v68: readable
                     )
                   : null,
               )
@@ -1525,11 +1527,9 @@ const ParentMod = ({
                   style: {
                     background:
                       "linear-gradient(135deg, " +
-                      c.accent +
-                      "10, " +
-                      c.purple +
-                      "10)",
-                    border: "1px solid " + c.accent + "33",
+                      llqaAlpha(c.accent, "10") + ", " +
+                      llqaAlpha(c.purple, "10") + ")",
+                    border: "1px solid " + llqaAlpha(c.accent, "33"),
                     borderRadius: 10,
                     padding: "12px 14px",
                   },
@@ -1770,8 +1770,8 @@ const ParentMod = ({
               borderRadius: 6,
               border:
                 tab === k ? "1px solid transparent" : "1px solid " + c.border,
-              background: tab === k ? c.accent : "transparent",
-              color: tab === k ? "#fff" : c.textSec,
+              background: tab === k ? c.accentFill : "transparent",
+              color: tab === k ? c.accentText : c.textSec,
               fontSize: 11,
               fontWeight: 600,
               cursor: "pointer",
@@ -2025,11 +2025,11 @@ const ParentMod = ({
                             padding: "2px 8px",
                             borderRadius: 10,
                             background:
-                              (p.attended === "present"
+                              llqaAlpha((p.attended === "present"
                                 ? c.success
                                 : p.attended === "late"
                                   ? c.warn
-                                  : c.danger) + "22",
+                                  : c.danger), "22"),
                             color:
                               p.attended === "present"
                                 ? c.success
@@ -2330,7 +2330,7 @@ const ParentMod = ({
               {
                 style: {
                   background: c.bgCard,
-                  border: "1px solid " + rateColor + "66",
+                  border: "1px solid " + llqaAlpha(rateColor, "66"),
                   borderRadius: 12,
                   padding: 18,
                   position: "relative",
@@ -2611,9 +2611,9 @@ const ParentMod = ({
               "div",
               {
                 style: {
-                  background: streak > 0 ? c.cyan + "10" : c.bgCard,
+                  background: streak > 0 ? llqaAlpha(c.cyan, "10") : c.bgCard,
                   border:
-                    "1px solid " + (streak > 0 ? c.cyan + "55" : c.border),
+                    "1px solid " + (streak > 0 ? llqaAlpha(c.cyan, "55") : c.border),
                   borderRadius: 12,
                   padding: 18,
                 },
@@ -2806,16 +2806,16 @@ const ParentMod = ({
                   : null;
                 const isWeekend = cell.dow === 0 || cell.dow === 6;
                 const bg = cell.rec
-                  ? color + "18"
+                  ? llqaAlpha(color, "18")
                   : cell.isFuture
                     ? "transparent"
                     : isWeekend
-                      ? c.bgDeep + "55"
-                      : c.bgDeep + "33";
+                      ? llqaAlpha(c.bgDeep, "55")
+                      : llqaAlpha(c.bgDeep, "33");
                 const border = cell.isToday
                   ? "2px solid " + c.cyan
                   : cell.rec
-                    ? "1px solid " + color + "66"
+                    ? "1px solid " + llqaAlpha(color, "66")
                     : "1px solid " + c.border;
                 const title =
                   cell.dStr +
@@ -2846,7 +2846,7 @@ const ParentMod = ({
                       cursor: cell.rec ? "pointer" : "default",
                       transition: "transform 0.15s ease, box-shadow 0.15s ease",
                       boxShadow: cell.isToday
-                        ? "0 0 0 3px " + c.cyan + "22"
+                        ? "0 0 0 3px " + llqaAlpha(c.cyan, "22")
                         : "none",
                       opacity: cell.isFuture ? 0.4 : 1,
                     },
@@ -2876,7 +2876,7 @@ const ParentMod = ({
                           height: 7,
                           borderRadius: "50%",
                           background: color,
-                          boxShadow: "0 0 4px " + color + "88",
+                          boxShadow: "0 0 4px " + llqaAlpha(color, "88"),
                         },
                       })
                     : null,
@@ -3036,9 +3036,9 @@ const ParentMod = ({
                                 fontSize: 11,
                                 fontWeight: 700,
                                 padding: "3px 10px",
-                                background: color + "20",
+                                background: llqaAlpha(color, "20"),
                                 borderRadius: 5,
-                                border: "1px solid " + color + "44",
+                                border: "1px solid " + llqaAlpha(color, "44"),
                               },
                             },
                             label,
@@ -3052,7 +3052,7 @@ const ParentMod = ({
                                     fontSize: 10,
                                     fontWeight: 600,
                                     padding: "3px 8px",
-                                    background: c.cyan + "15",
+                                    background: llqaAlpha(c.cyan, "15"),
                                     borderRadius: 5,
                                   },
                                 },
@@ -3285,11 +3285,11 @@ const ParentMod = ({
                         padding: "3px 8px",
                         borderRadius: 10,
                         background:
-                          (inv.status === "paid"
+                          llqaAlpha((inv.status === "paid"
                             ? c.success
                             : inv.status === "overdue"
                               ? c.danger
-                              : c.warn) + "22",
+                              : c.warn), "22"),
                         color:
                           inv.status === "paid"
                             ? c.success
@@ -3332,8 +3332,8 @@ const ParentMod = ({
                       onClick: () => printInvoice(inv),
                       style: {
                         padding: "4px 10px",
-                        background: c.accent + "22",
-                        border: "1px solid " + c.accent + "44",
+                        background: llqaAlpha(c.accent, "22"),
+                        border: "1px solid " + llqaAlpha(c.accent, "44"),
                         borderRadius: 5,
                         color: c.accent,
                         fontSize: 10,
@@ -3417,10 +3417,10 @@ const ParentMod = ({
                 disabled: !noteText.trim(),
                 style: {
                   padding: "7px 14px",
-                  background: noteText.trim() ? c.accent : c.bgDeep,
+                  background: noteText.trim() ? c.accentFill : c.bgDeep,
                   border: "none",
                   borderRadius: 6,
-                  color: noteText.trim() ? "#fff" : c.textMuted,
+                  color: noteText.trim() ? c.accentText : c.textMuted,
                   fontSize: 11,
                   fontWeight: 600,
                   cursor: noteText.trim() ? "pointer" : "not-allowed",
@@ -3686,13 +3686,13 @@ const ParentMod = ({
                         padding: "7px 14px",
                         background:
                           fbCat !== "Custom" || fbCustom.trim()
-                            ? c.accent
+                            ? c.accentFill
                             : c.bgDeep,
                         border: "none",
                         borderRadius: 6,
                         color:
                           fbCat !== "Custom" || fbCustom.trim()
-                            ? "#fff"
+                            ? c.accentText
                             : c.textMuted,
                         fontSize: 11,
                         fontWeight: 600,

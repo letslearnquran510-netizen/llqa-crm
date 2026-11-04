@@ -820,7 +820,7 @@ const StudentsMod = ({
         icon: Globe,
         label: "Countries",
         value: [...new Set(sts.map((s) => s.country))].length,
-        sub: "USA, CA, UK",
+        sub: llqaTopCountries(sts), // v68: the real countries (was a fixed "USA, CA, UK")
         color: c.accent,
       }),
       React.createElement(SC, {
@@ -878,7 +878,7 @@ const StudentsMod = ({
               cursor: "pointer",
               fontSize: 11,
               fontWeight: 500,
-              background: tab === k ? c.accent : "transparent",
+              background: tab === k ? c.accentFill : "transparent",
               color: tab === k ? c.accentText : c.textSec,
             },
           },
@@ -1116,7 +1116,7 @@ const StudentsMod = ({
                     key: s.id,
                     style: {
                       borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? c.bgDeep + "88" : "transparent",
+                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                     },
                   },
                   React.createElement(
@@ -1409,7 +1409,7 @@ const StudentsMod = ({
                     padding: "10px 12px",
                     border:
                       "1px solid " +
-                      (s.lastDate === todayPK() ? c.success + "66" : c.border),
+                      (s.lastDate === todayPK() ? llqaAlpha(c.success, "66") : c.border),
                   },
                 },
                 React.createElement(
@@ -1486,7 +1486,7 @@ const StudentsMod = ({
                       onClick: () => oP(s),
                       style: {
                         background: c.successBg,
-                        border: "1px solid " + c.success + "44",
+                        border: "1px solid " + llqaAlpha(c.success, "44"),
                         borderRadius: 5,
                         cursor: "pointer",
                         padding: "4px 8px",
@@ -1543,7 +1543,7 @@ const StudentsMod = ({
                               fontSize: 8,
                               padding: "1px 5px",
                               borderRadius: 3,
-                              background: bc(s.lB) + "20",
+                              background: llqaAlpha(bc(s.lB), "20"),
                               color: bc(s.lB),
                             },
                           },
@@ -1919,7 +1919,7 @@ const StudentsMod = ({
                       key: s.id,
                       style: {
                         borderBottom: "1px solid " + c.border,
-                        background: i % 2 ? c.bgDeep + "88" : "transparent",
+                        background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                       },
                     },
                     React.createElement(
@@ -2037,7 +2037,7 @@ const StudentsMod = ({
                             onClick: () => mAtt(s.id, "Present"),
                             style: {
                               background: c.successBg,
-                              border: "1px solid " + c.success + "44",
+                              border: "1px solid " + llqaAlpha(c.success, "44"),
                               borderRadius: 4,
                               cursor: "pointer",
                               padding: "3px 6px",
@@ -2054,7 +2054,7 @@ const StudentsMod = ({
                             onClick: () => mAtt(s.id, "Absent"),
                             style: {
                               background: c.dangerBg,
-                              border: "1px solid " + c.danger + "44",
+                              border: "1px solid " + llqaAlpha(c.danger, "44"),
                               borderRadius: 4,
                               cursor: "pointer",
                               padding: "3px 6px",
@@ -2071,7 +2071,7 @@ const StudentsMod = ({
                             onClick: () => mAtt(s.id, "Late"),
                             style: {
                               background: c.warnBg,
-                              border: "1px solid " + c.warn + "44",
+                              border: "1px solid " + llqaAlpha(c.warn, "44"),
                               borderRadius: 4,
                               cursor: "pointer",
                               padding: "3px 6px",
@@ -2166,7 +2166,7 @@ const StudentsMod = ({
                     key: s.id,
                     style: {
                       background: c.bgCard,
-                      border: "1px solid " + c.warn + "44",
+                      border: "1px solid " + llqaAlpha(c.warn, "44"),
                       borderRadius: 8,
                       padding: "12px 14px",
                     },
@@ -2296,7 +2296,7 @@ const StudentsMod = ({
                         onClick: () => resume(s.id),
                         style: {
                           background: c.successBg,
-                          border: "1px solid " + c.success + "44",
+                          border: "1px solid " + llqaAlpha(c.success, "44"),
                           borderRadius: 5,
                           cursor: "pointer",
                           padding: "4px 10px",
@@ -2313,7 +2313,7 @@ const StudentsMod = ({
                         onClick: () => oQ(s),
                         style: {
                           background: c.dangerBg,
-                          border: "1px solid " + c.danger + "44",
+                          border: "1px solid " + llqaAlpha(c.danger, "44"),
                           borderRadius: 5,
                           cursor: "pointer",
                           padding: "4px 10px",
@@ -2410,7 +2410,7 @@ const StudentsMod = ({
                         key: s.id,
                         style: {
                           borderBottom: "1px solid " + c.border,
-                          background: i % 2 ? c.bgDeep + "88" : "transparent",
+                          background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                         },
                       },
                       React.createElement(
@@ -2508,7 +2508,7 @@ const StudentsMod = ({
                             onClick: () => resume(s.id),
                             style: {
                               background: c.successBg,
-                              border: "1px solid " + c.success + "44",
+                              border: "1px solid " + llqaAlpha(c.success, "44"),
                               borderRadius: 4,
                               cursor: "pointer",
                               padding: "3px 8px",

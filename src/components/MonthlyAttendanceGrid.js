@@ -585,7 +585,7 @@ const MonthlyAttendanceGrid = ({ students, setStudents }) => {
                           background: isToday
                             ? c.accentBg
                             : weekend
-                              ? c.bgDeep + "ee"
+                              ? llqaAlpha(c.bgDeep, "ee")
                               : c.bgDeep,
                           color: isToday ? c.accent : c.textSec,
                           fontSize: 10,
@@ -594,7 +594,7 @@ const MonthlyAttendanceGrid = ({ students, setStudents }) => {
                           textAlign: "center",
                           borderBottom:
                             "1px solid " +
-                            (isToday ? c.accent + "66" : c.border),
+                            (isToday ? llqaAlpha(c.accent, "66") : c.border),
                           borderLeft: weekend
                             ? "1px solid " + c.border
                             : "none",
@@ -677,7 +677,7 @@ const MonthlyAttendanceGrid = ({ students, setStudents }) => {
                           position: "sticky",
                           left: 0,
                           zIndex: 1,
-                          background: ri % 2 ? c.bgCard : c.bgDeep + "55",
+                          background: ri % 2 ? c.bgCard : llqaAlpha(c.bgDeep, "55"),
                           padding: "8px 12px",
                           borderBottom: "1px solid " + c.border,
                           borderRight: "1px solid " + c.border,
@@ -727,7 +727,7 @@ const MonthlyAttendanceGrid = ({ students, setStudents }) => {
                               ? "1px solid " + c.border
                               : "none",
                             background:
-                              weekend && !col ? c.bgDeep + "44" : "transparent",
+                              weekend && !col ? llqaAlpha(c.bgDeep, "44") : "transparent",
                             cursor: "pointer",
                             position: "relative",
                           },
@@ -775,7 +775,7 @@ const MonthlyAttendanceGrid = ({ students, setStudents }) => {
                             fontWeight: 600,
                             fontSize: 11,
                             background:
-                              ri % 2 ? "transparent" : c.bgDeep + "33",
+                              ri % 2 ? "transparent" : llqaAlpha(c.bgDeep, "33"),
                           },
                         },
                         cell[0],
@@ -799,7 +799,7 @@ const MonthlyAttendanceGrid = ({ students, setStudents }) => {
                                   : c.danger,
                           fontWeight: 700,
                           fontSize: 11,
-                          background: ri % 2 ? "transparent" : c.bgDeep + "33",
+                          background: ri % 2 ? "transparent" : llqaAlpha(c.bgDeep, "33"),
                         },
                       },
                       sum.total === 0 ? "\u2014" : sum.pct + "%",

@@ -175,7 +175,7 @@ const ZoomLinksTab = ({ teachers, onQuickEdit }) => {
               background: c.bgCard,
               backdropFilter: "blur(16px)",
               boxShadow: c.shadow3d,
-              border: "1px solid " + (has ? c.border : c.warn + "44"),
+              border: "1px solid " + (has ? c.border : llqaAlpha(c.warn, "44")),
               borderRadius: 12,
               padding: 16,
             },
@@ -208,9 +208,9 @@ const ZoomLinksTab = ({ teachers, onQuickEdit }) => {
                     borderRadius: 9,
                     background:
                       "linear-gradient(135deg," +
-                      (t.gender === "Male" ? c.accent : c.purple) +
+                      (t.gender === "Male" ? c.accentFill : c.purpleFill) +
                       "," +
-                      c.cyan +
+                      c.cyanFill +
                       ")",
                     display: "flex",
                     alignItems: "center",
@@ -298,7 +298,7 @@ const ZoomLinksTab = ({ teachers, onQuickEdit }) => {
                     alignItems: "center",
                     gap: 8,
                     background: c.warnBg,
-                    border: "1px dashed " + c.warn + "55",
+                    border: "1px dashed " + llqaAlpha(c.warn, "55"),
                     borderRadius: 8,
                     padding: "9px 12px",
                     marginBottom: 10,
@@ -334,7 +334,7 @@ const ZoomLinksTab = ({ teachers, onQuickEdit }) => {
                   onClick: () => copyLink(t),
                   style: actBtn(
                     isCopied ? c.successBg : c.bgDeep,
-                    isCopied ? c.success + "55" : c.border,
+                    isCopied ? llqaAlpha(c.success, "55") : c.border,
                     isCopied ? c.success : c.textSec,
                   ),
                 },
@@ -348,7 +348,7 @@ const ZoomLinksTab = ({ teachers, onQuickEdit }) => {
                 "button",
                 {
                   onClick: () => window.open(t.zoom, "_blank", "noopener"),
-                  style: actBtn(c.accentBg, c.accent + "55", c.accent),
+                  style: actBtn(c.accentBg, llqaAlpha(c.accent, "55"), c.accent),
                 },
                 React.createElement(ExternalLink, {
                   size: 12,

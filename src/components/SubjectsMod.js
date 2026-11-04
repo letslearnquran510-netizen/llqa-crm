@@ -560,7 +560,7 @@ const SubjectsMod = ({
               cursor: "pointer",
               fontSize: 12,
               fontWeight: 500,
-              background: subjShift === k ? c.accent : "transparent",
+              background: subjShift === k ? c.accentFill : "transparent",
               color: subjShift === k ? c.accentText : c.textSec,
               display: "flex",
               alignItems: "center",
@@ -573,7 +573,7 @@ const SubjectsMod = ({
             {
               style: {
                 fontSize: 9,
-                opacity: 0.7,
+                fontWeight: 600, // v68: readable (was faded to 0.7)
               },
             },
             k === "weekday" ? "08:00-07:30" : "09:00-16:30",
@@ -616,7 +616,7 @@ const SubjectsMod = ({
               cursor: "pointer",
               fontSize: 11,
               fontWeight: 500,
-              background: tab === k ? c.accent : "transparent",
+              background: tab === k ? c.accentFill : "transparent",
               color: tab === k ? c.accentText : c.textSec,
             },
           },
@@ -827,9 +827,9 @@ const SubjectsMod = ({
                         borderRadius: 8,
                         background:
                           "linear-gradient(135deg," +
-                          c.purple +
+                          c.purpleFill +
                           "," +
-                          c.cyan +
+                          c.cyanFill +
                           ")",
                         display: "flex",
                         alignItems: "center",
@@ -920,7 +920,7 @@ const SubjectsMod = ({
                         fontSize: 8,
                         padding: "2px 6px",
                         borderRadius: 3,
-                        background: rColor(s) + "20",
+                        background: llqaAlpha(rColor(s), "20"),
                         color: rColor(s),
                         fontWeight: 600,
                       },
@@ -1005,7 +1005,7 @@ const SubjectsMod = ({
                     },
                     style: {
                       flex: 1,
-                      background: c.accent,
+                      background: c.accentFill,
                       border: "1px solid rgba(255,255,255,0.1)",
                       borderRadius: 5,
                       cursor: "pointer",
@@ -1224,7 +1224,7 @@ const SubjectsMod = ({
                             fontSize: 9,
                             padding: "2px 7px",
                             borderRadius: 3,
-                            background: rColor(s) + "20",
+                            background: llqaAlpha(rColor(s), "20"),
                             color: rColor(s),
                             fontWeight: 600,
                           },
@@ -1479,7 +1479,7 @@ const SubjectsMod = ({
                                 "1px solid " +
                                 (isBooked && llqaTrialStage(cell) ? llqaTrialStage(cell).bd : hasClipboard && !isBooked ? c.warn : c.border),
                               background: isBooked
-                                ? (llqaTrialStage(cell) || {}).bg || rColor(cell.sub) + "15"
+                                ? (llqaTrialStage(cell) || {}).bg || llqaAlpha(rColor(cell.sub), "15")
                                 : hasClipboard && !isBooked
                                   ? c.warnBg
                                   : c.bgCard,
@@ -1548,11 +1548,11 @@ const SubjectsMod = ({
                                           fontSize: 8,
                                           padding: "1px 6px",
                                           borderRadius: 8,
-                                          background: c.cyan + "22",
+                                          background: llqaAlpha(c.cyan, "22"),
                                           color: c.cyan,
                                           marginBottom: 3,
                                           fontWeight: 600,
-                                          border: "1px solid " + c.cyan + "44",
+                                          border: "1px solid " + llqaAlpha(c.cyan, "44"),
                                         },
                                       },
                                       "\uD83D\uDC65 " + cell.family,
@@ -1672,7 +1672,7 @@ const SubjectsMod = ({
                       width: 10,
                       height: 10,
                       borderRadius: 2,
-                      background: rColor(s) + "33",
+                      background: llqaAlpha(rColor(s), "33"),
                       border: "1px solid " + rColor(s),
                     },
                   }),
@@ -1728,7 +1728,7 @@ const SubjectsMod = ({
                   cursor: "pointer",
                   fontSize: 10,
                   fontWeight: 600,
-                  background: selDay === k ? c.accent : c.bgDeep,
+                  background: selDay === k ? c.accentFill : c.bgDeep,
                   color: selDay === k ? c.accentText : c.textSec,
                 },
               },
@@ -1894,7 +1894,7 @@ const SubjectsMod = ({
                           padding: "3px",
                           border: "1px solid " + (isBooked && llqaTrialStage(cell) ? llqaTrialStage(cell).bd : c.border),
                           background: isBooked
-                            ? (llqaTrialStage(cell) || {}).bg || rColor(cell.sub) + "15"
+                            ? (llqaTrialStage(cell) || {}).bg || llqaAlpha(rColor(cell.sub), "15")
                             : c.bgCard,
                           cursor: "pointer",
                           verticalAlign: "top",
@@ -2125,7 +2125,7 @@ const SubjectsMod = ({
                 key: i,
                 style: {
                   background: c.bgCard,
-                  border: "1px solid " + c.success + "44",
+                  border: "1px solid " + llqaAlpha(c.success, "44"),
                   borderRadius: 8,
                   padding: "10px 12px",
                 },
@@ -2177,7 +2177,7 @@ const SubjectsMod = ({
                     width: "100%",
                     marginTop: 6,
                     background: c.successBg,
-                    border: "1px solid " + c.success + "44",
+                    border: "1px solid " + llqaAlpha(c.success, "44"),
                     borderRadius: 5,
                     cursor: "pointer",
                     padding: "4px 8px",
@@ -2308,7 +2308,7 @@ const SubjectsMod = ({
                         fontSize: 8,
                         padding: "2px 6px",
                         borderRadius: 3,
-                        background: rColor(s) + "20",
+                        background: llqaAlpha(rColor(s), "20"),
                         color: rColor(s),
                         fontWeight: 600,
                       },
@@ -2696,7 +2696,7 @@ const SubjectsMod = ({
                   style: {
                     flex: v2,
                     height: 6,
-                    background: col + "66",
+                    background: llqaAlpha(col, "66"),
                     borderRadius: "0 3px 3px 0",
                     minWidth: 2,
                   },
@@ -3138,11 +3138,11 @@ const SubjectsMod = ({
             "div",
             {
               style: {
-                background: rColor(cellModal.cell.sub) + "15",
+                background: llqaAlpha(rColor(cellModal.cell.sub), "15"),
                 borderRadius: 8,
                 padding: "10px 12px",
                 marginBottom: 12,
-                border: "1px solid " + rColor(cellModal.cell.sub) + "44",
+                border: "1px solid " + llqaAlpha(rColor(cellModal.cell.sub), "44"),
               },
             },
             React.createElement(

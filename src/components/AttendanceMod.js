@@ -432,7 +432,7 @@ const AttendanceMod = ({
               cursor: "pointer",
               fontSize: 11,
               fontWeight: 500,
-              background: tab === k ? c.accent : "transparent",
+              background: tab === k ? c.accentFill : "transparent",
               color: tab === k ? c.accentText : c.textSec,
             },
           },
@@ -453,7 +453,7 @@ const AttendanceMod = ({
             {
               style: {
                 background: c.successBg,
-                border: "1px solid " + c.success + "44",
+                border: "1px solid " + llqaAlpha(c.success, "44"),
                 borderRadius: 10,
                 padding: 14,
                 marginBottom: 14,
@@ -739,7 +739,7 @@ const AttendanceMod = ({
               style: {
                 padding: "8px 12px",
                 background: c.successBg,
-                border: "1px solid " + c.success + "44",
+                border: "1px solid " + llqaAlpha(c.success, "44"),
                 borderRadius: 7,
                 cursor: "pointer",
                 color: c.success,
@@ -812,10 +812,10 @@ const AttendanceMod = ({
               style: {
                 padding: "8px 12px",
                 background: c.accentBg,
-                border: "1px solid " + c.accent + "44",
+                border: "1px solid " + llqaAlpha(c.accent, "44"),
                 borderRadius: 7,
                 cursor: "pointer",
-                color: c.accentText,
+                color: c.accent, // v68: was white on a pale tint
                 fontSize: 11,
                 fontWeight: 600,
                 marginLeft: 10,
@@ -892,7 +892,7 @@ const AttendanceMod = ({
                     key: t.id,
                     style: {
                       borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? c.bgDeep + "88" : "transparent",
+                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                     },
                   },
                   React.createElement(
@@ -1096,7 +1096,7 @@ const AttendanceMod = ({
                           title: "Present",
                           style: {
                             background: c.successBg,
-                            border: "1px solid " + c.success + "44",
+                            border: "1px solid " + llqaAlpha(c.success, "44"),
                             borderRadius: 4,
                             cursor: "pointer",
                             padding: "3px 6px",
@@ -1114,7 +1114,7 @@ const AttendanceMod = ({
                           title: "Late",
                           style: {
                             background: c.warnBg,
-                            border: "1px solid " + c.warn + "44",
+                            border: "1px solid " + llqaAlpha(c.warn, "44"),
                             borderRadius: 4,
                             cursor: "pointer",
                             padding: "3px 6px",
@@ -1132,7 +1132,7 @@ const AttendanceMod = ({
                           title: "Absent",
                           style: {
                             background: c.dangerBg,
-                            border: "1px solid " + c.danger + "44",
+                            border: "1px solid " + llqaAlpha(c.danger, "44"),
                             borderRadius: 4,
                             cursor: "pointer",
                             padding: "3px 6px",
@@ -1150,7 +1150,7 @@ const AttendanceMod = ({
                           title: "Leave",
                           style: {
                             background: c.accentBg,
-                            border: "1px solid " + c.accent + "44",
+                            border: "1px solid " + llqaAlpha(c.accent, "44"),
                             borderRadius: 4,
                             cursor: "pointer",
                             padding: "3px 6px",
@@ -1168,7 +1168,7 @@ const AttendanceMod = ({
                           title: "Half Day",
                           style: {
                             background: c.purpleBg,
-                            border: "1px solid " + c.purple + "44",
+                            border: "1px solid " + llqaAlpha(c.purple, "44"),
                             borderRadius: 4,
                             cursor: "pointer",
                             padding: "3px 6px",
@@ -1306,7 +1306,7 @@ const AttendanceMod = ({
                       width: 18,
                       height: 18,
                       borderRadius: 3,
-                      background: col + "33",
+                      background: llqaAlpha(col, "33"),
                       color: col,
                       fontSize: 9,
                       fontWeight: 700,
@@ -1472,7 +1472,7 @@ const AttendanceMod = ({
                                 padding: "3px",
                                 textAlign: "center",
                                 background: rec
-                                  ? statusColor(status) + "22"
+                                  ? llqaAlpha(statusColor(status), "22")
                                   : "transparent",
                                 color: rec ? statusColor(status) : c.textMuted,
                                 fontSize: 8,
@@ -1764,7 +1764,7 @@ const AttendanceMod = ({
                         title: rec.date + " - " + rec.status,
                         style: {
                           background: statusBg(rec.status),
-                          border: "1px solid " + statusColor(rec.status) + "55",
+                          border: "1px solid " + llqaAlpha(statusColor(rec.status), "55"),
                           borderRadius: 5,
                           padding: "6px 4px",
                           textAlign: "center",
@@ -1908,7 +1908,7 @@ const AttendanceMod = ({
                     key: t.id,
                     style: {
                       borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? c.bgDeep + "88" : "transparent",
+                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                     },
                   },
                   React.createElement(
@@ -2187,7 +2187,7 @@ const AttendanceMod = ({
                   key: l,
                   style: {
                     background: c.bgDeep,
-                    border: "1px solid " + col + "44",
+                    border: "1px solid " + llqaAlpha(col, "44"),
                     borderRadius: 6,
                     padding: "8px 10px",
                   },
@@ -2303,7 +2303,7 @@ const AttendanceMod = ({
                       key: t.id,
                       style: {
                         borderBottom: "1px solid " + c.border,
-                        background: i % 2 ? c.bgDeep + "88" : "transparent",
+                        background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                       },
                     },
                     React.createElement(
@@ -2438,7 +2438,7 @@ const AttendanceMod = ({
             {
               style: {
                 background: c.bgCard,
-                border: "1px solid " + c.danger + "44",
+                border: "1px solid " + llqaAlpha(c.danger, "44"),
                 borderRadius: 10,
                 padding: 14,
               },
@@ -2624,7 +2624,7 @@ const AttendanceMod = ({
           {
             style: {
               background: c.bgCard,
-              border: "1px solid " + c.warn + "44",
+              border: "1px solid " + llqaAlpha(c.warn, "44"),
               borderRadius: 10,
               padding: 14,
             },
@@ -3225,7 +3225,7 @@ const AttendanceMod = ({
                       key: i,
                       style: {
                         borderBottom: "1px solid " + c.border,
-                        background: i % 2 ? c.bgDeep + "88" : "transparent",
+                        background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                       },
                     },
                     React.createElement(

@@ -55,7 +55,7 @@ const StudentDetailC = ({ s, onClose, onP, pp, bc, teacherFeedback }) =>
                 height: 44,
                 borderRadius: 10,
                 background:
-                  "linear-gradient(135deg," + c.success + "," + c.cyan + ")",
+                  "linear-gradient(135deg," + c.successFill + "," + c.cyanFill + ")",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",

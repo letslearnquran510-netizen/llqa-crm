@@ -358,9 +358,9 @@ const SettingsMod = ({
                     borderRadius: 12,
                     background:
                       "linear-gradient(135deg," +
-                      c.accent +
+                      c.accentFill +
                       "," +
-                      c.purple +
+                      c.purpleFill +
                       ")",
                     display: "flex",
                     alignItems: "center",
@@ -705,8 +705,7 @@ const SettingsMod = ({
                     background: savedFlash === "save" ? c.successBg : c.warnBg,
                     border:
                       "1px solid " +
-                      (savedFlash === "save" ? c.success : c.warn) +
-                      "66",
+                      llqaAlpha((savedFlash === "save" ? c.success : c.warn), "66"),
                     borderRadius: 8,
                     display: "flex",
                     alignItems: "center",
@@ -833,9 +832,9 @@ const SettingsMod = ({
                         borderRadius: 8,
                         background:
                           "linear-gradient(135deg," +
-                          c.accent +
+                          c.accentFill +
                           "," +
-                          c.purple +
+                          c.purpleFill +
                           ")",
                         display: "flex",
                         alignItems: "center",
@@ -1032,9 +1031,9 @@ const SettingsMod = ({
                         borderRadius: 8,
                         background:
                           "linear-gradient(135deg," +
-                          c.accent +
+                          c.accentFill +
                           "," +
-                          c.purple +
+                          c.purpleFill +
                           ")",
                         display: "flex",
                         alignItems: "center",
@@ -1202,7 +1201,7 @@ const SettingsMod = ({
                     padding: "10px 14px",
                     marginBottom: 6,
                     border: s.current
-                      ? "1px solid " + c.success + "44"
+                      ? "1px solid " + llqaAlpha(c.success, "44")
                       : "1px solid " + c.border,
                   },
                 },
@@ -1275,7 +1274,7 @@ const SettingsMod = ({
                       },
                       style: {
                         background: c.dangerBg,
-                        border: "1px solid " + c.danger + "44",
+                        border: "1px solid " + llqaAlpha(c.danger, "44"),
                         borderRadius: 5,
                         cursor: "pointer",
                         padding: "4px 10px",
@@ -1303,7 +1302,7 @@ const SettingsMod = ({
                 style: {
                   marginTop: 10,
                   background: c.dangerBg,
-                  border: "1px solid " + c.danger + "44",
+                  border: "1px solid " + llqaAlpha(c.danger, "44"),
                   borderRadius: 6,
                   cursor: "pointer",
                   padding: "8px 14px",
@@ -1418,7 +1417,7 @@ const SettingsMod = ({
                         key: p.module,
                         style: {
                           borderBottom: "1px solid " + c.border,
-                          background: i % 2 ? c.bgDeep + "88" : "transparent",
+                          background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                         },
                       },
                       React.createElement(
@@ -1451,7 +1450,7 @@ const SettingsMod = ({
                                 fontSize: 10,
                                 padding: "2px 8px",
                                 borderRadius: 4,
-                                background: permColor(v) + "22",
+                                background: llqaAlpha(permColor(v), "22"),
                                 color: permColor(v),
                                 fontWeight: 600,
                               },
@@ -1666,7 +1665,7 @@ const SettingsMod = ({
                               },
                               style: {
                                 background: c.bgInput,
-                                border: "1px solid " + c.danger + "55",
+                                border: "1px solid " + llqaAlpha(c.danger, "55"),
                                 borderRadius: 5,
                                 padding: "4px 8px",
                                 color: c.danger,
@@ -1699,10 +1698,10 @@ const SettingsMod = ({
                                     fontSize: 9,
                                     padding: "2px 8px",
                                     borderRadius: 10,
-                                    background: c.accent + "22",
+                                    background: llqaAlpha(c.accent, "22"),
                                     color: c.accent,
                                     fontWeight: 600,
-                                    border: "1px solid " + c.accent + "44",
+                                    border: "1px solid " + llqaAlpha(c.accent, "44"),
                                   },
                                 },
                                 p,
@@ -2995,7 +2994,7 @@ const SettingsMod = ({
                     },
                     style: {
                       background: c.accentBg,
-                      border: "1px solid " + c.accent + "44",
+                      border: "1px solid " + llqaAlpha(c.accent, "44"),
                       borderRadius: 5,
                       cursor: "pointer",
                       padding: "5px 10px",
@@ -3030,7 +3029,7 @@ const SettingsMod = ({
                       background: c.bgDeep,
                       border:
                         "1px solid " +
-                        (l.status === "success" ? c.border : c.danger + "44"),
+                        (l.status === "success" ? c.border : llqaAlpha(c.danger, "44")),
                       borderRadius: 10,
                       padding: 12,
                       alignItems: "flex-start",
@@ -3070,7 +3069,7 @@ const SettingsMod = ({
                               position: "absolute",
                               bottom: -2,
                               right: -2,
-                              background: c.success,
+                              background: c.successFill,
                               borderRadius: "50%",
                               width: 14,
                               height: 14,
@@ -3079,7 +3078,7 @@ const SettingsMod = ({
                               justifyContent: "center",
                               border: "2px solid " + c.bgDeep,
                               fontSize: 8,
-                              color: "#fff",
+                              color: c.successText,
                             },
                           },
                           "\uD83D\uDCF7",
@@ -3092,7 +3091,7 @@ const SettingsMod = ({
                             width: 48,
                             height: 48,
                             borderRadius: 10,
-                            background: c.danger + "22",
+                            background: llqaAlpha(c.danger, "22"),
                             display: "flex",
                             alignItems: "center",
                             justifyContent: "center",
@@ -3451,7 +3450,7 @@ const SettingsMod = ({
                       },
                       style: {
                         background: c.dangerBg,
-                        border: "1px solid " + c.danger + "44",
+                        border: "1px solid " + llqaAlpha(c.danger, "44"),
                         borderRadius: 4,
                         cursor: "pointer",
                         padding: "3px 8px",
@@ -3763,12 +3762,12 @@ const SettingsMod = ({
                   },
                 },
                 [
-                  ["dark", "Dark", "#0c1322"],
-                  ["light", "Light", "#f8fafc"],
+                  ["dark", "Dark", "#121215"],
+                  ["light", "Light", "#ffffff"],
                   [
                     "auto",
                     "Auto (System)",
-                    "linear-gradient(135deg,#0c1322,#f8fafc)",
+                    "linear-gradient(135deg,#121215 50%,#ffffff 50%)",
                   ],
                 ].map(([k, l, bg]) =>
                   React.createElement(
@@ -3791,9 +3790,14 @@ const SettingsMod = ({
                         color: settings.theme === k ? c.accent : c.text,
                         fontSize: 11,
                         fontWeight: 600,
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
                       },
                     },
-                    l,
+                    // v68: a swatch of the theme; Auto says which one the computer uses now
+                    React.createElement("span", { style: { width: 16, height: 16, borderRadius: 5, background: bg, boxShadow: "inset 0 0 0 1px rgba(127,127,127,0.45)", flexShrink: 0 } }),
+                    k === "auto" ? l + " · " + (llqaSysDark() ? "Dark now" : "Light now") : l,
                   ),
                 ),
               ),
@@ -3845,7 +3849,7 @@ const SettingsMod = ({
                       background: col,
                       border:
                         settings.accentColor === col
-                          ? "2px solid #fff"
+                          ? "2px solid " + c.bg // v68: a gap ring that shows in both themes
                           : "2px solid transparent",
                       cursor: "pointer",
                       boxShadow:
@@ -3894,10 +3898,11 @@ const SettingsMod = ({
                 ),
                 React.createElement("input", {
                   type: "text",
-                  value: settings.accentColor || "#4a7aff",
+                  key: "hex-" + (settings.accentColor || "#4a7aff"), // v68
+                  defaultValue: settings.accentColor || "#4a7aff",
                   onChange: (e) => {
-                    const v = e.target.value;
-                    if (/^#[0-9a-fA-F]{0,6}$/.test(v)) update("accentColor", v);
+                    const v = e.target.value.trim();
+                    if (/^#[0-9a-fA-F]{6}$/.test(v)) update("accentColor", v.toLowerCase());
                   },
                   maxLength: 7,
                   style: {
@@ -3943,7 +3948,7 @@ const SettingsMod = ({
                       style: {
                         background:
                           (settings.toneMode || "full") === k
-                            ? c.accent
+                            ? c.accentFill
                             : c.bgDeep,
                         border:
                           "2px solid " +
@@ -3973,7 +3978,7 @@ const SettingsMod = ({
                         style: {
                           fontSize: 9,
                           fontWeight: 400,
-                          opacity: 0.75,
+                          opacity: 1, // v68 (was 0.75)
                         },
                       },
                       d,
@@ -3981,6 +3986,15 @@ const SettingsMod = ({
                   ),
                 ),
               ),
+            ),
+            // v68: what the choices look like (every colour here is checked for readability)
+            React.createElement(
+              SettingRow,
+              {
+                label: "Preview",
+                desc: "Buttons, tags and links with your theme, accent and tone · all colours are tuned to stay readable",
+              },
+              React.createElement(LLQAThemePreview, null),
             ),
           ),
           React.createElement(
@@ -3999,7 +4013,7 @@ const SettingsMod = ({
               React.createElement(
                 NativeSelectWrapper,
                 {
-                  value: settings.language,
+                  value: settings.language || DEFAULT_SETTINGS.language, // v68
                   onChange: (e) => update("language", e.target.value),
                   style: {
                     padding: "6px 10px",
@@ -4031,7 +4045,7 @@ const SettingsMod = ({
               React.createElement(
                 NativeSelectWrapper,
                 {
-                  value: settings.dateFormat,
+                  value: settings.dateFormat || DEFAULT_SETTINGS.dateFormat, // v68
                   onChange: (e) => update("dateFormat", e.target.value),
                   style: {
                     padding: "6px 10px",
@@ -4055,7 +4069,7 @@ const SettingsMod = ({
               React.createElement(
                 NativeSelectWrapper,
                 {
-                  value: settings.currency,
+                  value: settings.currency || DEFAULT_SETTINGS.currency, // v68
                   onChange: (e) => update("currency", e.target.value),
                   style: {
                     padding: "6px 10px",
@@ -4080,7 +4094,7 @@ const SettingsMod = ({
               React.createElement(
                 NativeSelectWrapper,
                 {
-                  value: settings.weekStart,
+                  value: settings.weekStart || DEFAULT_SETTINGS.weekStart, // v68
                   onChange: (e) => update("weekStart", e.target.value),
                   style: {
                     padding: "6px 10px",
@@ -4167,9 +4181,9 @@ const SettingsMod = ({
                     fontSize: 12,
                   },
                 },
-                React.createElement("option", null, "Small"),
-                React.createElement("option", null, "Medium (Default)"),
-                React.createElement("option", null, "Large"),
+                React.createElement("option", { value: "Small" }, "Small"),
+                React.createElement("option", { value: "Medium" }, "Medium (Default)"),
+                React.createElement("option", { value: "Large" }, "Large"),
               ),
             ),
             React.createElement(
@@ -4480,7 +4494,7 @@ const SettingsMod = ({
               React.createElement(
                 NativeSelectWrapper,
                 {
-                  value: settings.backupFreq,
+                  value: settings.backupFreq || DEFAULT_SETTINGS.backupFreq, // v68
                   onChange: (e) => update("backupFreq", e.target.value),
                   style: {
                     padding: "6px 10px",
@@ -4569,7 +4583,7 @@ const SettingsMod = ({
                   },
                   style: {
                     background: c.accentBg,
-                    border: "1px solid " + c.accent + "44",
+                    border: "1px solid " + llqaAlpha(c.accent, "44"),
                     borderRadius: 8,
                     cursor: "pointer",
                     padding: "14px 16px",
@@ -4904,6 +4918,8 @@ const SettingsMod = ({
               React.createElement(
                 NativeSelectWrapper,
                 {
+                  value: settings.fyStart || "July (Pakistan)", // v68: the choice is kept (it was never saved)
+                  onChange: (e) => update("fyStart", e.target.value),
                   style: {
                     padding: "6px 10px",
                     background: c.bgInput,
@@ -5003,7 +5019,7 @@ const SettingsMod = ({
                 style: {
                   marginTop: 10,
                   background: c.accentBg,
-                  border: "1px solid " + c.accent + "44",
+                  border: "1px solid " + llqaAlpha(c.accent, "44"),
                   borderRadius: 6,
                   cursor: "pointer",
                   padding: "6px 12px",
@@ -5316,7 +5332,7 @@ const SettingsMod = ({
                 style: {
                   marginTop: 10,
                   background: c.accentBg,
-                  border: "1px solid " + c.accent + "44",
+                  border: "1px solid " + llqaAlpha(c.accent, "44"),
                   borderRadius: 6,
                   cursor: "pointer",
                   padding: "6px 12px",
@@ -5414,8 +5430,7 @@ const SettingsMod = ({
                         : c.accentBg,
                       border:
                         "1px solid " +
-                        (revealedKeys.advancedApi ? c.warn : c.accent) +
-                        "44",
+                        llqaAlpha((revealedKeys.advancedApi ? c.warn : c.accent), "44"),
                       borderRadius: 5,
                       cursor: "pointer",
                       padding: "6px 12px",
@@ -5441,7 +5456,7 @@ const SettingsMod = ({
                     },
                     style: {
                       background: c.dangerBg,
-                      border: "1px solid " + c.danger + "44",
+                      border: "1px solid " + llqaAlpha(c.danger, "44"),
                       borderRadius: 5,
                       cursor: "pointer",
                       padding: "6px 12px",
@@ -5620,7 +5635,7 @@ const SettingsMod = ({
                   },
                   style: {
                     background: c.dangerBg,
-                    border: "1px solid " + c.danger + "44",
+                    border: "1px solid " + llqaAlpha(c.danger, "44"),
                     borderRadius: 5,
                     cursor: "pointer",
                     padding: "6px 14px",
@@ -5649,7 +5664,7 @@ const SettingsMod = ({
                   },
                   style: {
                     background: c.warnBg,
-                    border: "1px solid " + c.warn + "44",
+                    border: "1px solid " + llqaAlpha(c.warn, "44"),
                     borderRadius: 5,
                     cursor: "pointer",
                     padding: "6px 14px",

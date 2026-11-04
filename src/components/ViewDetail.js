@@ -63,9 +63,9 @@ const ViewDetail = ({
                 borderRadius: 10,
                 background:
                   "linear-gradient(135deg," +
-                  (t.gender === "Male" ? c.accent : c.purple) +
+                  (t.gender === "Male" ? c.accentFill : c.purpleFill) +
                   "," +
-                  c.cyan +
+                  c.cyanFill +
                   ")",
                 display: "flex",
                 alignItems: "center",

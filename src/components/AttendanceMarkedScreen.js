@@ -320,7 +320,7 @@ const AttendanceMarkedScreen = ({
           {
             onClick: onContinue,
             style: {
-              background: c.accent,
+              background: c.accentFill,
               border: "none",
               borderRadius: 8,
               cursor: "pointer",

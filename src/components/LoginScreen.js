@@ -312,7 +312,8 @@ const LoginScreen = ({
               height: 64,
               borderRadius: 16,
               background:
-                "linear-gradient(135deg," + c.accent + "," + c.purple + ")",
+                "linear-gradient(135deg," + c.accentFill + "," + c.purpleFill + ")", // v68
+              boxShadow: "0 10px 30px -10px " + llqaAlpha(c.accentFill, "b3"),
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -398,7 +399,7 @@ const LoginScreen = ({
             {
               style: {
                 background: c.successBg,
-                border: "1px solid " + c.success + "44",
+                border: "1px solid " + llqaAlpha(c.success, "44"),
                 borderRadius: 8,
                 padding: "8px 12px",
                 marginBottom: 14,
@@ -512,7 +513,7 @@ const LoginScreen = ({
                 },
                 onMouseEnter: (e) => {
                   e.currentTarget.style.borderColor = r.col;
-                  e.currentTarget.style.background = r.col + "11";
+                  e.currentTarget.style.background = llqaAlpha(r.col, "11");
                 },
                 onMouseLeave: (e) => {
                   e.currentTarget.style.borderColor = c.border;
@@ -526,7 +527,7 @@ const LoginScreen = ({
                     width: 42,
                     height: 42,
                     borderRadius: 10,
-                    background: r.col + "22",
+                    background: llqaAlpha(r.col, "22"),
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
@@ -581,7 +582,7 @@ const LoginScreen = ({
           {
             style: {
               background: c.bgCard,
-              border: "1px solid " + c.purple + "66",
+              border: "1px solid " + llqaAlpha(c.purple, "66"),
               borderRadius: 14,
               padding: 24,
             },
@@ -676,7 +677,7 @@ const LoginScreen = ({
           {
             style: {
               background: c.bgCard,
-              border: "1px solid " + c.accent + "66",
+              border: "1px solid " + llqaAlpha(c.accent, "66"),
               borderRadius: 14,
               padding: 24,
             },
@@ -760,7 +761,7 @@ const LoginScreen = ({
             {
               style: {
                 background: c.bgCard,
-                border: "1px solid " + c.success + "66",
+                border: "1px solid " + llqaAlpha(c.success, "66"),
                 borderRadius: 14,
                 padding: 24,
               },
@@ -867,8 +868,7 @@ const LoginScreen = ({
                     background: t.location === "WFH" ? c.warnBg : c.successBg,
                     border:
                       "1px solid " +
-                      (t.location === "WFH" ? c.warn : c.success) +
-                      "44",
+                      llqaAlpha((t.location === "WFH" ? c.warn : c.success), "44"),
                     borderRadius: 8,
                     padding: "10px 12px",
                     marginBottom: 12,
@@ -959,7 +959,7 @@ const LoginScreen = ({
           {
             style: {
               background: c.bgCard,
-              border: "1px solid " + c.cyan + "66",
+              border: "1px solid " + llqaAlpha(c.cyan, "66"),
               borderRadius: 14,
               padding: 24,
             },
@@ -1102,10 +1102,10 @@ const LoginScreen = ({
               style: {
                 width: "100%",
                 padding: "12px",
-                background: c.cyan,
+                background: c.cyanFill,
                 border: "none",
                 borderRadius: 8,
-                color: "#fff",
+                color: c.cyanText,
                 fontSize: 13,
                 fontWeight: 600,
                 cursor: "pointer",
@@ -1139,7 +1139,7 @@ const LoginScreen = ({
               {
                 style: {
                   background: c.bgCard,
-                  border: "1px solid " + c.danger + "66",
+                  border: "1px solid " + llqaAlpha(c.danger, "66"),
                   borderRadius: 14,
                   padding: 24,
                 },
@@ -1181,7 +1181,7 @@ const LoginScreen = ({
             {
               style: {
                 background: c.bgCard,
-                border: "1px solid " + c.warn + "66",
+                border: "1px solid " + llqaAlpha(c.warn, "66"),
                 borderRadius: 14,
                 padding: 24,
               },
@@ -1277,10 +1277,10 @@ const LoginScreen = ({
                           fontSize: 9,
                           padding: "3px 8px",
                           borderRadius: 10,
-                          background: c.warn + "22",
+                          background: llqaAlpha(c.warn, "22"),
                           color: c.warn,
                           fontWeight: 600,
-                          border: "1px solid " + c.warn + "44",
+                          border: "1px solid " + llqaAlpha(c.warn, "44"),
                         },
                       },
                       p,
@@ -1358,10 +1358,10 @@ const LoginScreen = ({
                 style: {
                   width: "100%",
                   padding: "12px",
-                  background: permList.length === 0 ? c.bgDeep : c.warn,
+                  background: permList.length === 0 ? c.bgDeep : c.warnFill,
                   border: "none",
                   borderRadius: 8,
-                  color: permList.length === 0 ? c.textMuted : "#fff",
+                  color: permList.length === 0 ? c.textMuted : c.warnText,
                   fontSize: 13,
                   fontWeight: 600,
                   cursor: permList.length === 0 ? "not-allowed" : "pointer",

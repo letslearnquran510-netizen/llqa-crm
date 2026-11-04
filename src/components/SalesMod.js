@@ -742,9 +742,9 @@ const SalesMod = ({
                     style: {
                       borderBottom: "1px solid " + c.border,
                       background: removed
-                        ? c.dangerBg + "44"
+                        ? llqaAlpha(c.dangerBg, "44")
                         : i % 2
-                          ? c.bgDeep + "88"
+                          ? llqaAlpha(c.bgDeep, "88")
                           : "transparent",
                       opacity: removed ? 0.85 : 1,
                     },
@@ -1043,7 +1043,7 @@ const SalesMod = ({
                     key: r.id,
                     style: {
                       borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? c.bgDeep + "88" : "transparent",
+                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                     },
                   },
                   React.createElement(
@@ -1264,7 +1264,7 @@ const SalesMod = ({
           style: {
             padding: "10px 12px",
             background: c.accentBg,
-            border: "1px solid " + c.accent + "33",
+            border: "1px solid " + llqaAlpha(c.accent, "33"),
             borderRadius: 8,
             color: c.textSec,
             fontSize: 11,
@@ -1394,7 +1394,7 @@ const SalesMod = ({
               marginBottom: 12,
               padding: "8px 12px",
               background: c.accentBg,
-              border: "1px solid " + c.accent + "33",
+              border: "1px solid " + llqaAlpha(c.accent, "33"),
               borderRadius: 8,
             },
           },
@@ -1456,8 +1456,8 @@ const SalesMod = ({
             width: 48,
             height: 48,
             borderRadius: 12,
-            background: c.purple + "22",
-            border: "1px solid " + c.purple + "55",
+            background: llqaAlpha(c.purple, "22"),
+            border: "1px solid " + llqaAlpha(c.purple, "55"),
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -1590,7 +1590,7 @@ const SalesMod = ({
               cursor: "pointer",
               fontSize: 11,
               fontWeight: 600,
-              background: tab === k ? c.accent : "transparent",
+              background: tab === k ? c.accentFill : "transparent",
               color: tab === k ? c.accentText : c.textSec,
             },
           },
@@ -1726,7 +1726,7 @@ const SalesMod = ({
             gap: 8,
             padding: "10px 14px",
             background: c.accentBg,
-            border: "1px solid " + c.accent + "33",
+            border: "1px solid " + llqaAlpha(c.accent, "33"),
             borderRadius: 8,
             marginBottom: 14,
             fontSize: 11,
@@ -1762,7 +1762,7 @@ const SalesMod = ({
             gap: 8,
             padding: "10px 14px",
             background: c.purpleBg,
-            border: "1px solid " + c.purple + "33",
+            border: "1px solid " + llqaAlpha(c.purple, "33"),
             borderRadius: 8,
             marginBottom: 14,
             fontSize: 11,
@@ -2040,13 +2040,13 @@ const SalesMod = ({
                     height: 44,
                     borderRadius: 10,
                     background:
-                      "linear-gradient(135deg," + c.purple + "," + c.cyan + ")",
+                      "linear-gradient(135deg," + c.purpleFill + "," + c.cyanFill + ")",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
                     fontSize: 18,
                     fontWeight: 700,
-                    color: "#fff",
+                    color: c.purpleText,
                   },
                 },
                 (modal.data.name || "?")[0],
@@ -2293,7 +2293,7 @@ const SalesMod = ({
                 style: {
                   padding: "8px 12px",
                   background: c.warnBg,
-                  border: "1px solid " + c.warn + "44",
+                  border: "1px solid " + llqaAlpha(c.warn, "44"),
                   borderRadius: 8,
                   marginBottom: 14,
                   fontSize: 11,
@@ -2577,7 +2577,7 @@ const SalesMod = ({
                     style: {
                       padding: "8px 12px",
                       background: c.successBg,
-                      border: "1px solid " + c.success + "44",
+                      border: "1px solid " + llqaAlpha(c.success, "44"),
                       borderRadius: 8,
                       marginBottom: 10,
                       textAlign: "left",
@@ -2604,7 +2604,7 @@ const SalesMod = ({
                 gap: 8,
                 padding: "10px 12px",
                 background: c.accentBg,
-                border: "1px solid " + c.accent + "33",
+                border: "1px solid " + llqaAlpha(c.accent, "33"),
                 borderRadius: 8,
                 marginBottom: 16,
                 textAlign: "left",

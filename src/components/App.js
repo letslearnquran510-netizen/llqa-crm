@@ -19,84 +19,16 @@ function App() {
     if (appSettings && appSettings.theme && appSettings.theme !== theme)
       setThemeLocal(appSettings.theme);
   }, [appSettings && appSettings.theme]);
-  React.useEffect(() => {
-    document.documentElement.setAttribute("data-theme", theme);
-  }, [theme]);
-  React.useEffect(() => {
-    const ac = (appSettings && appSettings.accentColor) || "#4a7aff";
-    const hex = ac.replace("#", "");
-    const r = parseInt(hex.substring(0, 2), 16) || 0;
-    const g = parseInt(hex.substring(2, 4), 16) || 0;
-    const b = parseInt(hex.substring(4, 6), 16) || 0;
-    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
-    const accentText = lum > 0.65 ? "#0b0d0e" : "#ffffff";
-    const accentBorder = lum > 0.85 ? "#9ca3af" : ac;
-    const accentSafe = lum > 0.92 ? "#e5e7eb" : ac;
-    document.documentElement.style.setProperty("--accent", accentSafe);
-    document.documentElement.style.setProperty("--accentRaw", ac);
-    document.documentElement.style.setProperty("--accentBg", ac + "22");
-    document.documentElement.style.setProperty("--accentText", accentText);
-    document.documentElement.style.setProperty("--accentBorder", accentBorder);
-  }, [appSettings && appSettings.accentColor]);
-  React.useEffect(() => {
-    const tm = (appSettings && appSettings.toneMode) || "full";
-    const root = document.documentElement;
-    const themeNow = root.getAttribute("data-theme") || "dark";
-    const isLight = themeNow === "light";
-    const neutral = isLight ? "#64748b" : "#94a3b8";
-    const neutralBg = isLight ? "#64748b22" : "#94a3b822";
-    const origs = {
-      purple: isLight ? "#7c3aed" : "#a78bfa",
-      purpleBg: isLight ? "#7c3aed22" : "#a78bfa22",
-      cyan: isLight ? "#0891b2" : "#22d3ee",
-      cyanBg: isLight ? "#0891b222" : "#22d3ee22",
-      warn: isLight ? "#d97706" : "#fbbf24",
-      warnBg: isLight ? "#d9770622" : "#fbbf2422",
-    };
-    const accentTextNow =
-      getComputedStyle(root).getPropertyValue("--accentText").trim() ||
-      "#ffffff";
-    if (tm === "minimal") {
-      root.style.setProperty("--purple", neutral);
-      root.style.setProperty("--purpleBg", neutralBg);
-      root.style.setProperty("--cyan", neutral);
-      root.style.setProperty("--cyanBg", neutralBg);
-      root.style.setProperty("--warn", neutral);
-      root.style.setProperty("--warnBg", neutralBg);
-      root.style.setProperty("--purpleText", "#ffffff");
-      root.style.setProperty("--cyanText", "#ffffff");
-      root.style.setProperty("--warnText", "#ffffff");
-    } else if (tm === "compact") {
-      const acSafe =
-        getComputedStyle(root).getPropertyValue("--accent").trim() || "#4a7aff";
-      const acBorder =
-        getComputedStyle(root).getPropertyValue("--accentBorder").trim() ||
-        acSafe;
-      root.style.setProperty("--purple", acBorder);
-      root.style.setProperty("--purpleBg", acSafe + "22");
-      root.style.setProperty("--cyan", acBorder);
-      root.style.setProperty("--cyanBg", acSafe + "22");
-      root.style.setProperty("--warn", origs.warn);
-      root.style.setProperty("--warnBg", origs.warnBg);
-      root.style.setProperty("--purpleText", accentTextNow);
-      root.style.setProperty("--cyanText", accentTextNow);
-      root.style.setProperty("--warnText", "#ffffff");
-    } else {
-      root.style.setProperty("--purple", origs.purple);
-      root.style.setProperty("--purpleBg", origs.purpleBg);
-      root.style.setProperty("--cyan", origs.cyan);
-      root.style.setProperty("--cyanBg", origs.cyanBg);
-      root.style.setProperty("--warn", origs.warn);
-      root.style.setProperty("--warnBg", origs.warnBg);
-      root.style.setProperty("--purpleText", "#ffffff");
-      root.style.setProperty("--cyanText", "#ffffff");
-      root.style.setProperty("--warnText", "#ffffff");
-    }
-  }, [
-    appSettings && appSettings.toneMode,
-    appSettings && appSettings.theme,
-    appSettings && appSettings.accentColor,
-  ]);
+  // v68: one theme engine. The theme in use ("Auto" follows the computer, live), the accent and
+  // the tone mode are applied together, so Light never keeps Dark's colours (old timing bug).
+  const [sysDark, setSysDark] = useState(() => llqaSysDark());
+  React.useEffect(() => llqaWatchSys(setSysDark), []);
+  const themeUsed = theme === "auto" ? (sysDark ? "dark" : "light") : theme === "light" ? "light" : "dark";
+  const themeVars = React.useMemo(
+    () => llqaThemeVars(themeUsed, appSettings && appSettings.accentColor, appSettings && appSettings.toneMode),
+    [themeUsed, appSettings && appSettings.accentColor, appSettings && appSettings.toneMode],
+  );
+  React.useLayoutEffect(() => llqaPaintTheme(themeUsed, themeVars), [themeUsed, themeVars]);
   React.useEffect(() => {
     const d = (appSettings && appSettings.density) || "Normal";
     const fs = (appSettings && appSettings.fontSize) || "Medium";
@@ -707,7 +639,7 @@ function App() {
         setStudents(_mb(students, typeof a === "function" ? a(scStudents) : a))
     : setStudents;
   // v65: what the automation screens and pop-ups read
-  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo });
+  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory }); // v68: Dashboard "Teachers in today"
   const render = () => {
     switch (page) {
       case "dashboard":
@@ -944,7 +876,8 @@ function App() {
               height: 30,
               borderRadius: 8,
               background:
-                "linear-gradient(135deg," + c.accent + "," + c.purple + ")",
+                "linear-gradient(135deg," + c.accentFill + "," + c.purpleFill + ")", // v68
+              boxShadow: "0 4px 14px -4px " + llqaAlpha(c.accentFill, "99"),
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -1090,9 +1023,9 @@ function App() {
                       cursor: "pointer",
                       marginBottom: 1,
                       background: selfActive
-                        ? c.accent
+                        ? c.accentFill
                         : childActive
-                          ? c.accent + "1f"
+                          ? llqaAlpha(c.accent, "1f")
                           : "transparent",
                       color: selfActive
                         ? c.accentText
@@ -1172,7 +1105,8 @@ function App() {
                           borderRadius: 6,
                           cursor: "pointer",
                           marginBottom: 1,
-                          background: page === ch.id ? c.accent : "transparent",
+                          background: page === ch.id ? c.gradientPrimary : "transparent", // v68
+                          boxShadow: page === ch.id ? c.glowPrimary : "none",
                           color: page === ch.id ? c.accentText : c.text,
                           fontSize: 11,
                           fontWeight: page === ch.id ? 600 : 500,
@@ -1190,8 +1124,8 @@ function App() {
                           width: 2,
                           background:
                             page === ch.id
-                              ? c.accentText + "99"
-                              : c.accent + "88",
+                              ? llqaAlpha(c.accentText, "99")
+                              : llqaAlpha(c.accent, "88"),
                           borderRadius: 1,
                         },
                       }),
@@ -1218,7 +1152,8 @@ function App() {
                   borderRadius: 6,
                   cursor: "pointer",
                   marginBottom: 1,
-                  background: page === n.id ? c.accent : "transparent",
+                  background: page === n.id ? c.gradientPrimary : "transparent", // v68
+                  boxShadow: page === n.id ? c.glowPrimary : "none",
                   color: page === n.id ? c.accentText : c.textSec,
                   fontSize: 11,
                   fontWeight: page === n.id ? 600 : 400,
@@ -1391,7 +1326,7 @@ function App() {
               title: "Switch Role",
               style: {
                 background: c.dangerBg,
-                border: "1px solid " + c.danger + "44",
+                border: "1px solid " + llqaAlpha(c.danger, "44"),
                 borderRadius: 6,
                 cursor: "pointer",
                 padding: "4px 10px",
@@ -1405,13 +1340,13 @@ function App() {
           React.createElement(
             "div",
             {
-              onClick: () => setTheme((t) => (t === "dark" ? "light" : "dark")),
+              onClick: () => setTheme(themeUsed === "dark" ? "light" : "dark"), // v68
               title: "Switch Theme",
               style: {
                 width: 48,
                 height: 24,
                 background:
-                  theme === "dark"
+                  themeUsed === "dark"
                     ? "rgba(255,255,255,0.05)"
                     : "rgba(0,0,0,0.08)",
                 border: "1px solid " + c.border,
@@ -1429,11 +1364,11 @@ function App() {
                 style: {
                   width: 20,
                   height: 20,
-                  background: theme === "dark" ? "#18181b" : "#ffffff",
+                  background: themeUsed === "dark" ? "#18181b" : "#ffffff",
                   borderRadius: 10,
                   position: "absolute",
                   top: 1,
-                  left: theme === "dark" ? 1 : 25,
+                  left: themeUsed === "dark" ? 1 : 25,
                   transition: "all 0.3s cubic-bezier(0.4, 0, 0.2, 1)",
                   boxShadow:
                     "0 1px 3px rgba(0,0,0,0.3), inset 0 1px 1px rgba(255,255,255,0.1)",
@@ -1443,7 +1378,7 @@ function App() {
                   fontSize: 11,
                 },
               },
-              theme === "dark" ? "🌙" : "☀️",
+              themeUsed === "dark" ? "🌙" : "☀️",
             ),
           ),
           React.createElement(
@@ -1454,7 +1389,7 @@ function App() {
                 height: 28,
                 borderRadius: 7,
                 background:
-                  "linear-gradient(135deg," + c.accent + "," + c.purple + ")",
+                  "linear-gradient(135deg," + c.accentFill + "," + c.purpleFill + ")",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",

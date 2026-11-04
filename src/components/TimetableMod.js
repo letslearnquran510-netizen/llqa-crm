@@ -618,11 +618,13 @@ const TimetableMod = ({
   };
   const getCellBorder = (cell) => {
     if (!cell) return `1px solid ${c.border}`;
-    if (cell === "F") return `1px solid ${c.success}44`;
+    if (cell === "F") return `1px solid ${llqaAlpha(c.success, "44")}`;
     if (cell === "N") return `1px dashed ${c.textMuted}`;
     if (cell && cell.s) {
+      var _tb = ttStage(cell); // v68: the trial stage shows as a solid border (its fill is pale so names stay readable)
+      if (_tb) return "1.5px solid " + _tb.bd;
       if (cell.f && cell.f.length > 0) return `1px solid ${c.warn}`;
-      return `1px solid ${c.accent}44`;
+      return `1px solid ${llqaAlpha(c.accent, "44")}`;
     }
     return `1px solid ${c.border}`;
   };
@@ -715,7 +717,7 @@ const TimetableMod = ({
               cursor: "pointer",
               fontSize: 12,
               fontWeight: 500,
-              background: shift === sh ? c.accent : "transparent",
+              background: shift === sh ? c.accentFill : "transparent",
               color: shift === sh ? c.accentText : c.textSec,
               display: "flex",
               alignItems: "center",
@@ -738,7 +740,8 @@ const TimetableMod = ({
             {
               style: {
                 fontSize: 9,
-                opacity: 0.7,
+                opacity: 1, // v68 (was 0.7: unreadable on the selected shift)
+                fontWeight: 600,
               },
             },
             st.slots[0],
@@ -846,7 +849,7 @@ const TimetableMod = ({
                 cursor: "pointer",
                 fontSize: 11,
                 fontWeight: 500,
-                background: mode === k ? c.accent : "transparent",
+                background: mode === k ? c.accentFill : "transparent",
                 color: mode === k ? c.accentText : c.textSec,
               },
             },
@@ -1179,7 +1182,7 @@ const TimetableMod = ({
                   height: 40,
                   borderRadius: 8,
                   background:
-                    "linear-gradient(135deg," + c.accent + "," + c.cyan + ")",
+                    "linear-gradient(135deg," + c.accentFill + "," + c.cyanFill + ")",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -1257,7 +1260,7 @@ const TimetableMod = ({
                     style: {
                       padding: "5px 11px",
                       background: c.cyanBg,
-                      border: "1px solid " + c.cyan + "66",
+                      border: "1px solid " + llqaAlpha(c.cyan, "66"),
                       borderRadius: 5,
                       color: c.cyan,
                       cursor: "pointer",
@@ -1395,7 +1398,7 @@ const TimetableMod = ({
                           padding: 4,
                           verticalAlign: "top",
                           minWidth: 140,
-                          border: "1px solid " + c.border + "44",
+                          border: "1px solid " + llqaAlpha(c.border, "44"),
                         },
                       },
                       React.createElement(
@@ -1496,7 +1499,7 @@ const TimetableMod = ({
                               String(cell.s)
                                 .toLowerCase()
                                 .includes(studentSearch.toLowerCase())
-                                ? "0 0 8px " + c.warn + "99"
+                                ? "0 0 8px " + llqaAlpha(c.warn, "99")
                                 : "none",
                           },
                         },
@@ -1519,8 +1522,7 @@ const TimetableMod = ({
                               {
                                 style: {
                                   fontSize: 9,
-                                  color: c.success,
-                                  opacity: 0.7,
+                                  color: c.success, // v68: full strength (was faded)
                                   marginTop: 3,
                                   fontWeight: 500,
                                 },
@@ -1561,9 +1563,8 @@ const TimetableMod = ({
                               {
                                 style: {
                                   fontSize: 9,
-                                  opacity: 0.8,
                                   marginTop: 3,
-                                  color: c.accent,
+                                  color: c.accent, // v68: full strength
                                   fontWeight: 500,
                                 },
                               },
@@ -1589,9 +1590,8 @@ const TimetableMod = ({
                               {
                                 style: {
                                   fontSize: 9,
-                                  opacity: 0.85,
                                   marginTop: 3,
-                                  color: c.accent,
+                                  color: c.accent, // v68: full strength
                                   fontWeight: 500,
                                 },
                               },
@@ -1659,11 +1659,11 @@ const TimetableMod = ({
                                       fontSize: 8,
                                       padding: "1px 6px",
                                       borderRadius: 8,
-                                      background: c.cyan + "22",
+                                      background: c.bgCard, // v68: a clear tag on any cell colour
                                       color: c.cyan,
                                       marginBottom: 3,
                                       fontWeight: 600,
-                                      border: "1px solid " + c.cyan + "44",
+                                      border: "1px solid " + llqaAlpha(c.cyan, "44"),
                                     },
                                   },
                                   "\uD83D\uDC65 " + cell.family,
@@ -1806,7 +1806,7 @@ const TimetableMod = ({
                   height: 12,
                   borderRadius: 3,
                   background: bg,
-                  border: "1px solid " + col + "44",
+                  border: "1px solid " + llqaAlpha(col, "44"),
                 },
               }),
               React.createElement(
@@ -1885,7 +1885,7 @@ const TimetableMod = ({
                     cursor: "pointer",
                     fontSize: 11,
                     fontWeight: 500,
-                    background: selectedDay === d ? c.accent : "transparent",
+                    background: selectedDay === d ? c.accentFill : "transparent",
                     color: selectedDay === d ? c.accentText : c.textSec,
                   },
                 },
@@ -2052,7 +2052,7 @@ const TimetableMod = ({
                           padding: 3,
                           verticalAlign: "middle",
                           minWidth: 70,
-                          border: "1px solid " + c.border + "44",
+                          border: "1px solid " + llqaAlpha(c.border, "44"),
                         },
                       },
                       React.createElement(
@@ -2099,9 +2099,9 @@ const TimetableMod = ({
                               ? "1px solid " + c.warn
                               : isBooked
                                 ? "1px solid " +
-                                  ((ttStage(cell) || {}).bd || c.accent + "66")
+                                  ((ttStage(cell) || {}).bd || llqaAlpha(c.accent, "66"))
                                 : isFree
-                                  ? "1px solid " + c.success + "44"
+                                  ? "1px solid " + llqaAlpha(c.success, "44")
                                   : "1px solid " + c.border,
                             borderRadius: 4,
                             padding: "4px 4px",
@@ -2749,7 +2749,7 @@ const TimetableMod = ({
                     borderRadius: 8,
                     padding: "10px 14px",
                     marginBottom: 14,
-                    border: "1px solid " + c.accent + "44",
+                    border: "1px solid " + llqaAlpha(c.accent, "44"),
                     color: c.accent,
                     fontSize: 11,
                   },
@@ -2843,7 +2843,7 @@ const TimetableMod = ({
                           cursor: "pointer",
                           fontSize: 12,
                           fontWeight: 500,
-                          background: qbDay === d ? c.accent : c.bgDeep,
+                          background: qbDay === d ? c.accentFill : c.bgDeep,
                           color: qbDay === d ? c.accentText : c.textSec,
                         },
                       },
@@ -3083,8 +3083,7 @@ const TimetableMod = ({
                 marginBottom: 14,
                 border:
                   "1px solid " +
-                  (bookModal.editing ? c.purple : c.success) +
-                  "44",
+                  llqaAlpha((bookModal.editing ? c.purple : c.success), "44"),
               },
             },
             React.createElement(
@@ -3574,7 +3573,7 @@ const TimetableMod = ({
                             fontSize: 10,
                             fontWeight: 700,
                             letterSpacing: 0.2,
-                            border: "1px solid " + (c.warn + "33"),
+                            border: "1px solid " + (llqaAlpha(c.warn, "33")),
                           },
                         },
                         "\uD83C\uDDF5\uD83C\uDDF0",
@@ -3832,10 +3831,10 @@ const TimetableMod = ({
                   },
                   style: {
                     padding: "8px 14px",
-                    background: c.cyan,
+                    background: c.cyanFill,
                     border: "none",
                     borderRadius: 6,
-                    color: "#fff",
+                    color: c.cyanText,
                     fontSize: 11,
                     fontWeight: 600,
                     cursor: "pointer",

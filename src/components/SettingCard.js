@@ -21,7 +21,7 @@ const SettingCard = ({ title, children, icon: I, color = c.accent }) =>
           gap: 8,
           marginBottom: 12,
           paddingBottom: 10,
-          borderBottom: "2px solid " + color + "44",
+          borderBottom: "2px solid " + llqaAlpha(color, "44"),
         },
       },
       I &&
