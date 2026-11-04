@@ -14,7 +14,7 @@ const PortalAccessControl = ({ access, setAccess }) => {
     {
       style: {
         background: c.bgCard,
-        border: "1px solid " + c.purple + "66",
+        border: "1px solid " + llqaAlpha(c.purple, "66"),
         borderRadius: 12,
         padding: "16px 20px",
         marginBottom: 14,
@@ -29,7 +29,7 @@ const PortalAccessControl = ({ access, setAccess }) => {
           gap: 8,
           marginBottom: 12,
           paddingBottom: 10,
-          borderBottom: "2px solid " + c.purple + "44",
+          borderBottom: "2px solid " + llqaAlpha(c.purple, "44"),
         },
       },
       React.createElement(Shield, {
@@ -139,7 +139,7 @@ const PortalAccessControl = ({ access, setAccess }) => {
                 key: n.id,
                 style: {
                   borderBottom: "1px solid " + c.border,
-                  background: i % 2 ? c.bgDeep + "88" : "transparent",
+                  background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                 },
               },
               React.createElement(
@@ -220,7 +220,7 @@ const PortalAccessControl = ({ access, setAccess }) => {
           style: {
             padding: "7px 14px",
             background: c.warnBg,
-            border: "1px solid " + c.warn + "44",
+            border: "1px solid " + llqaAlpha(c.warn, "44"),
             borderRadius: 6,
             cursor: "pointer",
             color: c.warn,
@@ -242,7 +242,7 @@ const PortalAccessControl = ({ access, setAccess }) => {
           style: {
             padding: "7px 14px",
             background: c.successBg,
-            border: "1px solid " + c.success + "44",
+            border: "1px solid " + llqaAlpha(c.success, "44"),
             borderRadius: 6,
             cursor: "pointer",
             color: c.success,
@@ -264,7 +264,7 @@ const PortalAccessControl = ({ access, setAccess }) => {
           style: {
             padding: "7px 14px",
             background: c.dangerBg,
-            border: "1px solid " + c.danger + "44",
+            border: "1px solid " + llqaAlpha(c.danger, "44"),
             borderRadius: 6,
             cursor: "pointer",
             color: c.danger,

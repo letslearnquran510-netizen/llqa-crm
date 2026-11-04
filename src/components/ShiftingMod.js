@@ -918,7 +918,7 @@ const ShiftingMod = ({
               cursor: "pointer",
               fontSize: 11,
               fontWeight: 500,
-              background: tab === k ? c.accent : "transparent",
+              background: tab === k ? c.accentFill : "transparent",
               color: tab === k ? c.accentText : c.textSec,
             },
           },
@@ -1177,7 +1177,7 @@ const ShiftingMod = ({
                     key: s.id,
                     style: {
                       borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? c.bgDeep + "88" : "transparent",
+                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                     },
                   },
                   React.createElement(
@@ -1321,7 +1321,7 @@ const ShiftingMod = ({
                             onClick: () => markSps(s.id),
                             style: {
                               background: c.warnBg,
-                              border: "1px solid " + c.warn + "44",
+                              border: "1px solid " + llqaAlpha(c.warn, "44"),
                               borderRadius: 4,
                               cursor: "pointer",
                               padding: "3px 6px",
@@ -1827,7 +1827,7 @@ const ShiftingMod = ({
                     key: s.id,
                     style: {
                       background: c.bgCard,
-                      border: "1px solid " + c.warn + "44",
+                      border: "1px solid " + llqaAlpha(c.warn, "44"),
                       borderRadius: 8,
                       padding: "10px 12px",
                     },
@@ -1910,7 +1910,7 @@ const ShiftingMod = ({
                       onClick: () => markSps(s.id),
                       style: {
                         background: c.successBg,
-                        border: "1px solid " + c.success + "44",
+                        border: "1px solid " + llqaAlpha(c.success, "44"),
                         borderRadius: 5,
                         cursor: "pointer",
                         padding: "4px 10px",
@@ -2002,7 +2002,7 @@ const ShiftingMod = ({
                         key: s.id,
                         style: {
                           borderBottom: "1px solid " + c.border,
-                          background: i % 2 ? c.bgDeep + "88" : "transparent",
+                          background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                         },
                       },
                       React.createElement(
@@ -2069,7 +2069,7 @@ const ShiftingMod = ({
                               onClick: () => markFb(s.id, "Satisfied"),
                               style: {
                                 background: c.successBg,
-                                border: "1px solid " + c.success + "44",
+                                border: "1px solid " + llqaAlpha(c.success, "44"),
                                 borderRadius: 4,
                                 cursor: "pointer",
                                 padding: "3px 6px",
@@ -2086,7 +2086,7 @@ const ShiftingMod = ({
                               onClick: () => markFb(s.id, "Not Satisfied"),
                               style: {
                                 background: c.dangerBg,
-                                border: "1px solid " + c.danger + "44",
+                                border: "1px solid " + llqaAlpha(c.danger, "44"),
                                 borderRadius: 4,
                                 cursor: "pointer",
                                 padding: "3px 6px",
@@ -2103,7 +2103,7 @@ const ShiftingMod = ({
                               onClick: () => markFb(s.id, "On Hold"),
                               style: {
                                 background: c.warnBg,
-                                border: "1px solid " + c.warn + "44",
+                                border: "1px solid " + llqaAlpha(c.warn, "44"),
                                 borderRadius: 4,
                                 cursor: "pointer",
                                 padding: "3px 6px",
@@ -2863,7 +2863,7 @@ const ShiftingMod = ({
                       style: {
                         padding: "10px 12px",
                         background: c.warnBg,
-                        border: "1px solid " + c.warn + "55",
+                        border: "1px solid " + llqaAlpha(c.warn, "55"),
                         borderRadius: 6,
                         color: c.warn,
                         fontSize: 11,
@@ -3208,7 +3208,7 @@ const ShiftingMod = ({
               {
                 style: {
                   background: c.dangerBg,
-                  border: "1px solid " + c.danger + "44",
+                  border: "1px solid " + llqaAlpha(c.danger, "44"),
                   borderRadius: 8,
                   padding: "10px 12px",
                   textAlign: "center",
@@ -3270,7 +3270,7 @@ const ShiftingMod = ({
               {
                 style: {
                   background: c.successBg,
-                  border: "1px solid " + c.success + "44",
+                  border: "1px solid " + llqaAlpha(c.success, "44"),
                   borderRadius: 8,
                   padding: "10px 12px",
                   textAlign: "center",
@@ -4140,7 +4140,7 @@ const ShiftingMod = ({
                             key: i,
                             style: {
                               color: c.text,
-                              borderBottom: "1px solid " + c.border + "55",
+                              borderBottom: "1px solid " + llqaAlpha(c.border, "55"),
                             },
                           },
                           React.createElement(

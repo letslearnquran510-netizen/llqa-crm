@@ -228,7 +228,7 @@ const BiometricScreen = ({ user, network, onVerified, onCancel }) => {
                 height: 34,
                 borderRadius: 8,
                 background:
-                  "linear-gradient(135deg," + c.accent + "," + c.purple + ")",
+                  "linear-gradient(135deg," + c.accentFill + "," + c.purpleFill + ")",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -328,7 +328,7 @@ const BiometricScreen = ({ user, network, onVerified, onCancel }) => {
                         width: 36,
                         height: 36,
                         borderRadius: 8,
-                        background: m.col + "22",
+                        background: llqaAlpha(m.col, "22"),
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
@@ -399,7 +399,7 @@ const BiometricScreen = ({ user, network, onVerified, onCancel }) => {
                 style: {
                   position: "absolute",
                   inset: 0,
-                  border: "3px solid " + method.col + "33",
+                  border: "3px solid " + llqaAlpha(method.col, "33"),
                   borderRadius: "50%",
                 },
               }),

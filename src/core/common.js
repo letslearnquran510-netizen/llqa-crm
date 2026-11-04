@@ -1508,10 +1508,228 @@ const c = {
   cyanBg: "var(--cyanBg)",
   cyanText: "var(--cyanText)",
   warnText: "var(--warnText)",
+  // v68: solid "button" colours and the text that is readable on them
+  accentFill: "var(--accentFill)",
+  accentRing: "var(--accentRing)",
+  successFill: "var(--successFill)",
+  successText: "var(--successText)",
+  warnFill: "var(--warnFill)",
+  dangerFill: "var(--dangerFill)",
+  dangerText: "var(--dangerText)",
+  purpleFill: "var(--purpleFill)",
+  cyanFill: "var(--cyanFill)",
   gradientPrimary: "var(--gradientPrimary)",
   glowPrimary: "var(--glowPrimary)",
   shadow3d: "var(--shadow3d)",
 };
+
+/* ---------- v68: theme engine ----------
+   Every colour the CRM shows is checked for readability (WCAG AA, 4.5:1) in the theme in use.
+   Status colours are fixed per theme; the accent picked in Settings is tuned here at runtime:
+   darker for text in Light, lighter in Dark, and a button colour whose text stays readable. */
+const llqaColor = (() => {
+  const hex = (h) => {
+    h = String(h || "").trim().replace(/^#/, "");
+    if (h.length === 3) h = h.split("").map((x) => x + x).join("");
+    if (!/^[0-9a-f]{6}$/i.test(h)) return null;
+    return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+  };
+  const toHex = (c) => "#" + c.map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, "0")).join("");
+  const lin = (v) => { v /= 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); };
+  const delin = (v) => 255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
+  const lum = (c) => 0.2126 * lin(c[0]) + 0.7152 * lin(c[1]) + 0.0722 * lin(c[2]);
+  const contrast = (a, b) => { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); };
+  const over = (top, a, bot) => top.map((v, i) => v * a + bot[i] * (1 - a));
+  // OKLCH keeps the hue while the lightness moves
+  const toLch = (c) => {
+    const [r, g, b] = c.map(lin);
+    const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    const A = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
+    const B = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
+    return [0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s, Math.sqrt(A * A + B * B), Math.atan2(B, A)];
+  };
+  const fromLch = (L, C, H) => {
+    for (let k = 0; k < 60; k++) {
+      const A = C * Math.cos(H), B = C * Math.sin(H);
+      const l = Math.pow(L + 0.3963377774 * A + 0.2158037573 * B, 3);
+      const m = Math.pow(L - 0.1055613458 * A - 0.0638541728 * B, 3);
+      const s = Math.pow(L - 0.0894841775 * A - 1.291485548 * B, 3);
+      const rgb = [4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s];
+      if (k === 59 || rgb.every((v) => v >= -0.0005 && v <= 1.0005)) return rgb.map((v) => delin(Math.max(0, Math.min(1, v))));
+      C *= 0.94; // out of range: less saturated, same hue
+    }
+  };
+  // move the lightness (dir +1 lighter, -1 darker) only as far as needed for ok() to pass
+  const fit = (c, dir, ok) => {
+    if (ok(c)) return c;
+    const [L0, C, H] = toLch(c);
+    let lo = 0, hi = 1, best = null;
+    for (let i = 0; i < 28; i++) {
+      const mid = (lo + hi) / 2;
+      const cand = fromLch(dir > 0 ? L0 + (1 - L0) * mid : L0 * (1 - mid), C, H);
+      if (ok(cand)) { best = cand; hi = mid; } else lo = mid;
+    }
+    return best || (dir > 0 ? [255, 255, 255] : [0, 0, 0]);
+  };
+  const shift = (c, dL) => { const [L, C, H] = toLch(c); return fromLch(Math.max(0, Math.min(1, L + dL)), C, H); };
+  const rgba = (c, a) => "rgba(" + c.map(Math.round).join(", ") + ", " + a + ")";
+  return { hex, toHex, contrast, over, fit, shift, rgba };
+})();
+
+// colour + transparency that also works when the colour is a CSS variable
+// (joining "44" straight onto c.accent gave "var(--accent)44", which browsers ignore)
+function llqaAlpha(col, a) {
+  const s = String(col == null ? "" : col).trim();
+  if (!s) return "transparent";
+  if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(s)) return (s.length === 4 ? "#" + s.slice(1).split("").map((x) => x + x).join("") : s) + a;
+  const p = Math.round((parseInt(a, 16) / 255) * 1000) / 10;
+  return "color-mix(in srgb, " + s + " " + p + "%, transparent)";
+}
+
+const LLQA_THEME = {
+  // what text sits on in each theme (must match index.html): page, cards, hover rows, raised panels
+  surfaces: {
+    dark: ["#09090b", "#121215", "#1d1d1f", "#1e1e21", "#15171e"],
+    light: ["#f3f5f9", "#fefeff", "#eff3f7", "#f5f6f8"],
+  },
+  card: { dark: "#121215", light: "#fefeff" },
+  // text colours (readable on every surface and on their own tint)
+  ink: {
+    dark: { success: "#34d399", warn: "#fbbf24", danger: "#fa7373", purple: "#a98dfc", cyan: "#22d3ee", neutral: "#94a3b8" },
+    light: { success: "#026e4b", warn: "#885501", danger: "#b80f1f", purple: "#713cd5", cyan: "#0e697b", neutral: "#536278" },
+  },
+  // solid fills and the text that goes on them
+  fill: {
+    success: ["#04835a", "#ffffff"],
+    warn: ["#f59e0b", "#0b0d14"],
+    danger: ["#da2c32", "#ffffff"],
+    purple: ["#8352ec", "#ffffff"],
+    cyan: ["#127d92", "#ffffff"],
+    neutral: ["#63738a", "#ffffff"],
+  },
+};
+
+// the accent family for one theme: text colour, button colour, the text on buttons, tints
+function llqaAccentSet(accent, mode) {
+  const K = llqaColor;
+  const dark = mode !== "light";
+  const W = [255, 255, 255], INK = [11, 13, 20];
+  const raw = K.hex(accent) || K.hex("#4a7aff");
+  let fill = raw, onFill = "#ffffff";
+  if (K.contrast(W, raw) < 4.6) {
+    if (K.contrast(INK, raw) >= 7) onFill = "#0b0d14"; // light colours (yellow, lime, cyan): dark text
+    else fill = K.fit(raw, -1, (x) => K.contrast(W, x) >= 4.8); // mid colours: a little deeper, white text
+  }
+  const surf = LLQA_THEME.surfaces[dark ? "dark" : "light"].map(K.hex);
+  const card = K.hex(LLQA_THEME.card[dark ? "dark" : "light"]);
+  const ok = (x) => surf.every((s) => K.contrast(x, s) >= 4.6) && K.contrast(x, K.over(x, dark ? 0.25 : 0.2, card)) >= 4.6;
+  const ink = K.fit(raw, dark ? 1 : -1, ok);
+  // gradient for main buttons: a touch lighter at the top, text still readable everywhere
+  const okText = (x) => K.contrast(onFill === "#ffffff" ? W : INK, x) >= 4.6;
+  let top = K.shift(fill, 0.05);
+  if (!okText(top)) top = K.fit(top, -1, okText);
+  const bottom = onFill === "#ffffff" ? K.shift(fill, -0.035) : fill;
+  // a button that would melt into the page gets a visible edge
+  const edge = K.contrast(fill, card) < 1.7 ? ink : fill;
+  return {
+    accent: K.toHex(ink),
+    accentRaw: K.toHex(raw),
+    accentFill: K.toHex(fill),
+    accentText: onFill,
+    accentBorder: K.toHex(edge),
+    accentBg: K.rgba(ink, dark ? 0.16 : 0.1),
+    accentRing: K.rgba(ink, dark ? 0.4 : 0.32),
+    gradientPrimary: "linear-gradient(180deg, " + K.toHex(top) + " 0%, " + K.toHex(bottom) + " 100%)",
+    glowPrimary: "inset 0 1px 0 rgba(255,255,255," + (onFill === "#ffffff" ? 0.22 : 0.45) + "), 0 6px 18px -8px " + K.rgba(fill, dark ? 0.75 : 0.55),
+    glowA: K.rgba(ink, dark ? 0.13 : 0.08),
+  };
+}
+
+// every colour token for the theme in use; tone mode decides what purple / cyan / amber become.
+// Pure (no page changes) so the app can work it out while drawing and paint it right after.
+function llqaThemeVars(mode, accent, tone) {
+  const K = llqaColor;
+  const dark = mode !== "light";
+  const T = LLQA_THEME;
+  const a = llqaAccentSet(accent, mode);
+  const tint = dark ? 0.16 : 0.1;
+  const fam = (name) => {
+    const ink = T.ink[dark ? "dark" : "light"][name];
+    return { ink, bg: K.rgba(K.hex(ink), tint), fill: T.fill[name][0], text: T.fill[name][1] };
+  };
+  const acc = { ink: a.accent, bg: a.accentBg, fill: a.accentFill, text: a.accentText };
+  const tm = tone || "full";
+  const pick = { success: fam("success"), danger: fam("danger"), warn: fam("warn"), purple: fam("purple"), cyan: fam("cyan") };
+  if (tm === "compact") { pick.purple = acc; pick.cyan = acc; }
+  if (tm === "minimal") { pick.purple = fam("neutral"); pick.cyan = fam("neutral"); pick.warn = fam("neutral"); }
+  const vars = { ...a };
+  Object.entries(pick).forEach(([k, v]) => {
+    vars[k] = v.ink;
+    vars[k + "Bg"] = v.bg;
+    vars[k + "Fill"] = v.fill;
+    vars[k + "Text"] = v.text;
+  });
+  vars.glowB = K.rgba(K.hex(pick.purple.ink), dark ? 0.09 : 0.06);
+  LLQA_THEME.used = { mode: dark ? "dark" : "light", accent: a.accentRaw, tone: tm, vars };
+  return vars;
+}
+function llqaPaintTheme(mode, vars) {
+  const root = document.documentElement;
+  const dark = mode !== "light";
+  root.setAttribute("data-theme", dark ? "dark" : "light");
+  root.style.colorScheme = dark ? "dark" : "light";
+  Object.entries(vars).forEach(([k, v]) => root.style.setProperty("--" + k, v));
+}
+function llqaApplyTheme(mode, accent, tone) {
+  const vars = llqaThemeVars(mode, accent, tone);
+  llqaPaintTheme(mode, vars);
+  return vars;
+}
+// text for a cell filled with `pct`% of a theme colour: white or near-black, whichever reads better
+function llqaTextOn(tone, pct) {
+  const K = llqaColor;
+  const u = LLQA_THEME.used || {};
+  const mode = u.mode === "light" ? "light" : "dark";
+  const ink = K.hex((u.vars && u.vars[tone]) || LLQA_THEME.ink[mode][tone] || "#888888") || [136, 136, 136];
+  const mixed = K.over(ink, Math.max(0, Math.min(1, (pct || 0) / 100)), K.hex(LLQA_THEME.card[mode]));
+  return K.contrast([255, 255, 255], mixed) >= K.contrast([11, 13, 20], mixed) ? "#ffffff" : "#0b0d14";
+}
+
+// "Auto (System)" follows the computer's own light / dark setting, live
+function llqaSysDark() {
+  try { return window.matchMedia("(prefers-color-scheme: dark)").matches; } catch (e) { return true; }
+}
+function llqaWatchSys(cb) {
+  try {
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    const on = (e) => cb(e.matches);
+    if (mq.addEventListener) mq.addEventListener("change", on); else mq.addListener(on);
+    return () => { if (mq.removeEventListener) mq.removeEventListener("change", on); else mq.removeListener(on); };
+  } catch (e) { return () => {}; }
+}
+
+// Settings > Appearance > Preview: the real button, tags and link with the current choices
+const LLQAThemePreview = () =>
+  React.createElement(
+    "div",
+    { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", maxWidth: 440 } },
+    React.createElement(
+      "span",
+      { style: { background: c.gradientPrimary, color: c.accentText, border: "1px solid " + c.accentBorder, boxShadow: c.glowPrimary, borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 600 } },
+      "Main button",
+    ),
+    React.createElement(
+      "span",
+      { style: { background: c.accentBg, color: c.accent, border: "1px solid " + llqaAlpha(c.accent, "55"), borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 600 } },
+      "Second",
+    ),
+    React.createElement("span", { style: { color: c.accent, fontSize: 12, fontWeight: 700, textDecoration: "underline", textUnderlineOffset: 3 } }, "Link"),
+    [["success", "paid"], ["warn", "due soon"], ["danger", "overdue"], ["purple", "trial"], ["cyan", "new"]].map(([k, t]) =>
+      React.createElement(Badge, { key: k, text: t, color: k }),
+    ),
+  );
 
 const CC = [
   "#4a7aff",
@@ -2982,7 +3200,7 @@ const SearchableSelect = ({
                       String(o.value) === String(value)
                         ? c.bgInput
                         : "transparent",
-                    borderBottom: "1px solid " + c.border + "22",
+                    borderBottom: "1px solid " + llqaAlpha(c.border, "22"),
                   },
                   onMouseEnter: (e) => {
                     if (String(o.value) !== String(value))
@@ -3026,14 +3244,21 @@ const CustomSelect = ({
     (o) => String(o.value) === String(value),
   );
 
+  // v68: layout props size the box, look props style the control (was: a box inside a box)
+  const _lay = {}, _look = {};
+  Object.keys(style || {}).forEach((k) => {
+    (/^(width|minWidth|maxWidth|flex|flexBasis|flexGrow|flexShrink|margin|marginTop|marginBottom|marginLeft|marginRight|gridColumn|alignSelf|justifySelf)$/.test(k) ? _lay : _look)[k] = style[k];
+  });
+  delete _look.padding; // one control height everywhere
   return React.createElement(
     "div",
     {
       ref,
       style: {
         position: "relative",
-        width: "100%",
-        ...style,
+        width: "auto",
+        minWidth: 140,
+        ..._lay,
       },
     },
     React.createElement(
@@ -3043,10 +3268,12 @@ const CustomSelect = ({
         style: {
           padding: "8px 10px",
           background: c.bgInput,
-          border: "1px solid " + (open ? c.accent : c.border),
           borderRadius: 6,
-          color: value ? c.text : c.textSec,
           fontSize: 12,
+          ..._look,
+          border: "1px solid " + (open ? c.accent : "var(--inputBorder)"),
+          boxShadow: open ? "0 0 0 3px " + c.accentRing : "var(--inputShadow)",
+          color: value ? _look.color || c.text : c.textSec,
           cursor: "pointer",
           display: "flex",
           justifyContent: "space-between",
@@ -3069,8 +3296,10 @@ const CustomSelect = ({
             position: "absolute",
             top: "100%",
             left: 0,
-            right: 0,
-            background: c.bgDeep,
+            minWidth: "100%",
+            width: "max-content",
+            maxWidth: 380,
+            background: "linear-gradient(" + c.bgDeep + ", " + c.bgDeep + "), " + c.bg, // v68: solid list (was see-through)
             backdropFilter: "blur(16px)",
             border: "1px solid " + c.border,
             borderRadius: 6,
@@ -3157,7 +3386,7 @@ const NativeSelectWrapper = ({ children, onChange, ...props }) => {
           let label = child.props.children;
           if (Array.isArray(label)) label = label.join("");
           return {
-            value: child.props.value !== undefined ? child.props.value : "",
+            value: child.props.value !== undefined ? child.props.value : typeof label === "string" ? label : "", // v68
             label: label || child.props.value || "",
           };
         }

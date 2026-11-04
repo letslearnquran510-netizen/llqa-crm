@@ -72,8 +72,8 @@ const OperationsMod = ({ setPage, teachers, students, shifts }) => {
             width: 56,
             height: 56,
             borderRadius: 14,
-            background: c.cyan + "22",
-            border: "1px solid " + c.cyan + "55",
+            background: llqaAlpha(c.cyan, "22"),
+            border: "1px solid " + llqaAlpha(c.cyan, "55"),
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -166,7 +166,7 @@ const OperationsMod = ({ setPage, teachers, students, shifts }) => {
             key: card.id,
             onClick: () => setPage(card.id),
             onMouseEnter: (e) => {
-              e.currentTarget.style.borderColor = card.color + "88";
+              e.currentTarget.style.borderColor = llqaAlpha(card.color, "88");
               e.currentTarget.style.transform = "translateY(-2px)";
             },
             onMouseLeave: (e) => {
@@ -213,8 +213,8 @@ const OperationsMod = ({ setPage, teachers, students, shifts }) => {
                     width: 44,
                     height: 44,
                     borderRadius: 11,
-                    background: card.color + "22",
-                    border: "1px solid " + card.color + "55",
+                    background: llqaAlpha(card.color, "22"),
+                    border: "1px solid " + llqaAlpha(card.color, "55"),
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",

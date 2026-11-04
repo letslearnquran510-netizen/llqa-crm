@@ -1,22 +1,24 @@
 const Btn = ({ children, onClick, variant = "primary", icon: I, disabled }) => {
+  // v68: main = accent gradient with a soft glow; danger = readable red; others = tinted accent
   const s =
     variant === "primary"
       ? {
-          background: c.accent,
+          background: c.gradientPrimary,
           color: c.accentText,
           border: "1px solid " + c.accentBorder,
           boxShadow: c.glowPrimary,
         }
       : variant === "danger"
         ? {
-            background: c.danger,
-            color: "#fff",
-            border: "1px solid rgba(255,255,255,0.1)",
+            background: c.dangerFill,
+            color: c.dangerText,
+            border: "1px solid " + c.dangerFill,
+            boxShadow: "0 6px 16px -8px " + llqaAlpha(c.dangerFill, "aa"),
           }
         : {
-            background: "rgba(255,255,255,0.02)",
+            background: c.accentBg,
             color: c.accent,
-            border: "1px solid " + c.accent,
+            border: "1px solid " + llqaAlpha(c.accent, "55"),
             backdropFilter: "blur(8px)",
           };
   return React.createElement(

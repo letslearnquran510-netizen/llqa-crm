@@ -68,7 +68,7 @@ const SC = ({ icon: I, label, value, sub, color = c.accent }) =>
         "div",
         {
           style: {
-            background: color + "15",
+            background: llqaAlpha(color, "15"),
             padding: 7,
             borderRadius: 8,
           },

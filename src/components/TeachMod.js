@@ -455,7 +455,7 @@ const TeachMod = ({
               cursor: "pointer",
               fontSize: 11,
               fontWeight: 500,
-              background: st === k ? c.accent : "transparent",
+              background: st === k ? c.accentFill : "transparent",
               color: st === k ? c.accentText : c.textSec,
             },
           },
@@ -496,11 +496,11 @@ const TeachMod = ({
                   borderRadius: 6,
                   border:
                     tab === k
-                      ? "1px solid " + c.accent + "55"
+                      ? "1px solid " + llqaAlpha(c.accent, "55")
                       : "1px solid " + c.border,
                   cursor: "pointer",
                   fontSize: 11,
-                  background: tab === k ? c.accent : "transparent",
+                  background: tab === k ? c.accentFill : "transparent",
                   color: tab === k ? c.accentText : c.textSec,
                 },
               },
@@ -673,7 +673,7 @@ const TeachMod = ({
                     key: t.id,
                     style: {
                       borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? c.bgDeep + "88" : "transparent",
+                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                     },
                   },
                   React.createElement(
@@ -1026,7 +1026,7 @@ const TeachMod = ({
                     key: l.id,
                     style: {
                       borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? c.bgDeep + "88" : "transparent",
+                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                     },
                   },
                   React.createElement(
@@ -1458,7 +1458,7 @@ const TeachMod = ({
                       key: t.id,
                       style: {
                         borderBottom: "1px solid " + c.border,
-                        background: i % 2 ? c.bgDeep + "88" : "transparent",
+                        background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                       },
                     },
                     React.createElement(
@@ -1815,7 +1815,7 @@ const TeachMod = ({
                       marginBottom: 10,
                       padding: "6px 10px",
                       background: c.warnBg || "rgba(245,158,11,0.12)",
-                      border: "1px solid " + (c.warn || "#f59e0b") + "55",
+                      border: "1px solid " + llqaAlpha((c.warn || "#f59e0b"), "55"),
                       borderRadius: 6,
                       color: c.warn || "#f59e0b",
                       fontSize: 10,
@@ -1867,7 +1867,7 @@ const TeachMod = ({
                       marginBottom: 10,
                       padding: "6px 10px",
                       background: c.dangerBg || "rgba(239,68,68,0.12)",
-                      border: "1px solid " + (c.danger || "#ef4444") + "55",
+                      border: "1px solid " + llqaAlpha((c.danger || "#ef4444"), "55"),
                       borderRadius: 6,
                       color: c.danger || "#ef4444",
                       fontSize: 10,
@@ -2062,7 +2062,7 @@ const TeachMod = ({
                         fontWeight: 600,
                         cursor: "pointer",
                         border: "1px solid " + (selected ? c.accent : c.border),
-                        background: selected ? c.accent + "22" : c.bgInput,
+                        background: selected ? llqaAlpha(c.accent, "22") : c.bgInput,
                         color: selected ? c.accent : c.textSec,
                       },
                     },

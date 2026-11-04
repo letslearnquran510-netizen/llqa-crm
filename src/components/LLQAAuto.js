@@ -289,8 +289,8 @@ const llqaTrialStage = (cell, students, arPayments) => {
   const done = parseInt(st.attended, 10) || 0;
   const target = llqaTrialTarget(st);
   return done >= target
-    ? { bg: "color-mix(in srgb, var(--warn) 35%, transparent)", bd: c.warn, label: "Trial done " + done + "/" + target, stage: "complete" }
-    : { bg: "color-mix(in srgb, var(--danger) 35%, transparent)", bd: c.danger, label: "Trial " + done + "/" + target, stage: "trial" };
+    ? { bg: "color-mix(in srgb, var(--warn) 12%, transparent)", bd: c.warn, label: "Trial done " + done + "/" + target, stage: "complete" } // v68: pale fill + solid border
+    : { bg: "color-mix(in srgb, var(--danger) 12%, transparent)", bd: c.danger, label: "Trial " + done + "/" + target, stage: "trial" };
 };
 // After a class is counted: the moment a trial reaches its target, offer the
 // fee message (once).
@@ -1064,7 +1064,7 @@ const llqaPill = (text, col, bg, key) =>
         fontWeight: 700,
         color: col || c.textSec,
         background: bg || c.bgDeep,
-        border: "1px solid " + (col || c.border) + "33",
+        border: "1px solid " + llqaAlpha((col || c.border), "33"),
         whiteSpace: "nowrap",
       },
     },
@@ -1073,6 +1073,9 @@ const llqaPill = (text, col, bg, key) =>
 const llqaMini = (label, onClick, opt) => {
   const o = opt || {};
   const col = o.tone === "danger" ? c.danger : o.tone === "success" ? c.success : o.tone === "warn" ? c.warn : o.tone === "accent" ? c.accent : c.textSec;
+  // v68: a solid button uses the button version of its colour and the text that reads on it
+  const fill = o.tone === "danger" ? c.dangerFill : o.tone === "success" ? c.successFill : o.tone === "warn" ? c.warnFill : o.tone === "accent" ? c.gradientPrimary : c.textSec;
+  const onFill = o.tone === "danger" ? c.dangerText : o.tone === "success" ? c.successText : o.tone === "warn" ? c.warnText : o.tone === "accent" ? c.accentText : c.bg;
   return React.createElement(
     "button",
     {
@@ -1087,9 +1090,10 @@ const llqaMini = (label, onClick, opt) => {
       style: {
         padding: o.big ? "8px 14px" : "5px 9px",
         borderRadius: 7,
-        border: "1px solid " + (o.solid ? "transparent" : col + "55"),
-        background: o.solid ? col : "transparent",
-        color: o.solid ? "#fff" : col,
+        border: "1px solid " + (o.solid ? "transparent" : llqaAlpha(col, "55")),
+        background: o.solid ? fill : "transparent",
+        color: o.solid ? onFill : col,
+        boxShadow: o.solid && !o.disabled ? "0 4px 12px -6px " + llqaAlpha(o.tone === "accent" ? c.accentFill : fill, "99") : "none",
         fontSize: o.big ? 12 : 11,
         fontWeight: 700,
         cursor: o.disabled ? "not-allowed" : "pointer",
@@ -1587,7 +1591,7 @@ const LLQAToasts = () => {
           key: t.id,
           style: {
             background: "linear-gradient(" + c.bgCard + ", " + c.bgCard + "), " + c.bg,
-            border: "1px solid " + c.accent + "55",
+            border: "1px solid " + llqaAlpha(c.accent, "55"),
             borderRadius: 10,
             padding: "10px 12px",
             boxShadow: c.shadow3d,
@@ -1747,7 +1751,7 @@ const LLQAToasts = () => {
               pointerEvents: "auto",
               padding: "7px 12px",
               borderRadius: 18,
-              border: "1px solid " + c.accent + "88",
+              border: "1px solid " + llqaAlpha(c.accent, "88"),
               background: c.bgCard,
               color: c.accent,
               fontSize: 12,
@@ -2042,7 +2046,7 @@ const LLQAEnrollToggle = ({ pf, setPf }) => {
         },
       },
       React.createElement("div", { style: { fontSize: 12, fontWeight: 700 } }, title),
-      React.createElement("div", { style: { fontSize: 10, marginTop: 2, opacity: 0.85 } }, sub),
+      React.createElement("div", { style: { fontSize: 10, marginTop: 2, color: on ? c.accent : c.textMuted } }, sub), // v68: readable (was faded)
     );
   return React.createElement(
     "div",
@@ -2258,7 +2262,7 @@ const LLQATrialCard = ({ x, ctx }) => {
         llqaMini("✕ Quit", () => llqaOpen("quit", { studentId: s.id }), { key: "q", tone: "danger" }),
       ),
     ],
-    { key: s.id, border: info.stage === "complete" ? c.warn + "88" : info.stalled ? c.danger + "66" : c.border, mb: 8 },
+    { key: s.id, border: info.stage === "complete" ? llqaAlpha(c.warn, "88") : info.stalled ? llqaAlpha(c.danger, "66") : c.border, mb: 8 },
   );
 };
 const LLQAPipelineTab = (props) => {
@@ -2401,7 +2405,7 @@ const LLQATemplateEditor = ({ onClose }) => {
         llqaMini("✓ Save templates", save, { big: true, solid: true, tone: "accent", key: "s" }),
       ),
     ],
-    { border: c.accent + "55" },
+    { border: llqaAlpha(c.accent, "55") },
   );
 };
 const LLQAContactsTab = (props) => {
@@ -2451,7 +2455,7 @@ const LLQAContactsTab = (props) => {
   const sendable = shown.filter((r) => r.digits);
   const recent = [...(ctx.messageLog || [])].sort((a, b) => String(b.at).localeCompare(String(a.at))).slice(0, 12);
   const th = (t) => React.createElement("th", { key: t, style: { textAlign: "left", padding: "8px 10px", color: c.textSec, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4, borderBottom: "1px solid " + c.border } }, t);
-  const td = (kids, k, st) => React.createElement("td", { key: k, style: { padding: "8px 10px", borderBottom: "1px solid " + c.border + "66", fontSize: 12, color: c.text, verticalAlign: "top", ...(st || {}) } }, kids);
+  const td = (kids, k, st) => React.createElement("td", { key: k, style: { padding: "8px 10px", borderBottom: "1px solid " + llqaAlpha(c.border, "66"), fontSize: 12, color: c.text, verticalAlign: "top", ...(st || {}) } }, kids);
   return React.createElement(
     "div",
     null,
@@ -2525,7 +2529,7 @@ const LLQAContactsTab = (props) => {
           ...recent.map((m) =>
             React.createElement(
               "div",
-              { key: m.id, style: { display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11, padding: "5px 0", borderBottom: "1px solid " + c.border + "55", color: c.textSec } },
+              { key: m.id, style: { display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11, padding: "5px 0", borderBottom: "1px solid " + llqaAlpha(c.border, "55"), color: c.textSec } },
               React.createElement("span", null, (m.channel === "whatsapp" ? "💬 " : "📞 ") + (m.name || "—") + (m.template ? " · " + llqaTplName(m.template) : "")),
               React.createElement("span", null, llqaAgo(m.at) + (m.by ? " · " + m.by : "")),
             ),
@@ -2664,7 +2668,7 @@ const LLQAWaitlistTab = (props) => {
                 }, { key: "r", tone: "danger" }),
               ),
             ],
-            { key: w.id, border: free ? c.success + "88" : c.border },
+            { key: w.id, border: free ? llqaAlpha(c.success, "88") : c.border },
           );
         }),
     hist
@@ -2675,7 +2679,7 @@ const LLQAWaitlistTab = (props) => {
             .map((w) =>
               React.createElement(
                 "div",
-                { key: w.id, style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: c.textSec, padding: "4px 0", borderBottom: "1px solid " + c.border + "55" } },
+                { key: w.id, style: { display: "flex", justifyContent: "space-between", fontSize: 11, color: c.textSec, padding: "4px 0", borderBottom: "1px solid " + llqaAlpha(c.border, "55") } },
                 React.createElement("span", null, w.name + " · " + w.wantDay + " " + B.timeLabel(w.wantTime)),
                 React.createElement("span", null, (w.status === "booked" ? "✓ booked " + llqaAgo(w.bookedAt) : "removed " + llqaAgo(w.closedAt))),
               ),
@@ -2785,7 +2789,7 @@ const LLQAClockTab = (props) => {
           kind === "moved" ? { newTime: first.famNow } : { changeDate: llqaChangeLabel(e.next, e.tz), newTime: first.famAfter };
         return React.createElement(
           "div",
-          { key: e.s.id, style: { padding: "10px 0", borderTop: "1px solid " + c.border + "66" } },
+          { key: e.s.id, style: { padding: "10px 0", borderTop: "1px solid " + llqaAlpha(c.border, "66") } },
           React.createElement("div", { style: { color: c.text, fontSize: 13, fontWeight: 700 } }, e.s.name + " · " + e.zone + (kind === "upcoming" ? " · " + llqaChangeLabel(e.next, e.tz) : "")),
           ...mine.map((x, k) => React.createElement("div", { key: k, style: { color: x.free ? c.textSec : c.warn, fontSize: 11, marginTop: 3 } }, "• " + rowText(x))),
           React.createElement(
@@ -2839,7 +2843,7 @@ const LLQAClockTab = (props) => {
         ),
         manage ? llqaMini(auto ? "Turn off" : "Turn on", () => setAuto(!auto), { big: true, tone: "success", solid: !auto }) : null,
       ),
-      { border: auto ? c.success + "66" : c.border },
+      { border: auto ? llqaAlpha(c.success, "66") : c.border },
     ),
     React.createElement("div", { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } }, zoneCards.length ? zoneCards : llqaStat("Families", 0, "no students with a time zone yet")),
     msg ? llqaCard(React.createElement("div", { style: { color: /^✓/.test(msg) ? c.success : c.warn, fontSize: 12 } }, msg)) : null,
@@ -2935,7 +2939,7 @@ const LLQATodayClasses = (props) => {
   };
   const dayBtn = (label, d) => llqaMini(label, () => setDate(d), { key: label, tone: date === d ? "accent" : undefined, solid: date === d });
   const th = (t) => React.createElement("th", { key: t, style: { textAlign: "left", padding: "8px 10px", color: c.textSec, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4, borderBottom: "1px solid " + c.border } }, t);
-  const td = (kids, k, st) => React.createElement("td", { key: k, style: { padding: "8px 10px", borderBottom: "1px solid " + c.border + "66", fontSize: 12, color: c.text, verticalAlign: "middle", ...(st || {}) } }, kids);
+  const td = (kids, k, st) => React.createElement("td", { key: k, style: { padding: "8px 10px", borderBottom: "1px solid " + llqaAlpha(c.border, "66"), fontSize: 12, color: c.text, verticalAlign: "middle", ...(st || {}) } }, kids);
   const coverSelect = (it) => {
     const opts = llqaCoverOptions(it, date, raw);
     return React.createElement(
@@ -2951,7 +2955,7 @@ const LLQATodayClasses = (props) => {
             setPick(null);
           }
         },
-        style: { padding: "4px 6px", background: c.bgDeep, border: "1px solid " + (opts.length ? c.accent : c.danger) + "88", borderRadius: 6, color: c.text, fontSize: 11, maxWidth: 210 },
+        style: { padding: "4px 6px", background: c.bgDeep, border: "1px solid " + llqaAlpha((opts.length ? c.accent : c.danger), "88"), borderRadius: 6, color: c.text, fontSize: 11, maxWidth: 210 },
       },
       React.createElement("option", { value: "" }, opts.length ? "🔁 Choose substitute (" + opts.length + " free)…" : "No teacher free then"),
       opts.map((o) =>
@@ -2994,7 +2998,7 @@ const LLQATodayClasses = (props) => {
             ),
             manage ? llqaMini("🗓 Holidays", () => llqaGo("timetable", "holidays"), { key: "h", tone: "accent" }) : null,
           ),
-          { border: ((hol.kind || "holiday") === "holiday" ? c.warn : c.accent) + "88" },
+          { border: llqaAlpha(((hol.kind || "holiday") === "holiday" ? c.warn : c.accent), "88") },
         )
       : null,
     React.createElement(
@@ -3119,6 +3123,45 @@ const LLQATodayClasses = (props) => {
 };
 
 /* ---------- Dashboard: today & follow-ups ---------- */
+// v68: one card style for every Dashboard card. A card that needs you gets a soft
+// tint, a coloured edge and its number in that colour (all readable in both themes).
+const llqaDashCard = (key, icon, title, value, sub, alert, go) =>
+  React.createElement(
+    "div",
+    {
+      key,
+      onClick: go,
+      role: "button",
+      tabIndex: 0,
+      className: "hover-lift",
+      onKeyDown: (e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          if (go) go();
+        }
+      },
+      style: {
+        cursor: "pointer",
+        position: "relative",
+        overflow: "hidden",
+        minWidth: 0,
+        background: alert ? "linear-gradient(180deg, " + llqaAlpha(alert, "1a") + ", " + llqaAlpha(alert, "00") + " 70%), " + c.bgCard : c.bgCard,
+        border: "1px solid " + (alert ? llqaAlpha(alert, "59") : c.border),
+        boxShadow: c.shadow3d,
+        borderRadius: 12,
+        padding: "11px 13px 12px",
+      },
+    },
+    alert ? React.createElement("div", { style: { position: "absolute", left: 0, top: 10, bottom: 10, width: 3, borderRadius: "0 3px 3px 0", background: alert } }) : null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 } },
+      React.createElement("div", { style: { color: c.textSec, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 } }, icon + " " + title),
+      React.createElement("div", { style: { color: c.textMuted, fontSize: 11 } }, "→"),
+    ),
+    React.createElement("div", { style: { color: alert || c.text, fontSize: 22, fontWeight: 800, marginTop: 3, letterSpacing: -0.2 } }, value),
+    React.createElement("div", { style: { color: c.textMuted, fontSize: 10.5, marginTop: 2, lineHeight: 1.4 } }, sub),
+  );
 const LLQADashCards = (props) => {
   const ctx = llqaCtx(props);
   if (!llqaCanManage()) return null;
@@ -3159,32 +3202,10 @@ const LLQADashCards = (props) => {
   const askWaiting = (ctx.parentRequests || []).filter((r) => r && r.type === "proposal" && r.status === "pending").length;
   const holNow = llqaHolidayOn(today) || llqaHolidayOn(tomorrow);
   const holNext = llqaCalendar().filter((d) => (d.to || d.from) >= today).sort((a, b) => String(a.from).localeCompare(String(b.from)))[0];
-  const card = (key, icon, title, value, sub, alert, go) =>
-    React.createElement(
-      "div",
-      {
-        key,
-        onClick: go,
-        style: {
-          cursor: "pointer",
-          background: c.bgCard,
-          border: "1px solid " + (alert ? alert + "88" : c.border),
-          borderRadius: 10,
-          padding: "10px 12px",
-        },
-      },
-      React.createElement(
-        "div",
-        { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
-        React.createElement("div", { style: { color: c.textSec, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 } }, icon + " " + title),
-        React.createElement("div", { style: { color: c.textMuted, fontSize: 11 } }, "→"),
-      ),
-      React.createElement("div", { style: { color: alert || c.text, fontSize: 22, fontWeight: 800, marginTop: 2 } }, value),
-      React.createElement("div", { style: { color: c.textMuted, fontSize: 10, marginTop: 2 } }, sub),
-    );
+  const card = llqaDashCard; // v68: one card style for the whole Dashboard
   return React.createElement(
     "div",
-    { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 16 } },
+    { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 10, marginBottom: 16 } }, // v68: 5 per row on a laptop
     tt && card("today", "📋", "Today's classes", cls.length, logged + " logged · " + missing + " not logged", missing ? c.danger : null, () => llqaGo("timetable", "today")),
     sales && card("trials", "🧪", "Trials", active, complete + " fee due · " + stalled + " need follow-up", complete ? c.warn : stalled ? c.danger : null, () => llqaGo("sales", "pipeline")),
     sales && card("follow", "💬", "Follow-ups", complete + feeDue + stalled, complete + " trial fee · " + feeDue + " fee due · " + stalled + " quiet", complete + feeDue ? c.warn : null, () => llqaGo("sales", "contacts")),
@@ -3216,6 +3237,7 @@ const LLQADashCards = (props) => {
       holNow && (holNow.kind || "holiday") === "holiday" ? c.warn : null,
       () => llqaGo("timetable", "holidays"),
     ),
+    ...llqaDashCards3Items(), // v68: the v67 cards sit in the same grid, same style
   );
 };
 
@@ -4491,7 +4513,7 @@ const LLQA_GATEWAYS = ["Bank Transfer", "Credit/Debit Card", "PayPal", "Stripe",
 const llqaTh = (t) =>
   React.createElement("th", { key: t, style: { textAlign: "left", padding: "8px 10px", color: c.textSec, fontSize: 10, textTransform: "uppercase", letterSpacing: 0.4, borderBottom: "1px solid " + c.border, whiteSpace: "nowrap" } }, t);
 const llqaTd = (kids, k, st) =>
-  React.createElement("td", { key: k, style: { padding: "8px 10px", borderBottom: "1px solid " + c.border + "66", fontSize: 12, color: c.text, verticalAlign: "middle", ...(st || {}) } }, kids);
+  React.createElement("td", { key: k, style: { padding: "8px 10px", borderBottom: "1px solid " + llqaAlpha(c.border, "66"), fontSize: 12, color: c.text, verticalAlign: "middle", ...(st || {}) } }, kids);
 const llqaTable = (heads, rows) =>
   React.createElement(
     "div",
@@ -4532,7 +4554,7 @@ const llqaAutoSwitch = (key, title, onText, offText) => {
           }, { big: true, tone: "success", solid: !on, key: "sw" })
         : null,
     ),
-    { border: on ? c.success + "66" : c.border, key: "sw-" + key },
+    { border: on ? llqaAlpha(c.success, "66") : c.border, key: "sw-" + key },
   );
 };
 const llqaWho = (s) => [s.parent, s.name && s.name !== s.parent ? s.name : ""].filter(Boolean).join(" · ");
@@ -4805,7 +4827,7 @@ const LLQALeaveCoverTab = (props) => {
           const o = opts.find((x) => String(x.t.id) === e.target.value);
           if (o) llqaAssignCover(r.it, r.d, o.t, false);
         },
-        style: { ...llqaSelectStyle, border: "1px solid " + (opts.length ? c.accent : c.danger) + "88", maxWidth: 230 },
+        style: { ...llqaSelectStyle, border: "1px solid " + llqaAlpha((opts.length ? c.accent : c.danger), "88"), maxWidth: 230 },
       },
       React.createElement("option", { value: "" }, r.it.covered ? "Change substitute…" : opts.length ? "🔁 Choose substitute (" + opts.length + " free)…" : "No teacher free then"),
       opts.map((o) => React.createElement("option", { key: o.t.id, value: String(o.t.id) }, (o.pref ? "★ " : "") + o.t.name + " · " + (o.t.gender || "—") + " · " + o.load.booked + " classes/wk")),
@@ -4912,7 +4934,7 @@ const LLQALeaveCoverTab = (props) => {
               )
             : React.createElement("div", { key: "e", style: { color: c.textSec, fontSize: 12 } }, "No classes booked for " + b.t.name + " on these days."),
         ],
-        { key: String(l.id), border: bNeed.length ? c.danger + "66" : c.border },
+        { key: String(l.id), border: bNeed.length ? llqaAlpha(c.danger, "66") : c.border },
       );
     }),
   );
@@ -4976,7 +4998,7 @@ const LLQAHolidaysTab = (props) => {
     const tpl = kind === "ramadan" ? "ramadanNotice" : "holidayNotice";
     return React.createElement(
       "div",
-      { key: d.id, style: { padding: "10px 0", borderTop: "1px solid " + c.border + "66", opacity: old ? 0.6 : 1 } },
+      { key: d.id, style: { padding: "10px 0", borderTop: "1px solid " + llqaAlpha(c.border, "66"), opacity: old ? 0.6 : 1 } },
       React.createElement(
         "div",
         { style: { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "center" } },
@@ -5501,7 +5523,7 @@ const LLQARequestsTab = (props) => {
           !s ? llqaSmall("Student no longer in the list", c.warn, "ns") : null,
         ),
       ],
-      { key: r.id, border: open ? col + "66" : c.border },
+      { key: r.id, border: open ? llqaAlpha(col, "66") : c.border },
     );
   };
   return React.createElement(
@@ -5587,7 +5609,7 @@ const LLQAParentRequests = ({ stu, user }) => {
               ),
             ),
           ],
-          { border: c.accent + "88", key: "asks" },
+          { border: llqaAlpha(c.accent, "88"), key: "asks" },
         )
       : null,
     box(
@@ -5646,7 +5668,7 @@ const LLQAParentRequests = ({ stu, user }) => {
             const [label, col] = status(r);
             return React.createElement(
               "div",
-              { key: r.id, style: { display: "flex", justifyContent: "space-between", gap: 10, padding: "8px 0", borderTop: "1px solid " + c.border + "55" } },
+              { key: r.id, style: { display: "flex", justifyContent: "space-between", gap: 10, padding: "8px 0", borderTop: "1px solid " + llqaAlpha(c.border, "55") } },
               React.createElement(
                 "div",
                 null,
@@ -7290,7 +7312,8 @@ const LLQACapacityTab = (props) => {
   const cap = llqaCapacity(sh);
   if (!cap) return null;
   const max = Math.max(1, ...Object.values(cap.cells).map((x) => x.free.length));
-  const col = (n) => (n === 0 ? c.danger : n <= Math.max(1, Math.round(max * 0.25)) ? c.warn : c.success);
+  const tone = (n) => (n === 0 ? "danger" : n <= Math.max(1, Math.round(max * 0.25)) ? "warn" : "success");
+  const col = (n) => c[tone(n)];
   const total = cap.free + cap.booked;
   const pick = cell ? cap.cells[cell] : null;
   const [pd, ps] = cell ? cell.split("|") : [];
@@ -7356,7 +7379,7 @@ const LLQACapacityTab = (props) => {
                         textAlign: "center",
                         cursor: "pointer",
                         borderRadius: 5,
-                        color: "#fff",
+                        color: llqaTextOn(tone(n), n === 0 ? 70 : Math.round(30 + (60 * n) / max)), // v68: readable on every shade
                         fontWeight: 800,
                         background: "color-mix(in srgb, " + col(n) + " " + (n === 0 ? 70 : Math.round(30 + (60 * n) / max)) + "%, transparent)",
                         outline: cell === k ? "2px solid " + c.text : dem ? "2px solid " + c.warn : "none",
@@ -7865,11 +7888,6 @@ const LLQA_MODALS3 = { makeup: LLQAMakeupModal, lead: LLQALeadModal, leadNote: L
 const LLQADashCards3 = () => {
   const ctx = LLQAApp.ctx;
   if (!ctx.user || !llqaCanManage()) return null;
-  const today = todayPK();
-  const owed = llqaMakeupOwed(today).length;
-  const logx = llqaLogIndex(ctx.messageLog);
-  const tday = llqaTeacherNext().list.filter((x) => !logx.keys.has(llqaDayKey(x.t, x.date))).length;
-  const ls = llqaLeadStats(today);
   // v67.3: the 24/7 runner's status
   const age = llqaRunnerAge();
   const rInfo = ctx.runnerInfo || {};
@@ -7883,20 +7901,526 @@ const LLQADashCards3 = () => {
             ? "🤖 24/7 runner online — last check " + llqaAgo(rInfo.at) + (rInfo.saveError ? " · ⚠ save problem: " + rInfo.saveError : "") + " · your tab leaves the automatic work to it"
             : "⚠ 24/7 runner offline since " + llqaAgo(rInfo.at) + " — this tab does the automatic work while it is down",
         );
-  const card = (icon, title, value, sub, go, col) =>
+  // v68: the cards themselves go into the main card grid (llqaDashCards3Items); this keeps the runner line
+  return runnerLine ? React.createElement("div", { style: { marginBottom: 14 } }, runnerLine) : null;
+};
+// v68: Leads, Make-ups and Teachers' day — same card style, same grid as the other Dashboard cards
+const llqaDashCards3Items = () => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user || !llqaCanManage()) return [];
+  const today = todayPK();
+  const owed = llqaMakeupOwed(today).length;
+  const logx = llqaLogIndex(ctx.messageLog);
+  const tday = llqaTeacherNext().list.filter((x) => !logx.keys.has(llqaDayKey(x.t, x.date))).length;
+  const ls = llqaLeadStats(today);
+  return [
+    llqaCanOpen("sales") && llqaDashCard("leads", "🎯", "Leads", ls.due, ls.due ? "follow-ups due today" : ls.open + " open leads", ls.due ? c.warn : null, () => llqaGo("sales", "leads")),
+    llqaCanOpen("timetable") && llqaDashCard("makeups", "🧩", "Make-ups", owed, owed ? "missed classes to make up" : "nothing owed", owed ? c.warn : null, () => llqaGo("timetable", "makeup")),
+    llqaCanOpen("timetable") && llqaDashCard("tday", "🧑‍🏫", "Teachers' day", tday, tday ? "schedules not sent — next 24 hours" : "all sent (or no classes)", tday ? c.accent : null, () => llqaGo("timetable", "teacherday")),
+  ].filter(Boolean);
+};
+
+/* ---------- v68: Dashboard — every number comes from the CRM's own records ----------
+   Replaces the old sample figures ("Rs 0", "0/0", a fixed activity list) and the
+   charts that were never connected. Each part shows only for people who can open
+   the page it comes from. */
+const llqaFirstName = () => {
+  const u = (LLQAApp.ctx && LLQAApp.ctx.user) || {};
+  return String(u.name || "").trim().split(/\s+/)[0] || "there";
+};
+const llqaShortMonth = (ym) => {
+  const [y, m] = String(ym).split("-").map(Number);
+  return new Date(Date.UTC(y, (m || 1) - 1, 15)).toLocaleDateString("en-US", { month: "short", timeZone: "UTC" });
+};
+const llqaNum = (v) => (Number(v) || 0).toLocaleString("en-US", { maximumFractionDigits: 2 });
+const llqaDayLabel = (d, today) => {
+  if (!d) return "";
+  if (d === today) return "today";
+  if (d === llqaAddDays(today, -1)) return "yesterday";
+  return llqaDateLabel(d);
+};
+// when something happened: "12 min ago" for times, "today" / "3 Nov" for dates
+const llqaWhen = (ev, today) => (ev.iso ? llqaAgo(ev.iso) : llqaDayLabel(ev.date, today));
+
+// a figure with its label, an icon in the figure's colour and one line of detail
+const llqaStatTile = (t) =>
+  React.createElement(
+    "div",
+    {
+      key: t.key,
+      role: t.go ? "button" : undefined,
+      tabIndex: t.go ? 0 : undefined,
+      className: t.go ? "hover-lift" : undefined,
+      title: t.title || undefined,
+      onClick: t.go,
+      onKeyDown: (e) => { if (t.go && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); t.go(); } },
+      style: { cursor: t.go ? "pointer" : "default", position: "relative", overflow: "hidden", minWidth: 0, background: c.bgCard, backdropFilter: "blur(16px)", boxShadow: c.shadow3d, border: "1px solid " + c.border, borderRadius: 12, padding: "14px 16px 13px" },
+    },
+    React.createElement("div", { style: { position: "absolute", left: 0, right: 0, top: 0, height: 3, background: "linear-gradient(90deg, " + t.tone + ", " + llqaAlpha(t.tone, "00") + " 85%)" } }),
     React.createElement(
       "div",
-      { key: title, onClick: go, style: { flex: "1 1 200px", cursor: "pointer", background: c.bgCard, border: "1px solid " + (col || c.border), borderRadius: 10, padding: "10px 12px" } },
-      React.createElement("div", { style: { color: c.textSec, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 } }, icon + " " + title),
-      React.createElement("div", { style: { color: col || c.text, fontSize: 20, fontWeight: 800, marginTop: 2 } }, value),
-      React.createElement("div", { style: { color: c.textMuted, fontSize: 10, marginTop: 2 } }, sub),
-    );
+      { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 10 } },
+      React.createElement(
+        "div",
+        { style: { width: 32, height: 32, borderRadius: 9, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: llqaAlpha(t.tone, "22"), boxShadow: "inset 0 0 0 1px " + llqaAlpha(t.tone, "38") } },
+        React.createElement(t.icon, { size: 16, color: t.tone }),
+      ),
+      React.createElement("div", { style: { color: c.textSec, fontSize: 11, fontWeight: 600, lineHeight: 1.3 } }, t.label),
+    ),
+    React.createElement("div", { style: { color: c.text, fontSize: t.small ? 18 : 24, fontWeight: 800, letterSpacing: -0.3, lineHeight: 1.15, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" } }, t.value),
+    React.createElement("div", { style: { color: c.textMuted, fontSize: 10.5, marginTop: 4, lineHeight: 1.4 } }, t.sub),
+  );
+
+const llqaPanel = (key, title, sub, body, right) =>
+  React.createElement(
+    "div",
+    { key, style: { minWidth: 0, background: c.bgCard, backdropFilter: "blur(16px)", boxShadow: c.shadow3d, border: "1px solid " + c.border, borderRadius: 14, padding: "16px 18px" } },
+    React.createElement(
+      "div",
+      { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10, marginBottom: 14 } },
+      React.createElement(
+        "div",
+        { style: { minWidth: 0 } },
+        React.createElement("div", { style: { color: c.text, fontSize: 13.5, fontWeight: 700 } }, title),
+        sub ? React.createElement("div", { style: { color: c.textMuted, fontSize: 10.5, marginTop: 3, lineHeight: 1.4 } }, sub) : null,
+      ),
+      right || null,
+    ),
+    body,
+  );
+
+const llqaEmpty = (icon, text) =>
+  React.createElement(
+    "div",
+    { style: { padding: "22px 14px", textAlign: "center", color: c.textMuted, fontSize: 11.5, lineHeight: 1.5, border: "1px dashed " + c.border, borderRadius: 10, background: c.bgDeep } },
+    React.createElement("div", { style: { fontSize: 20, marginBottom: 6 } }, icon),
+    text,
+  );
+
+const llqaLegend = (items) =>
+  React.createElement(
+    "div",
+    { style: { display: "flex", gap: 12, flexWrap: "wrap", alignItems: "center" } },
+    items.map(([label, col]) =>
+      React.createElement(
+        "span",
+        { key: label, style: { display: "inline-flex", alignItems: "center", gap: 6, color: c.textSec, fontSize: 10.5, fontWeight: 600 } },
+        React.createElement("span", { style: { width: 10, height: 10, borderRadius: 3, background: col, flexShrink: 0 } }),
+        label,
+      ),
+    ),
+  );
+
+// columns over the months: one colour, the newest month in full, value on its cap, rest in the tooltip
+const llqaColumns = (o) => {
+  const max = Math.max(1, ...o.data.map((d) => d.value || 0));
+  const H = o.height || 110;
+  const n = o.data.length;
   return React.createElement(
     "div",
-    { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14 } },
-    llqaCanOpen("sales") && card("🎯", "Leads", ls.due, ls.due ? "follow-ups due today" : ls.open + " open leads", () => llqaGo("sales", "leads"), ls.due ? c.warn : null),
-    llqaCanOpen("timetable") && card("🧩", "Make-ups", owed, owed ? "missed classes to make up" : "nothing owed", () => llqaGo("timetable", "makeup"), owed ? c.warn : null),
-    llqaCanOpen("timetable") && card("🧑‍🏫", "Teachers' day", tday, tday ? "schedules not sent — next 24 hours" : "all sent (or no classes)", () => llqaGo("timetable", "teacherday"), tday ? c.accent : null),
-    runnerLine,
+    { role: "img", "aria-label": o.aria || "" },
+    React.createElement(
+      "div",
+      { style: { display: "flex", alignItems: "flex-end", gap: 6, height: H + 20, borderBottom: "1px solid " + c.border } },
+      o.data.map((d, i) => {
+        const last = i === n - 1;
+        const h = d.value ? Math.max(3, Math.round((d.value / max) * H)) : 0;
+        return React.createElement(
+          "div",
+          { key: d.key, title: d.title, style: { flex: 1, minWidth: 0, height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "flex-end" } },
+          (last || d.value === max) && d.value ? React.createElement("div", { style: { color: c.text, fontSize: 10.5, fontWeight: 700, marginBottom: 4, whiteSpace: "nowrap" } }, o.fmt ? o.fmt(d.value) : d.value) : null,
+          React.createElement("div", { style: { width: "70%", maxWidth: 24, height: h, borderRadius: "4px 4px 0 0", background: last ? o.tone : llqaAlpha(o.tone, "73") } }),
+        );
+      }),
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 6, paddingTop: 6 } },
+      o.data.map((d, i) =>
+        React.createElement("div", { key: d.key, style: { flex: 1, minWidth: 0, textAlign: "center", fontSize: 10, color: i === n - 1 ? c.textSec : c.textMuted, fontWeight: i === n - 1 ? 700 : 500 } }, d.label),
+      ),
+    ),
   );
+};
+
+// joined (up) and left (down) per month around one line
+const llqaUpDown = (rows, upCol, downCol) => {
+  const max = Math.max(1, ...rows.flatMap((r) => [r.up, r.down]));
+  const H = 56;
+  const n = rows.length;
+  const half = (r, i, up) => {
+    const v = up ? r.up : r.down;
+    const h = v ? Math.max(3, Math.round((v / max) * H)) : 0;
+    const last = i === n - 1;
+    return React.createElement(
+      "div",
+      { key: r.key, title: r.title, style: { flex: 1, minWidth: 0, height: H + 16, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: up ? "flex-end" : "flex-start" } },
+      up && (last || v === max) && v ? React.createElement("div", { style: { color: c.text, fontSize: 10.5, fontWeight: 700, marginBottom: 3 } }, "+" + v) : null,
+      React.createElement("div", { style: { width: "70%", maxWidth: 24, height: h, borderRadius: up ? "4px 4px 0 0" : "0 0 4px 4px", background: up ? (last ? upCol : llqaAlpha(upCol, "73")) : last ? downCol : llqaAlpha(downCol, "73") } }),
+      !up && (last || v === max) && v ? React.createElement("div", { style: { color: c.text, fontSize: 10.5, fontWeight: 700, marginTop: 3 } }, "−" + v) : null,
+    );
+  };
+  return React.createElement(
+    "div",
+    { role: "img", "aria-label": rows.map((r) => r.title).join("; ") },
+    React.createElement("div", { style: { display: "flex", gap: 6, alignItems: "flex-end" } }, rows.map((r, i) => half(r, i, true))),
+    React.createElement("div", { style: { height: 1, background: c.border } }),
+    React.createElement("div", { style: { display: "flex", gap: 6 } }, rows.map((r, i) => half(r, i, false))),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 6, paddingTop: 2 } },
+      rows.map((r, i) => React.createElement("div", { key: r.key, style: { flex: 1, textAlign: "center", fontSize: 10, color: i === n - 1 ? c.textSec : c.textMuted, fontWeight: i === n - 1 ? 700 : 500 } }, r.label)),
+    ),
+  );
+};
+
+// parts of one whole, largest first: one colour, a thin bar each
+const llqaRanked = (rows, tone, total) =>
+  React.createElement(
+    "div",
+    null,
+    rows.map((r) =>
+      React.createElement(
+        "div",
+        { key: r.label, title: r.label + ": " + r.value + (total ? " (" + Math.round((r.value / total) * 100) + "%)" : ""), style: { marginBottom: 11 } },
+        React.createElement(
+          "div",
+          { style: { display: "flex", justifyContent: "space-between", gap: 8, fontSize: 11.5, marginBottom: 5 } },
+          React.createElement("span", { style: { color: c.text, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, r.label),
+          React.createElement(
+            "span",
+            { style: { color: c.textSec, fontWeight: 700, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" } },
+            r.value,
+            total ? React.createElement("span", { style: { color: c.textMuted, fontWeight: 500 } }, "  ·  " + Math.round((r.value / total) * 100) + "%") : null,
+          ),
+        ),
+        React.createElement(
+          "div",
+          { style: { height: 8, borderRadius: 4, background: llqaAlpha(tone, "1f"), overflow: "hidden" } },
+          React.createElement("div", { style: { width: Math.max(2, (r.value / Math.max(1, rows[0].value)) * 100) + "%", height: "100%", borderRadius: 4, background: tone } }),
+        ),
+      ),
+    ),
+  );
+
+// a list row: icon in its colour, what happened, detail, when / link
+const llqaFeedRow = (key, icon, tone, title, detail, right, go, last) =>
+  React.createElement(
+    "div",
+    {
+      key,
+      onClick: go,
+      role: go ? "button" : undefined,
+      tabIndex: go ? 0 : undefined,
+      onKeyDown: (e) => { if (go && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); go(); } },
+      style: { display: "flex", gap: 10, alignItems: "flex-start", padding: "9px 0", borderBottom: last ? "none" : "1px solid " + c.border, cursor: go ? "pointer" : "default" },
+    },
+    React.createElement("div", { style: { width: 30, height: 30, borderRadius: 8, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, background: llqaAlpha(tone, "22"), boxShadow: "inset 0 0 0 1px " + llqaAlpha(tone, "33") } }, icon),
+    React.createElement(
+      "div",
+      { style: { flex: 1, minWidth: 0 } },
+      React.createElement("div", { style: { color: c.text, fontSize: 11.5, fontWeight: 600, lineHeight: 1.35 } }, title),
+      detail ? React.createElement("div", { style: { color: c.textSec, fontSize: 10.5, marginTop: 2, lineHeight: 1.4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, detail) : null,
+    ),
+    right ? React.createElement("div", { style: { color: go ? c.accent : c.textMuted, fontSize: 10.5, fontWeight: go ? 700 : 500, whiteSpace: "nowrap", flexShrink: 0, paddingTop: 1 } }, right) : null,
+  );
+
+const LLQADashBody = () => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user) return null;
+  const go = (page, tab) => () => llqaGo(page, tab);
+  const can = llqaCanOpen;
+  const today = todayPK();
+  const students = (ctx.students || []).filter(Boolean);
+  const teachers = (ctx.teachers || []).filter(Boolean);
+  const activeT = teachers.filter((t) => t.status === "active" || t.status === "new");
+  const activeS = students.filter((s) => s.status === "active");
+  const live = students.filter((s) => s.status !== "quit");
+  const onLeave = students.filter((s) => s.status === "leave").length;
+  const money = can("ar") || can("sales") || can("finance");
+
+  /* ---- figures ---- */
+  const tiles = [];
+  if (can("students")) {
+    const byC = {};
+    activeS.forEach((s) => { const k = s.country || "Other"; byC[k] = (byC[k] || 0) + 1; });
+    const top = Object.entries(byC).sort((a, b) => b[1] - a[1]);
+    tiles.push({
+      key: "stu", icon: BookOpen, tone: c.success, label: "Active students", value: activeS.length,
+      sub: activeS.length ? top.slice(0, 3).map(([k, v]) => k + " " + v).join(" · ") + (top.length > 3 ? " · +" + (top.length - 3) + " more" : "") + (onLeave ? " · " + onLeave + " on leave" : "") : "no active students yet",
+      go: go("students"),
+    });
+  }
+  if (can("teachers")) {
+    const m = activeT.filter((t) => t.gender === "Male").length;
+    const ib = activeT.filter((t) => t.location === "IBA").length;
+    tiles.push({ key: "tch", icon: Users, tone: c.accent, label: "Teachers", value: activeT.length, sub: activeT.length ? m + " male · " + (activeT.length - m) + " female · " + ib + " at IBA" : "no active teachers yet", go: go("teachers") });
+  }
+  if (can("timetable")) {
+    let free = 0, total = 0;
+    activeT.forEach((t) => { const r = computeFree(t); free += r.free; total += r.total; });
+    tiles.push({ key: "free", icon: Clock, tone: c.warn, label: "Free slots", value: free.toLocaleString("en-US"), sub: total ? Math.round(((total - free) / total) * 100) + "% of " + total.toLocaleString("en-US") + " weekly slots booked" : "no timetable yet", go: go("timetable") });
+  }
+  let rev = null;
+  if (money) {
+    rev = llqaRevenue(6);
+    const now = rev.months[rev.months.length - 1];
+    const parts = Object.entries(now.collected).filter(([, v]) => v).sort((a, b) => b[1] - a[1]);
+    const nPays = (ctx.arPayments || []).filter((p) => p && p.type !== "reward" && String(p.paidDate || "").slice(0, 7) === rev.cur).length;
+    tiles.push({
+      key: "fees", icon: DollarSign, tone: c.success, small: parts.length > 0,
+      label: "Fees received · " + llqaShortMonth(rev.cur),
+      value: parts.length ? llqaNum(parts[0][1]) + " " + parts[0][0] : "—",
+      sub: parts.length ? (parts.length > 1 ? "+ " + parts.slice(1).map(([k, v]) => llqaNum(v) + " " + k).join(" · ") + " · " : "") + nPays + " payment" + (nPays === 1 ? "" : "s") : "nothing recorded this month yet",
+      go: go(can("ar") ? "ar" : "sales", can("ar") ? undefined : "fees"),
+    });
+  }
+  if (can("payroll")) {
+    const sal = activeT.reduce((a, t) => a + (Number(t.salary) || 0), 0);
+    const withSal = activeT.filter((t) => Number(t.salary) > 0).length;
+    tiles.push({ key: "pay", icon: CreditCard, tone: c.cyan, label: "Monthly salaries", small: sal >= 1e6, value: sal ? "Rs " + sal.toLocaleString("en-US") : "—", sub: sal ? withSal + " teacher" + (withSal === 1 ? "" : "s") + " · before bonuses & fines" : "no salaries entered yet", go: go("payroll") });
+  }
+  if (can("attendance")) {
+    const hist = ctx.attendanceHistory || {};
+    let present = 0, late = 0, away = 0, marked = 0;
+    activeT.forEach((t) => {
+      const r = (Array.isArray(hist[t.id]) ? hist[t.id] : []).find((h) => h && h.date === today);
+      if (!r) return;
+      marked++;
+      if (r.status === "Present" || r.status === "Half Day") present++;
+      else if (r.status === "Late") late++;
+      else if (r.status === "On Leave" || r.status === "Absent") away++;
+    });
+    tiles.push({
+      key: "att", icon: Check, tone: c.purple, label: "Teachers in today", value: present + late + " / " + activeT.length,
+      sub: activeT.length ? (activeT.length - marked) + " not marked" + (late ? " · " + late + " late" : "") + (away ? " · " + away + " away" : "") : "no teachers yet",
+      go: go("attendance"),
+    });
+  }
+
+  /* ---- fees over 6 months: one chart per currency (amounts in different currencies never share an axis) ---- */
+  let feesPanel = null;
+  if (money && rev) {
+    const curs = {};
+    rev.months.forEach((m) => Object.entries(m.collected).forEach(([k, v]) => { if (v) curs[k] = (curs[k] || 0) + v; }));
+    const order = Object.entries(curs).sort((a, b) => b[1] - a[1]).map(([k]) => k);
+    const shown = order.slice(0, 3);
+    const rest = order.slice(3);
+    const body = !order.length
+      ? llqaEmpty("💳", "No fee payments recorded in the last 6 months. Payments you record in Accounts Receivable or the Fee Cycle show here, month by month.")
+      : React.createElement(
+          "div",
+          null,
+          React.createElement(
+            "div",
+            { style: { display: "grid", gridTemplateColumns: "repeat(" + shown.length + ", minmax(0, 1fr))", gap: 18 } },
+            shown.map((k) =>
+              React.createElement(
+                "div",
+                { key: k, style: { minWidth: 0 } },
+                React.createElement(
+                  "div",
+                  { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 8, gap: 6 } },
+                  React.createElement("span", { style: { color: c.text, fontSize: 12, fontWeight: 800 } }, k),
+                  React.createElement("span", { style: { color: c.textMuted, fontSize: 10 } }, llqaNum(curs[k]) + " in 6 months"),
+                ),
+                llqaColumns({
+                  height: 92,
+                  tone: c.accent,
+                  fmt: (v) => llqaNum(v),
+                  aria: "Fees received in " + k + " per month",
+                  data: rev.months.map((m) => ({ key: m.ym, label: llqaShortMonth(m.ym), value: m.collected[k] || 0, title: llqaShortMonth(m.ym) + " " + m.ym.slice(0, 4) + ": " + llqaNum(m.collected[k] || 0) + " " + k })),
+                }),
+              ),
+            ),
+          ),
+          rest.length ? React.createElement("div", { style: { color: c.textMuted, fontSize: 10.5, marginTop: 10 } }, "Also received: " + rest.map((k) => llqaNum(curs[k]) + " " + k).join(" · ")) : null,
+        );
+    const exp = Object.keys(rev.expected || {}).length ? llqaMoney(rev.expected) : "none yet";
+    feesPanel = llqaPanel("fees", "Fees received", "Last 6 months, by the month paid · monthly fees of paying students: " + exp, body);
+  }
+
+  /* ---- students by course (active) ---- */
+  let coursePanel = null;
+  if (can("students")) {
+    const by = {};
+    activeS.forEach((s) => {
+      const subj = Array.isArray(s.specificSubject) ? s.specificSubject.filter(Boolean).join(", ") : String(s.specificSubject || "").trim();
+      const k = (s.course || "Other") + (s.course === "Subject" && subj ? " · " + subj : "");
+      by[k] = (by[k] || 0) + 1;
+    });
+    const rows = Object.entries(by).map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value);
+    const top = rows.slice(0, 6);
+    if (rows.length > 6) top.push({ label: "Other (" + (rows.length - 6) + ")", value: rows.slice(6).reduce((a, r) => a + r.value, 0) });
+    coursePanel = llqaPanel("course", "Students by course", activeS.length + " active students", rows.length ? llqaRanked(top, c.success, activeS.length) : llqaEmpty("📚", "No active students yet."));
+  }
+
+  /* ---- joined and left, 6 months ---- */
+  let flowPanel = null;
+  if (can("students") || can("sales")) {
+    const r6 = rev || llqaRevenue(6);
+    const rows = r6.months.map((m) => ({ key: m.ym, label: llqaShortMonth(m.ym), up: m.newPaid, down: m.quits, title: llqaShortMonth(m.ym) + ": " + m.newPaid + " joined (paying) · " + m.quits + " left" }));
+    const joined = rows.reduce((a, r) => a + r.up, 0), left = rows.reduce((a, r) => a + r.down, 0);
+    flowPanel = llqaPanel(
+      "flow",
+      "Students joined and left",
+      "Last 6 months · joined = started paying · " + (joined - left >= 0 ? "+" : "−") + Math.abs(joined - left) + " overall",
+      joined + left ? llqaUpDown(rows, c.accent, c.danger) : llqaEmpty("📈", "No students joined or left in the last 6 months."),
+      llqaLegend([["Joined", c.accent], ["Left", c.danger]]),
+    );
+  }
+
+  /* ---- the teaching team ---- */
+  let teamPanel = null;
+  if (can("teachers")) {
+    const parts = [
+      ["Male · IBA", activeT.filter((t) => t.gender === "Male" && t.location === "IBA").length, c.accentFill],
+      ["Male · WFH", activeT.filter((t) => t.gender === "Male" && t.location === "WFH").length, llqaAlpha(c.accentFill, "8c")],
+      ["Female · IBA", activeT.filter((t) => t.gender === "Female" && t.location === "IBA").length, c.purpleFill],
+      ["Female · WFH", activeT.filter((t) => t.gender === "Female" && t.location === "WFH").length, llqaAlpha(c.purpleFill, "8c")],
+    ];
+    const other = activeT.length - parts.reduce((a, p) => a + p[1], 0);
+    if (other > 0) parts.push(["Other", other, c.textMuted]);
+    const n = activeT.length;
+    teamPanel = llqaPanel(
+      "team",
+      "Teaching team",
+      n + " active teacher" + (n === 1 ? "" : "s"),
+      n
+        ? React.createElement(
+            "div",
+            null,
+            React.createElement(
+              "div",
+              { role: "img", "aria-label": parts.map((p) => p[0] + " " + p[1]).join(", "), style: { display: "flex", gap: 2, height: 12, marginBottom: 14 } },
+              parts.filter((p) => p[1] > 0).map((p) => React.createElement("div", { key: p[0], title: p[0] + ": " + p[1], style: { flex: p[1], background: p[2], borderRadius: 6 } })),
+            ),
+            parts.map((p, i) =>
+              React.createElement(
+                "div",
+                { key: p[0], style: { display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: i < parts.length - 1 ? "1px solid " + c.border : "none" } },
+                React.createElement("span", { style: { width: 10, height: 10, borderRadius: 3, background: p[2], flexShrink: 0 } }),
+                React.createElement("span", { style: { flex: 1, color: c.text, fontSize: 11.5, fontWeight: 600 } }, p[0]),
+                React.createElement("span", { style: { color: c.textSec, fontSize: 11.5, fontWeight: 700, fontVariantNumeric: "tabular-nums" } }, p[1]),
+                React.createElement("span", { style: { color: c.textMuted, fontSize: 10.5, width: 38, textAlign: "right", fontVariantNumeric: "tabular-nums" } }, Math.round((p[1] / n) * 100) + "%"),
+              ),
+            ),
+          )
+        : llqaEmpty("🧑‍🏫", "No active teachers yet."),
+    );
+  }
+
+  /* ---- needs attention: the actual families, teachers and requests ---- */
+  const todo = [];
+  if (can("sales")) {
+    live.forEach((s) => {
+      const cy = llqaFeeCycle(s, ctx.arPayments, today);
+      if (cy && cy.status === "overdue") {
+        const amt = Math.round(cy.owed.reduce((a, m) => a + m.left, 0) * 100) / 100;
+        todo.push({ k: "fee" + s.id, rank: 0, icon: "💰", tone: c.danger, title: (s.name || "Student") + " — fee overdue", detail: llqaNum(amt) + " " + cy.cur + " · " + cy.owed.length + " month" + (cy.owed.length === 1 ? "" : "s") + (s.parent ? " · " + s.parent : ""), go: go("sales", "fees") });
+      }
+    });
+  }
+  if (can("teachers"))
+    (ctx.leaves || []).filter((l) => l && l.status === "pending").forEach((l) =>
+      todo.push({ k: "lv" + l.id, rank: 1, icon: "🏖", tone: c.warn, title: (l.teacherName || "A teacher") + " asked for " + (l.type || "leave"), detail: (l.from === l.to || !l.to ? llqaDateLabel(l.from) : llqaDateLabel(l.from) + " – " + llqaDateLabel(l.to)) + (l.reason ? " · " + l.reason : ""), go: go("teachers", "leave") }),
+    );
+  if (can("sales")) {
+    llqaPendingRequests(ctx.parentRequests).forEach((r) =>
+      todo.push({ k: "rq" + r.id, rank: 2, icon: "📨", tone: c.warn, title: (r.parent || "A parent") + " — " + (r.type === "leave" ? "leave request" : r.type === "time" ? "class time change" : "request"), detail: (r.student || "") + (r.text ? " · " + r.text : ""), go: go("sales", "requests") }),
+    );
+    live.forEach((s) => {
+      const i = llqaTrialInfo(s, { today, arPayments: ctx.arPayments });
+      if (i.active && i.stage === "complete") todo.push({ k: "tr" + s.id, rank: 3, icon: "🧪", tone: c.accent, title: (s.name || "Student") + " finished the trial", detail: i.done + "/" + i.target + " classes · send the fee message", go: go("sales", "pipeline") });
+    });
+    (ctx.leads || []).filter((l) => l && (l.status === "new" || l.status === "contacted") && l.next && l.next <= today).forEach((l) =>
+      todo.push({ k: "ld" + l.id, rank: 4, icon: "🎯", tone: c.accent, title: (l.name || l.parent || "Lead") + " — follow-up due", detail: (l.source ? l.source + " · " : "") + (l.course || "") + (l.next < today ? " · since " + llqaDateLabel(l.next) : ""), go: go("sales", "leads") }),
+    );
+  }
+  todo.sort((a, b) => a.rank - b.rank);
+  const todoShown = todo.slice(0, 6);
+  const todoPanel = llqaPanel(
+    "todo",
+    "Needs attention",
+    todo.length ? todo.length + " item" + (todo.length === 1 ? "" : "s") + " · most urgent first" : "nothing waiting",
+    todo.length
+      ? React.createElement(
+          "div",
+          null,
+          todoShown.map((t, i) => llqaFeedRow(t.k, t.icon, t.tone, t.title, t.detail, "Open →", t.go, i === todoShown.length - 1)),
+          todo.length > todoShown.length ? React.createElement("div", { style: { color: c.textMuted, fontSize: 10.5, paddingTop: 8 } }, "+ " + (todo.length - todoShown.length) + " more in the cards above") : null,
+        )
+      : llqaEmpty("✅", "Nothing needs you right now."),
+  );
+
+  /* ---- recent activity: what really happened, newest first ---- */
+  const ev = [];
+  if (money)
+    (ctx.arPayments || []).forEach((p) => {
+      if (!p || p.type === "reward" || !p.paidDate) return;
+      ev.push({ k: "p" + p.id, date: String(p.paidDate).slice(0, 10), iso: p.at || p.createdAt || null, icon: "💰", tone: c.success, title: "Payment received", detail: (p.studentName || p.parent || "") + " · " + llqaNum(p.amount) + " " + (p.currency || "USD") + (p.gateway ? " · " + p.gateway : "") });
+    });
+  if (can("sales"))
+    (ctx.messageLog || []).forEach((m) => {
+      if (!m || !m.at) return;
+      ev.push({ k: "m" + m.id, date: String(m.at).slice(0, 10), iso: m.at, icon: m.channel === "email" ? "✉️" : "💬", tone: c.cyan, title: "Message sent — " + llqaTplName(m.template || "custom"), detail: (m.name || "") + (m.by ? " · by " + m.by : "") });
+    });
+  if (can("students"))
+    students.forEach((s) => {
+      const d = String(s.addedAt || "").slice(0, 10);
+      if (!d) return;
+      ev.push({ k: "s" + s.id, date: d, iso: String(s.addedAt).length > 10 ? s.addedAt : null, icon: "🎓", tone: c.purple, title: "New student added", detail: (s.name || "") + " · " + (s.course || "") + (llqaInTrial(s) ? " · trial" : "") });
+    });
+  if (can("teachers"))
+    (ctx.leaves || []).forEach((l) => {
+      const at = l && (l.createdAt || (Number(l.id) > 1e12 ? new Date(Number(l.id)).toISOString() : null));
+      if (!at) return;
+      ev.push({ k: "l" + l.id, date: String(at).slice(0, 10), iso: at, icon: "🏖", tone: c.warn, title: "Leave request — " + (l.teacherName || ""), detail: (l.type || "Leave") + " · " + llqaDateLabel(l.from) + (l.to && l.to !== l.from ? " – " + llqaDateLabel(l.to) : "") + " · " + (l.status || "") });
+    });
+  if (can("sales")) {
+    (ctx.parentRequests || []).forEach((r) => {
+      if (!r || !r.createdAt || r.type === "proposal") return;
+      ev.push({ k: "r" + r.id, date: String(r.createdAt).slice(0, 10), iso: r.createdAt, icon: "📨", tone: c.warn, title: "Parent request — " + (r.parent || ""), detail: (r.student || "") + " · " + (r.type || "") + " · " + (r.status || "") });
+    });
+    (ctx.leads || []).forEach((l) => {
+      if (!l || !l.createdAt) return;
+      ev.push({ k: "d" + l.id, date: String(l.createdAt).slice(0, 10), iso: l.createdAt, icon: "🎯", tone: c.accent, title: "New lead — " + (l.name || l.parent || ""), detail: (l.source || "") + (l.course ? " · " + l.course : "") + (l.country ? " · " + l.country : "") });
+    });
+  }
+  const stamp = (e) => (e.iso ? Date.parse(e.iso) : Date.parse(e.date + "T23:59:59Z")) || 0;
+  ev.sort((a, b) => stamp(b) - stamp(a));
+  const evShown = ev.slice(0, 7);
+  const actPanel = llqaPanel(
+    "act",
+    "Recent activity",
+    ev.length ? "Payments, messages, new students, leave and requests" : "",
+    evShown.length
+      ? React.createElement("div", null, evShown.map((e, i) => llqaFeedRow(e.k, e.icon, e.tone, e.title, e.detail, llqaWhen(e, today), null, i === evShown.length - 1)))
+      : llqaEmpty("🕊", "No activity recorded yet."),
+  );
+
+  const grid = (cols, kids, key) => {
+    const list = kids.filter(Boolean);
+    if (!list.length) return null;
+    return React.createElement("div", { key, className: "llqa-dash-grid", style: { display: "grid", gridTemplateColumns: list.length === 1 ? "1fr" : cols, gap: 14, marginBottom: 14 } }, list);
+  };
+  return React.createElement(
+    "div",
+    null,
+    tiles.length
+      ? React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(165px, 1fr))", gap: 12, marginBottom: 16 } }, tiles.map(llqaStatTile))
+      : null,
+    grid("minmax(0, 2fr) minmax(0, 1fr)", [feesPanel, coursePanel], "g1"),
+    grid("minmax(0, 1.4fr) minmax(0, 1fr)", [flowPanel, teamPanel], "g2"),
+    grid("minmax(0, 1fr) minmax(0, 1fr)", [todoPanel, actPanel], "g3"),
+  );
+};
+
+// the most common countries in a list of students: "USA, UK, Canada +2"
+const llqaTopCountries = (list, n) => {
+  const k = n || 3;
+  const by = {};
+  (list || []).forEach((s) => { if (s && s.country) by[s.country] = (by[s.country] || 0) + 1; });
+  const top = Object.entries(by).sort((a, b) => b[1] - a[1]);
+  return top.slice(0, k).map(([name]) => name).join(", ") + (top.length > k ? " +" + (top.length - k) : "") || "—";
 };

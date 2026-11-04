@@ -194,8 +194,8 @@ const NetworkScanScreen = ({ onConnected, onCancel, isWFH, userRole }) => {
                 "div",
                 {
                   style: {
-                    background: c.cyan + "22",
-                    border: "1px solid " + c.cyan + "66",
+                    background: llqaAlpha(c.cyan, "22"),
+                    border: "1px solid " + llqaAlpha(c.cyan, "66"),
                     borderRadius: 8,
                     padding: "8px 12px",
                     marginBottom: 12,
@@ -285,7 +285,7 @@ const NetworkScanScreen = ({ onConnected, onCancel, isWFH, userRole }) => {
                           ? c.accent
                           : accessible
                             ? c.border
-                            : c.danger + "33"),
+                            : llqaAlpha(c.danger, "33")),
                       borderRadius: 8,
                       cursor: phase === "connecting" ? "wait" : "pointer",
                       textAlign: "left",
@@ -463,7 +463,7 @@ const NetworkScanScreen = ({ onConnected, onCancel, isWFH, userRole }) => {
               {
                 style: {
                   background: c.warnBg,
-                  border: "1px solid " + c.warn + "44",
+                  border: "1px solid " + llqaAlpha(c.warn, "44"),
                   borderRadius: 8,
                   padding: "10px 14px",
                   marginBottom: 12,

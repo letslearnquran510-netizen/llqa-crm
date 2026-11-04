@@ -478,7 +478,7 @@ const FinanceMod = () => {
               cursor: "pointer",
               fontSize: 10,
               fontWeight: 500,
-              background: tab === k ? c.accent : "transparent",
+              background: tab === k ? c.accentFill : "transparent",
               color: tab === k ? c.accentText : c.textSec,
             },
           },
@@ -1120,7 +1120,7 @@ const FinanceMod = () => {
                     key: s.id,
                     style: {
                       borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? c.bgDeep + "88" : "transparent",
+                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                     },
                   },
                   React.createElement(
@@ -1422,10 +1422,10 @@ const FinanceMod = () => {
                   border:
                     "1px solid " +
                     (s.status === "overdue"
-                      ? c.danger + "44"
+                      ? llqaAlpha(c.danger, "44")
                       : s.status === "paid"
-                        ? c.success + "44"
-                        : c.warn + "44"),
+                        ? llqaAlpha(c.success, "44")
+                        : llqaAlpha(c.warn, "44")),
                   borderRadius: 10,
                   padding: "12px 14px",
                   cursor: "pointer",
@@ -1622,7 +1622,7 @@ const FinanceMod = () => {
                   key: l,
                   style: {
                     background: c.bgDeep,
-                    border: "1px solid " + col + "44",
+                    border: "1px solid " + llqaAlpha(col, "44"),
                     borderRadius: 8,
                     padding: "10px 12px",
                   },
@@ -1745,7 +1745,7 @@ const FinanceMod = () => {
                       key: s.id,
                       style: {
                         borderBottom: "1px solid " + c.border,
-                        background: i % 2 ? c.bgDeep + "88" : "transparent",
+                        background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                       },
                     },
                     React.createElement(
@@ -2019,7 +2019,7 @@ const FinanceMod = () => {
                     key: e.id,
                     style: {
                       borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? c.bgDeep + "88" : "transparent",
+                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                     },
                   },
                   React.createElement(
@@ -2165,7 +2165,7 @@ const FinanceMod = () => {
                             onClick: () => approveExpense(e.id),
                             style: {
                               background: c.successBg,
-                              border: "1px solid " + c.success + "44",
+                              border: "1px solid " + llqaAlpha(c.success, "44"),
                               borderRadius: 4,
                               cursor: "pointer",
                               padding: "3px 8px",
@@ -2268,7 +2268,7 @@ const FinanceMod = () => {
             {
               style: {
                 background: c.successBg,
-                border: "1px solid " + c.success + "44",
+                border: "1px solid " + llqaAlpha(c.success, "44"),
                 borderRadius: 10,
                 padding: "12px 16px",
                 marginBottom: 14,
@@ -2330,7 +2330,7 @@ const FinanceMod = () => {
               "div",
               {
                 style: {
-                  borderTop: "1px solid " + c.success + "44",
+                  borderTop: "1px solid " + llqaAlpha(c.success, "44"),
                   marginTop: 10,
                   paddingTop: 10,
                   display: "flex",
@@ -2367,7 +2367,7 @@ const FinanceMod = () => {
             {
               style: {
                 background: c.dangerBg,
-                border: "1px solid " + c.danger + "44",
+                border: "1px solid " + llqaAlpha(c.danger, "44"),
                 borderRadius: 10,
                 padding: "12px 16px",
                 marginBottom: 14,
@@ -2427,7 +2427,7 @@ const FinanceMod = () => {
               "div",
               {
                 style: {
-                  borderTop: "1px solid " + c.danger + "44",
+                  borderTop: "1px solid " + llqaAlpha(c.danger, "44"),
                   marginTop: 10,
                   paddingTop: 10,
                   display: "flex",
@@ -2467,10 +2467,8 @@ const FinanceMod = () => {
               style: {
                 background:
                   "linear-gradient(135deg," +
-                  c.accent +
-                  "22," +
-                  c.purple +
-                  "22)",
+                  llqaAlpha(c.accent, "22") + "," +
+                  llqaAlpha(c.purple, "22") + ")",
                 border: "2px solid " + c.accent,
                 borderRadius: 10,
                 padding: "16px 20px",
@@ -3609,10 +3607,8 @@ const FinanceMod = () => {
               style: {
                 background:
                   "linear-gradient(135deg," +
-                  c.accent +
-                  "22," +
-                  c.purple +
-                  "22)",
+                  llqaAlpha(c.accent, "22") + "," +
+                  llqaAlpha(c.purple, "22") + ")",
                 border: "2px solid " + c.accent,
                 borderRadius: 10,
                 padding: 14,

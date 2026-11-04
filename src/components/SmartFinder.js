@@ -258,7 +258,7 @@ const SmartFinder = () => {
               fontSize: 11,
               padding: "4px 14px",
               borderRadius: 10,
-              background: c.accent + "22",
+              background: llqaAlpha(c.accent, "22"),
               color: c.accent,
               fontWeight: 700,
             },
@@ -295,7 +295,7 @@ const SmartFinder = () => {
                 borderRadius: 8,
                 border:
                   fm === m.k ? "1px solid " + m.col : "1px solid transparent",
-                background: fm === m.k ? m.col + "22" : "transparent",
+                background: fm === m.k ? llqaAlpha(m.col, "22") : "transparent",
                 color: fm === m.k ? m.col : c.textSec,
                 cursor: "pointer",
                 fontSize: 11,
@@ -500,7 +500,7 @@ const SmartFinder = () => {
                 onChange: (e) => setFSearch(e.target.value),
                 placeholder: "Type to search...",
                 style: Object.assign({}, selSt, {
-                  borderColor: c.accent + "55",
+                  borderColor: llqaAlpha(c.accent, "55"),
                   cursor: "text",
                 }),
               }),
@@ -695,7 +695,7 @@ const SmartFinder = () => {
                   key: i,
                   style: {
                     borderBottom: "1px solid " + c.border,
-                    background: i % 2 ? c.bgDeep + "88" : "transparent",
+                    background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                   },
                 },
                 React.createElement(
@@ -712,7 +712,7 @@ const SmartFinder = () => {
                         fontSize: 9,
                         padding: "2px 6px",
                         borderRadius: 3,
-                        background: shCol + "22",
+                        background: llqaAlpha(shCol, "22"),
                         color: shCol,
                         fontWeight: 600,
                       },

@@ -237,7 +237,7 @@ const HRMod = ({
               alignItems: "center",
               gap: 8,
               padding: "10px 16px",
-              background: c.accent,
+              background: c.accentFill,
               color: c.accentText,
               border: "none",
               borderRadius: 8,
@@ -391,7 +391,7 @@ const HRMod = ({
                         {
                           style: {
                             padding: "4px 8px",
-                            background: getDecisionColor(i.decision) + "22",
+                            background: llqaAlpha(getDecisionColor(i.decision), "22"),
                             color: getDecisionColor(i.decision),
                             borderRadius: 20,
                             fontSize: 11,
@@ -507,7 +507,7 @@ const HRMod = ({
               padding: "10px 16px",
               background: c.successBg,
               color: c.success,
-              border: "1px solid " + c.success + "44",
+              border: "1px solid " + llqaAlpha(c.success, "44"),
               borderRadius: 8,
               cursor: "pointer",
               fontSize: 13,
@@ -674,7 +674,7 @@ const HRMod = ({
                         {
                           style: {
                             padding: "4px 8px",
-                            background: c.accent + "22",
+                            background: llqaAlpha(c.accent, "22"),
                             color: c.accent,
                             borderRadius: 20,
                             fontSize: 11,
@@ -1361,7 +1361,7 @@ const HRMod = ({
                   padding: "10px 16px",
                   borderRadius: 6,
                   border: "none",
-                  background: c.accent,
+                  background: c.accentFill,
                   color: c.accentText,
                   cursor: "pointer",
                   fontSize: 13,
@@ -1399,7 +1399,7 @@ const HRMod = ({
               width: 40,
               height: 40,
               borderRadius: 10,
-              background: c.accent + "22",
+              background: llqaAlpha(c.accent, "22"),
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
@@ -1454,7 +1454,7 @@ const HRMod = ({
             onClick: () => setTab(t.id),
             style: {
               padding: "8px 16px",
-              background: tab === t.id ? c.accent : "transparent",
+              background: tab === t.id ? c.accentFill : "transparent",
               color: tab === t.id ? c.accentText : c.textSec,
               border:
                 tab === t.id

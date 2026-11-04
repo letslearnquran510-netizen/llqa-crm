@@ -4,7 +4,8 @@ const PayrollMod = ({
   qcViolations,
   appSettings,
 }) => {
-  const teachers = propTeachers || initPayrollTeachers;
+  // v68: salaries typed in forms are text; as numbers the pay and totals add up (was "36000" + 0 = "360000")
+  const teachers = useMemo(() => (propTeachers || initPayrollTeachers).map((t) => ({ ...t, salary: Number(t.salary) || 0 })), [propTeachers]);
   const [payHistory, setPayHistory] = useState(initPayHistory);
   const [tab, setTab] = useState("current");
   const [search, setSearch] = useState("");
@@ -510,7 +511,7 @@ const PayrollMod = ({
               cursor: "pointer",
               fontSize: 11,
               fontWeight: 500,
-              background: tab === k ? c.accent : "transparent",
+              background: tab === k ? c.accentFill : "transparent",
               color: tab === k ? c.accentText : c.textSec,
             },
           },
@@ -692,7 +693,7 @@ const PayrollMod = ({
                   style: {
                     padding: "8px 12px",
                     background: c.accentBg,
-                    border: "1px solid " + c.accent + "44",
+                    border: "1px solid " + llqaAlpha(c.accent, "44"),
                     borderRadius: 7,
                     cursor: "pointer",
                     color: c.accent,
@@ -709,7 +710,7 @@ const PayrollMod = ({
                   style: {
                     padding: "8px 12px",
                     background: c.successBg,
-                    border: "1px solid " + c.success + "44",
+                    border: "1px solid " + llqaAlpha(c.success, "44"),
                     borderRadius: 7,
                     cursor: "pointer",
                     color: c.success,
@@ -829,7 +830,7 @@ const PayrollMod = ({
                     key: t.id,
                     style: {
                       borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? c.bgDeep + "88" : "transparent",
+                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                     },
                   },
                   React.createElement(
@@ -1206,7 +1207,7 @@ const PayrollMod = ({
                       key: i,
                       style: {
                         borderBottom: "1px solid " + c.border,
-                        background: i % 2 ? c.bgDeep + "88" : "transparent",
+                        background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                       },
                     },
                     React.createElement(
@@ -1384,7 +1385,7 @@ const PayrollMod = ({
                   key: l,
                   style: {
                     background: c.bgDeep,
-                    border: "1px solid " + col + "44",
+                    border: "1px solid " + llqaAlpha(col, "44"),
                     borderRadius: 6,
                     padding: "8px 10px",
                   },
@@ -1497,7 +1498,7 @@ const PayrollMod = ({
                     key: t.id,
                     style: {
                       borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? c.bgDeep + "88" : "transparent",
+                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                     },
                   },
                   React.createElement(
@@ -1752,7 +1753,7 @@ const PayrollMod = ({
                       key: t.id,
                       style: {
                         borderBottom: "1px solid " + c.border,
-                        background: i % 2 ? c.bgDeep + "88" : "transparent",
+                        background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                       },
                     },
                     React.createElement(
@@ -2267,7 +2268,7 @@ const PayrollMod = ({
                     key: t.id,
                     style: {
                       borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? c.bgDeep + "88" : "transparent",
+                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
                     },
                   },
                   React.createElement(
