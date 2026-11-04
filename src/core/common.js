@@ -3348,7 +3348,19 @@ const LLQABooking = (() => {
       "northern territory": "Australia/Darwin",
     },
   };
+  // v67.2: the same place is asked for thousands of times a screen — remembered
+  const tzMemo = new Map();
   const timezoneFor = (country, state) => {
+    const k = String(country == null ? "" : country) + "|" + String(state == null ? "" : state);
+    let v = tzMemo.get(k);
+    if (v === undefined) {
+      if (tzMemo.size > 5000) tzMemo.clear();
+      v = timezoneForRaw(country, state);
+      tzMemo.set(k, v);
+    }
+    return v;
+  };
+  const timezoneForRaw = (country, state) => {
     const c = norm(country);
     const s = norm(state);
     if (COUNTRY_TZ[c]) return COUNTRY_TZ[c];
@@ -3401,7 +3413,18 @@ const LLQABooking = (() => {
     const pktDay = DAYS[(((DAYS.indexOf(day) + dayShift) % 7) + 7) % 7];
     return { rowDay: day, slot, pktDay, dayShift };
   };
+  const fmt12Memo = new Map();
   const fmt12 = (slot) => {
+    const k = String(slot);
+    let v = fmt12Memo.get(k);
+    if (v === undefined) {
+      if (fmt12Memo.size > 5000) fmt12Memo.clear();
+      v = fmt12Raw(slot);
+      fmt12Memo.set(k, v);
+    }
+    return v;
+  };
+  const fmt12Raw = (slot) => {
     const [h, m] = String(slot).split(":").map(Number);
     const per = h >= 12 ? "PM" : "AM";
     let dh = h % 12;

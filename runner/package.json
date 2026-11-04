@@ -1,0 +1,10 @@
+{
+  "name": "llqa-runner",
+  "version": "1.0.0",
+  "description": "LLQA CRM 24/7 runner: keeps the CRM's automatic work going with nobody signed in, and takes website inquiries in as Leads.",
+  "main": "runner.js",
+  "private": true,
+  "scripts": { "start": "node runner.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "playwright": "1.63.0" }
+}
