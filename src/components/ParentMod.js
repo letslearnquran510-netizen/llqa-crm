@@ -639,7 +639,7 @@ const ParentMod = ({
                   r.attended === "present"
                     ? "\u2713"
                     : r.attended === "late"
-                      ? "\u23F0"
+                      ? llqaLabel("\u23F0")
                       : "\u2715",
                 ),
                 React.createElement(
@@ -903,7 +903,7 @@ const ParentMod = ({
                           marginBottom: 8,
                         },
                       },
-                      "\u2139\uFE0F",
+                      llqaLabel("\u2139\uFE0F"),
                     ),
                     React.createElement(
                       "div",
@@ -992,7 +992,7 @@ const ParentMod = ({
               fontWeight: 600,
             },
           },
-          "\uD83D\uDC41 Admin View \u2014 Viewing as Parent of:",
+          llqaLabel("\uD83D\uDC41 Admin View \u2014 Viewing as Parent of:"),
         ),
         React.createElement(
           "select",
@@ -1284,7 +1284,7 @@ const ParentMod = ({
                         cursor: "pointer",
                       },
                     },
-                    "\u2728 Generate Parent ID",
+                    llqaLabel("\u2728 Generate Parent ID"),
                   )
                 : null,
           ),
@@ -1408,7 +1408,7 @@ const ParentMod = ({
                     letterSpacing: 0.6,
                   },
                 },
-                "\uD83D\uDC68\u200D\uD83D\uDC67 Parent / Guardian",
+                llqaLabel("\uD83D\uDC68\u200D\uD83D\uDC67 Parent / Guardian"),
               ),
             ),
             React.createElement(
@@ -1439,12 +1439,12 @@ const ParentMod = ({
                     ? React.createElement(
                         "span",
                         null,
-                        "\uD83D\uDCDE ",
+                        llqaLabel("\uD83D\uDCDE "),
                         stu.phone,
                       )
                     : null,
                   stu.email
-                    ? React.createElement("span", null, "\u2709 ", stu.email)
+                    ? React.createElement("span", null, llqaLabel("\u2709 "), stu.email)
                     : null,
                 )
               : null,
@@ -1482,7 +1482,7 @@ const ParentMod = ({
                         letterSpacing: 0.6,
                       },
                     },
-                    "\uD83C\uDF93 Teacher",
+                    llqaLabel("\uD83C\uDF93 Teacher"),
                   ),
                 ),
                 React.createElement(
@@ -1506,7 +1506,7 @@ const ParentMod = ({
                           color: c.textSec,
                         },
                       },
-                      "\uD83D\uDD52 Class at ",
+                      llqaLabel("\uD83D\uDD52 Class at "),
                       llqaTimeText(stu.time) || stu.time, // v68: readable
                     )
                   : null,
@@ -1555,7 +1555,7 @@ const ParentMod = ({
                         letterSpacing: 0.6,
                       },
                     },
-                    "\uD83D\uDCD6 Current Progress",
+                    llqaLabel("\uD83D\uDCD6 Current Progress"),
                   ),
                 ),
                 React.createElement(
@@ -1758,7 +1758,7 @@ const ParentMod = ({
         ["invoices", "Invoices"],
         ["notes", "Notes (" + myNotes.length + ")"],
         ["feedback", "Teacher Feedback"],
-        ["requests", "📨 Requests" + (llqaParentAskCount(stu, user) ? " · " + llqaParentAskCount(stu, user) : "")], // v66
+        ["requests", "Requests" + (llqaParentAskCount(stu, user) ? " · " + llqaParentAskCount(stu, user) : "")], // v66 · v69: no emoji, like the other tabs
       ].map(([k, l]) =>
         React.createElement(
           "button",
@@ -1955,7 +1955,7 @@ const ParentMod = ({
                   marginBottom: 14,
                 },
               },
-              "📖 No class progress yet. Daily lesson summaries from your child's teacher will appear here in real-time once recorded.",
+              llqaLabel("📖 No class progress yet. Daily lesson summaries from your child's teacher will appear here in real-time once recorded."),
             ),
       ),
     tab === "progress" &&
@@ -1975,7 +1975,7 @@ const ParentMod = ({
                   color: c.textMuted,
                 },
               },
-              "📚 Your child's teacher has not logged any classes yet. Once they record a class, lesson details (Surah, page, performance) will appear here automatically and refresh in real-time.",
+              llqaLabel("📚 Your child's teacher has not logged any classes yet. Once they record a class, lesson details (Surah, page, performance) will appear here automatically and refresh in real-time."),
             )
           : React.createElement(
               "div",
@@ -2635,7 +2635,7 @@ const ParentMod = ({
                       fontSize: 14,
                     },
                   },
-                  streak > 0 ? "\u{1F525}" : "\u{1F4C5}",
+                  streak > 0 ? llqaLabel("\u{1F525}") : llqaLabel("\u{1F4C5}"),
                 ),
                 React.createElement(
                   "div",
@@ -3163,7 +3163,7 @@ const ParentMod = ({
                       marginBottom: 8,
                     },
                   },
-                  "\u{1F4DA}",
+                  llqaLabel("\u{1F4DA}"),
                 ),
                 React.createElement(
                   "div",
@@ -3341,7 +3341,7 @@ const ParentMod = ({
                         cursor: "pointer",
                       },
                     },
-                    "\uD83D\uDDA8 Print",
+                    llqaLabel("\uD83D\uDDA8 Print"),
                   ),
                 ),
               ),
@@ -3444,7 +3444,7 @@ const ParentMod = ({
                   fontSize: 11,
                 },
               },
-              "💬 No notes yet. Share an observation, question, or concern about your child\u0027s progress and the academy will see it instantly.",
+              llqaLabel("💬 No notes yet. Share an observation, question, or concern about your child\u0027s progress and the academy will see it instantly."),
             )
           : React.createElement(
               "div",

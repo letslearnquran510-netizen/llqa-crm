@@ -1622,7 +1622,7 @@ const TeachMod = ({
               fontWeight: 600,
             },
           },
-          "\uD83D\uDDE3\uFE0F Recent Parent Feedbacks",
+          llqaLabel("\uD83D\uDDE3\uFE0F Recent Parent Feedback"),
         ),
         (teacherFeedback || []).length === 0
           ? React.createElement(

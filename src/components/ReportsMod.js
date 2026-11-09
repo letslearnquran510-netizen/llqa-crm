@@ -898,7 +898,7 @@ const ReportsMod = ({
               }),
           },
         ],
-        "No quits recorded \u2014 great retention! \u{1F389}",
+        "No students have left the academy.",
       ),
     );
   } else {

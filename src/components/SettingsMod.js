@@ -1166,7 +1166,7 @@ const SettingsMod = ({
                   lineHeight: 1.5,
                 },
               },
-              'ℹ Tip: When you remove a team lead, any teachers currently assigned to them will be moved to the "ALL" group automatically. To prevent this, reassign teachers manually first via the Teachers module.',
+              llqaLabel('ℹ Tip: When you remove a team lead, any teachers currently assigned to them will be moved to the "ALL" group automatically. To prevent this, reassign teachers manually first via the Teachers module.'),
             ),
           ),
           React.createElement(
@@ -1717,7 +1717,7 @@ const SettingsMod = ({
                                 marginTop: 4,
                               },
                             },
-                            "\u26A0 No permissions granted",
+                            llqaLabel("\u26A0 No permissions granted"),
                           ),
                     );
                   }),
@@ -3081,7 +3081,7 @@ const SettingsMod = ({
                               color: c.successText,
                             },
                           },
-                          "\uD83D\uDCF7",
+                          llqaLabel("\uD83D\uDCF7"),
                         ),
                       )
                     : React.createElement(
@@ -3205,7 +3205,7 @@ const SettingsMod = ({
                       React.createElement(
                         "div",
                         null,
-                        "\uD83D\uDCE1 ",
+                        llqaLabel("\uD83D\uDCE1 "),
                         React.createElement(
                           "span",
                           {
@@ -3219,7 +3219,7 @@ const SettingsMod = ({
                       React.createElement(
                         "div",
                         null,
-                        "\uD83D\uDD10 ",
+                        llqaLabel("\uD83D\uDD10 "),
                         React.createElement(
                           "span",
                           {
@@ -3233,7 +3233,7 @@ const SettingsMod = ({
                       React.createElement(
                         "div",
                         null,
-                        "\uD83D\uDCBB ",
+                        llqaLabel("\uD83D\uDCBB "),
                         React.createElement(
                           "span",
                           {
@@ -3249,7 +3249,7 @@ const SettingsMod = ({
                       React.createElement(
                         "div",
                         null,
-                        "\uD83C\uDF10 ",
+                        llqaLabel("\uD83C\uDF10 "),
                         React.createElement(
                           "span",
                           {
@@ -3269,7 +3269,7 @@ const SettingsMod = ({
                               gridColumn: "1 / -1",
                             },
                           },
-                          "\uD83D\uDCCD ",
+                          llqaLabel("\uD83D\uDCCD "),
                           React.createElement(
                             "span",
                             {
@@ -3302,7 +3302,7 @@ const SettingsMod = ({
                             gridColumn: "1 / -1",
                           },
                         },
-                        "\uD83C\uDD94 ",
+                        llqaLabel("\uD83C\uDD94 "),
                         React.createElement(
                           "span",
                           {
@@ -3346,7 +3346,7 @@ const SettingsMod = ({
                               color: c.danger,
                             },
                           },
-                          "\u26A0 ",
+                          llqaLabel("\u26A0 "),
                           l.reason,
                         ),
                     ),
@@ -3740,263 +3740,8 @@ const SettingsMod = ({
         React.createElement(
           React.Fragment,
           null,
-          React.createElement(
-            SettingCard,
-            {
-              title: "Theme Preferences",
-              icon: LayoutDashboard,
-              color: c.purple,
-            },
-            React.createElement(
-              SettingRow,
-              {
-                label: "Color Theme",
-                desc: "Choose your preferred interface theme",
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    gap: 8,
-                  },
-                },
-                [
-                  ["dark", "Dark", "#121215"],
-                  ["light", "Light", "#ffffff"],
-                  [
-                    "auto",
-                    "Auto (System)",
-                    "linear-gradient(135deg,#121215 50%,#ffffff 50%)",
-                  ],
-                ].map(([k, l, bg]) =>
-                  React.createElement(
-                    "button",
-                    {
-                      key: k,
-                      onClick: () => {
-                        update("theme", k);
-                        if (setTheme && k !== "auto") setTheme(k);
-                      },
-                      style: {
-                        background:
-                          settings.theme === k ? c.accentBg : c.bgDeep,
-                        border:
-                          "2px solid " +
-                          (settings.theme === k ? c.accent : c.border),
-                        borderRadius: 8,
-                        cursor: "pointer",
-                        padding: "8px 14px",
-                        color: settings.theme === k ? c.accent : c.text,
-                        fontSize: 11,
-                        fontWeight: 600,
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 8,
-                      },
-                    },
-                    // v68: a swatch of the theme; Auto says which one the computer uses now
-                    React.createElement("span", { style: { width: 16, height: 16, borderRadius: 5, background: bg, boxShadow: "inset 0 0 0 1px rgba(127,127,127,0.45)", flexShrink: 0 } }),
-                    k === "auto" ? l + " · " + (llqaSysDark() ? "Dark now" : "Light now") : l,
-                  ),
-                ),
-              ),
-            ),
-            React.createElement(
-              SettingRow,
-              {
-                label: "Accent Color",
-                desc: "Primary color across the interface · Pick from presets or use the color wheel for any custom color",
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    gap: 6,
-                    flexWrap: "wrap",
-                    alignItems: "center",
-                    justifyContent: "flex-end",
-                    maxWidth: 340,
-                  },
-                },
-                [
-                  "#4a7aff",
-                  "#3b82f6",
-                  "#06b6d4",
-                  "#0ea5e9",
-                  "#10b981",
-                  "#22c55e",
-                  "#84cc16",
-                  "#eab308",
-                  "#f59e0b",
-                  "#f97316",
-                  "#ef4444",
-                  "#e11d48",
-                  "#ec4899",
-                  "#d946ef",
-                  "#a855f7",
-                  "#8b5cf6",
-                ].map((col) =>
-                  React.createElement("button", {
-                    key: col,
-                    onClick: () => update("accentColor", col),
-                    title: col,
-                    style: {
-                      width: 24,
-                      height: 24,
-                      borderRadius: 5,
-                      background: col,
-                      border:
-                        settings.accentColor === col
-                          ? "2px solid " + c.bg // v68: a gap ring that shows in both themes
-                          : "2px solid transparent",
-                      cursor: "pointer",
-                      boxShadow:
-                        settings.accentColor === col
-                          ? "0 0 0 2px " + col
-                          : "none",
-                      padding: 0,
-                      flexShrink: 0,
-                    },
-                  }),
-                ),
-                React.createElement(
-                  "label",
-                  {
-                    title: "Pick any custom color",
-                    style: {
-                      position: "relative",
-                      width: 24,
-                      height: 24,
-                      borderRadius: 5,
-                      cursor: "pointer",
-                      border: "2px dashed " + c.textSec,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      background:
-                        "conic-gradient(from 180deg,#ef4444,#f59e0b,#10b981,#06b6d4,#3b82f6,#8b5cf6,#ec4899,#ef4444)",
-                      overflow: "hidden",
-                      flexShrink: 0,
-                    },
-                  },
-                  React.createElement("input", {
-                    type: "color",
-                    value: settings.accentColor || "#4a7aff",
-                    onChange: (e) => update("accentColor", e.target.value),
-                    style: {
-                      position: "absolute",
-                      inset: 0,
-                      width: "100%",
-                      height: "100%",
-                      opacity: 0,
-                      cursor: "pointer",
-                      border: "none",
-                    },
-                  }),
-                ),
-                React.createElement("input", {
-                  type: "text",
-                  key: "hex-" + (settings.accentColor || "#4a7aff"), // v68
-                  defaultValue: settings.accentColor || "#4a7aff",
-                  onChange: (e) => {
-                    const v = e.target.value.trim();
-                    if (/^#[0-9a-fA-F]{6}$/.test(v)) update("accentColor", v.toLowerCase());
-                  },
-                  maxLength: 7,
-                  style: {
-                    width: 80,
-                    padding: "4px 6px",
-                    background: c.bgInput,
-                    border: "1px solid " + c.border,
-                    borderRadius: 4,
-                    color: c.text,
-                    fontSize: 11,
-                    fontFamily: "monospace",
-                    textAlign: "center",
-                  },
-                }),
-              ),
-            ),
-            React.createElement(
-              SettingRow,
-              {
-                label: "Color Tone Mode",
-                desc: "How richly the CRM uses color · Full uses all 6 tones, Compact unifies decorative tones into your accent, Minimal reduces decorative tones to neutral gray (success/danger always preserved)",
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    gap: 8,
-                    flexWrap: "wrap",
-                  },
-                },
-                [
-                  ["full", "Full Color", "All 6 tones · vibrant"],
-                  ["compact", "Compact", "Accent + semantic only"],
-                  ["minimal", "Minimal", "Neutral + semantic only"],
-                ].map(([k, l, d]) =>
-                  React.createElement(
-                    "button",
-                    {
-                      key: k,
-                      onClick: () => update("toneMode", k),
-                      title: d,
-                      style: {
-                        background:
-                          (settings.toneMode || "full") === k
-                            ? c.accentFill
-                            : c.bgDeep,
-                        border:
-                          "2px solid " +
-                          ((settings.toneMode || "full") === k
-                            ? c.accent
-                            : c.border),
-                        borderRadius: 8,
-                        cursor: "pointer",
-                        padding: "8px 14px",
-                        color:
-                          (settings.toneMode || "full") === k
-                            ? c.accentText
-                            : c.text,
-                        fontSize: 11,
-                        fontWeight: 600,
-                        display: "flex",
-                        flexDirection: "column",
-                        alignItems: "flex-start",
-                        gap: 2,
-                        minWidth: 120,
-                      },
-                    },
-                    React.createElement("span", null, l),
-                    React.createElement(
-                      "span",
-                      {
-                        style: {
-                          fontSize: 9,
-                          fontWeight: 400,
-                          opacity: 1, // v68 (was 0.75)
-                        },
-                      },
-                      d,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            // v68: what the choices look like (every colour here is checked for readability)
-            React.createElement(
-              SettingRow,
-              {
-                label: "Preview",
-                desc: "Buttons, tags and links with your theme, accent and tone · all colours are tuned to stay readable",
-              },
-              React.createElement(LLQAThemePreview, null),
-            ),
-          ),
+          // v69: mode, curated accent palette, background, sidebar, color intensity, live preview
+          React.createElement(LLQAAppearance, { settings, update, setTheme }),
           React.createElement(
             SettingCard,
             {
@@ -5983,7 +5728,7 @@ const SettingsMod = ({
                 fontSize: 10,
               },
             },
-            "ℹ This team lead will appear in all dropdowns immediately — Add Teacher, Class Shifting, Smart Finder filters.",
+            llqaLabel("ℹ This team lead will appear in all dropdowns immediately — Add Teacher, Class Shifting, Smart Finder filters."),
           ),
           React.createElement(
             "div",
@@ -6173,7 +5918,7 @@ const SettingsMod = ({
                 lineHeight: 1.5,
               },
             },
-            "⚠ Renaming this team lead will NOT auto-update teachers already assigned. To rename safely, add the new name first, reassign teachers, then remove the old.",
+            llqaLabel("⚠ Renaming this team lead will NOT auto-update teachers already assigned. To rename safely, add the new name first, reassign teachers, then remove the old."),
           ),
           React.createElement(
             "div",
@@ -7500,9 +7245,9 @@ const SettingsMod = ({
                 marginBottom: 6,
               },
             },
-            "\u2139\uFE0F Get these from your " +
+            llqaLabel("\u2139\uFE0F Get these from your " +
               ((modal.data && modal.data.name) || "") +
-              " account settings.",
+              " account settings."),
           ),
           React.createElement(
             "div",
@@ -7810,7 +7555,7 @@ const SettingsMod = ({
                 marginBottom: 6,
               },
             },
-            "\u26A1 Rule will run automatically when the trigger condition is met.",
+            llqaLabel("\u26A1 Rule will run automatically when the trigger condition is met."),
           ),
           React.createElement(
             "div",
@@ -7964,8 +7709,8 @@ const SettingsMod = ({
               },
             },
             form.mode === "live"
-              ? "\u26A0 LIVE mode - real money will be processed"
-              : "\u2139\uFE0F TEST mode - no real charges",
+              ? llqaLabel("\u26A0 LIVE mode - real money will be processed")
+              : llqaLabel("\u2139\uFE0F TEST mode - no real charges"),
           ),
           React.createElement(
             "div",

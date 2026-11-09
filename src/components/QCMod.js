@@ -617,7 +617,7 @@ const QCMod = ({ teachers, qcViolations, setQcViolations }) => {
       Table(
         rows,
         logCols(true),
-        "No open cases \u2014 all violations are resolved. \u{1F389}",
+        "No open cases \u2014 all violations are resolved.",
       ),
     );
   } else if (tab === "byteacher") {

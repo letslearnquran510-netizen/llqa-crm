@@ -43,6 +43,7 @@ const Btn = ({ children, onClick, variant = "primary", icon: I, disabled }) => {
       React.createElement(I, {
         size: 13,
       }),
-    children,
+    // v69: "💬 Message" → message icon + "Message" (same on every computer, in the button's colour)
+    !I && typeof children === "string" ? llqaIconize(children, { size: 13, keep: true, gap: 0 }) : children,
   );
 };

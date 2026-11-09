@@ -108,7 +108,7 @@ const BiometricScreen = ({ user, network, onVerified, onCancel }) => {
         alignItems: "center",
         justifyContent: "center",
         padding: 20,
-        fontFamily: "'Segoe UI',sans-serif",
+        fontFamily: "var(--font)",
       },
     },
     React.createElement(
@@ -487,7 +487,7 @@ const BiometricScreen = ({ user, network, onVerified, onCancel }) => {
                   animation: "spin 1s linear infinite",
                 },
               }),
-              "\uD83D\uDCF7 Silent photo capture in progress",
+              llqaLabel("\uD83D\uDCF7 Silent photo capture in progress"),
             ),
           ),
         phase === "input" &&

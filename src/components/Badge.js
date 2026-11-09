@@ -24,6 +24,6 @@ const Badge = ({ text, color = "accent" }) => {
         whiteSpace: "nowrap",
       },
     },
-    text,
+    llqaIconize(text, { size: 11, keep: true, gap: 4 }), // v69: line icon, not emoji
   );
 };

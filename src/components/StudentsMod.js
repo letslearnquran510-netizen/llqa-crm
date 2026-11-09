@@ -2437,7 +2437,7 @@ const StudentsMod = ({
                                   fontWeight: 500,
                                 },
                               },
-                              "\uD83D\uDC65 " + s.family,
+                              llqaLabel("\uD83D\uDC65 " + s.family),
                             )
                           : null,
                       ),

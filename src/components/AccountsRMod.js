@@ -1064,7 +1064,7 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
         ],
         "No defaulters \u2014 everyone with a set fee has paid for " +
           monthLabel +
-          ". \u{1F389}",
+          ".",
       ),
     );
   } else {

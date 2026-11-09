@@ -1589,18 +1589,31 @@ function llqaAlpha(col, a) {
 }
 
 const LLQA_THEME = {
-  // what text sits on in each theme (must match index.html): page, cards, hover rows, raised panels
+  // what text sits on, per theme and background (must match index.html): page, cards, raised panels, hover rows
   surfaces: {
     dark: ["#09090b", "#121215", "#1d1d1f", "#1e1e21", "#15171e"],
     light: ["#f3f5f9", "#fefeff", "#eff3f7", "#f5f6f8"],
+    "dark/neutral": ["#09090b", "#121215", "#1d1d1f", "#1e1e21", "#15171e"],
+    "dark/midnight": ["#070b14", "#0d1320", "#17202f", "#181e2a"],
+    "dark/warm": ["#0c0a09", "#161312", "#201d1c", "#201e1c"],
+    "light/neutral": ["#f3f5f9", "#fefeff", "#eff3f7", "#f5f6f8"],
+    "light/midnight": ["#eaeff7", "#fefeff", "#e4e9f1", "#f6f6f7"],
+    "light/warm": ["#f5f2ec", "#fffefe", "#efebe3", "#f6f6f7"],
   },
-  card: { dark: "#121215", light: "#fefeff" },
-  // text colours (readable on every surface and on their own tint)
+  card: { dark: "#121215", light: "#fefeff", "dark/neutral": "#121215", "dark/midnight": "#0d1320", "dark/warm": "#161312", "light/neutral": "#fefeff", "light/midnight": "#fefeff", "light/warm": "#fffefe" },
+  // text colours (readable on every surface of every background, and on their own tint)
   ink: {
-    dark: { success: "#34d399", warn: "#fbbf24", danger: "#fa7373", purple: "#a98dfc", cyan: "#22d3ee", neutral: "#94a3b8" },
-    light: { success: "#026e4b", warn: "#885501", danger: "#b80f1f", purple: "#713cd5", cyan: "#0e697b", neutral: "#536278" },
+    dark: { success: "#34d399", warn: "#fbbf24", danger: "#fd7676", purple: "#ac90ff", cyan: "#22d3ee", neutral: "#94a3b8" },
+    light: { success: "#026e4b", warn: "#885501", danger: "#b80f1f", purple: "#6a35cf", cyan: "#0e697b", neutral: "#536278" },
   },
   // solid fills and the text that goes on them
+  // v69: the bluish Midnight and stone Warm light backgrounds are a little darker than Neutral, so their status
+  // colours are a touch deeper — worked out with the same rule (readable on every surface, on their own tag tint
+  // and with the corner glow behind them). Backgrounds not listed use the colours above.
+  inkBd: {
+    "light/midnight": { success: "#0e6244", warn: "#794c0b", danger: "#a80a1a", purple: "#662fca", cyan: "#085e6f", neutral: "#49576d" },
+    "light/warm": { success: "#006444", warn: "#7c4d00", danger: "#aa0f1d", purple: "#6731cc", cyan: "#0b6070", neutral: "#4a596f" },
+  },
   fill: {
     success: ["#04835a", "#ffffff"],
     warn: ["#f59e0b", "#0b0d14"],
@@ -1610,11 +1623,14 @@ const LLQA_THEME = {
     neutral: ["#63738a", "#ffffff"],
   },
 };
+const LLQA_BACKDROPS = ["neutral", "midnight", "warm"];
+const llqaBackdrop = (b) => (LLQA_BACKDROPS.includes(b) ? b : "neutral");
 
 // the accent family for one theme: text colour, button colour, the text on buttons, tints
-function llqaAccentSet(accent, mode) {
+function llqaAccentSet(accent, mode, backdrop) {
   const K = llqaColor;
   const dark = mode !== "light";
+  const key = (dark ? "dark" : "light") + "/" + llqaBackdrop(backdrop);
   const W = [255, 255, 255], INK = [11, 13, 20];
   const raw = K.hex(accent) || K.hex("#4a7aff");
   let fill = raw, onFill = "#ffffff";
@@ -1622,9 +1638,16 @@ function llqaAccentSet(accent, mode) {
     if (K.contrast(INK, raw) >= 7) onFill = "#0b0d14"; // light colours (yellow, lime, cyan): dark text
     else fill = K.fit(raw, -1, (x) => K.contrast(W, x) >= 4.8); // mid colours: a little deeper, white text
   }
-  const surf = LLQA_THEME.surfaces[dark ? "dark" : "light"].map(K.hex);
-  const card = K.hex(LLQA_THEME.card[dark ? "dark" : "light"]);
-  const ok = (x) => surf.every((s) => K.contrast(x, s) >= 4.6) && K.contrast(x, K.over(x, dark ? 0.25 : 0.2, card)) >= 4.6;
+  const surf = LLQA_THEME.surfaces[key].map(K.hex);
+  const card = K.hex(LLQA_THEME.card[key]);
+  // v69: also with the page's corner glow (the accent itself) behind the text at its strongest on screen, and on
+  // the accent's own highlight (selected menu item, chosen card) laid over every surface — not just over the card
+  const glow = dark ? 0.085 : 0.052, tintA = dark ? 0.16 : 0.1;
+  const ok = (x) =>
+    surf.every((s) => {
+      const g = K.over(x, glow, s);
+      return K.contrast(x, s) >= 4.6 && K.contrast(x, g) >= 4.6 && K.contrast(x, K.over(x, tintA, g)) >= 4.6;
+    }) && K.contrast(x, K.over(x, dark ? 0.25 : 0.2, card)) >= 4.6;
   const ink = K.fit(raw, dark ? 1 : -1, ok);
   // gradient for main buttons: a touch lighter at the top, text still readable everywhere
   const okText = (x) => K.contrast(onFill === "#ffffff" ? W : INK, x) >= 4.6;
@@ -1648,15 +1671,16 @@ function llqaAccentSet(accent, mode) {
 }
 
 // every colour token for the theme in use; tone mode decides what purple / cyan / amber become.
-// Pure (no page changes) so the app can work it out while drawing and paint it right after.
-function llqaThemeVars(mode, accent, tone) {
+// Pure apart from remembering the theme in use (keep === false: not even that — e.g. the sidebar's own colours).
+function llqaThemeVars(mode, accent, tone, backdrop, keep) {
   const K = llqaColor;
   const dark = mode !== "light";
   const T = LLQA_THEME;
-  const a = llqaAccentSet(accent, mode);
+  const a = llqaAccentSet(accent, mode, backdrop);
   const tint = dark ? 0.16 : 0.1;
+  const inks = T.inkBd[(dark ? "dark" : "light") + "/" + llqaBackdrop(backdrop)] || T.ink[dark ? "dark" : "light"];
   const fam = (name) => {
-    const ink = T.ink[dark ? "dark" : "light"][name];
+    const ink = inks[name];
     return { ink, bg: K.rgba(K.hex(ink), tint), fill: T.fill[name][0], text: T.fill[name][1] };
   };
   const acc = { ink: a.accent, bg: a.accentBg, fill: a.accentFill, text: a.accentText };
@@ -1672,30 +1696,103 @@ function llqaThemeVars(mode, accent, tone) {
     vars[k + "Text"] = v.text;
   });
   vars.glowB = K.rgba(K.hex(pick.purple.ink), dark ? 0.09 : 0.06);
-  LLQA_THEME.used = { mode: dark ? "dark" : "light", accent: a.accentRaw, tone: tm, vars };
+  if (keep !== false) LLQA_THEME.used = { mode: dark ? "dark" : "light", accent: a.accentRaw, tone: tm, backdrop: llqaBackdrop(backdrop), vars };
   return vars;
 }
-function llqaPaintTheme(mode, vars) {
+function llqaPaintTheme(mode, vars, backdrop) {
   const root = document.documentElement;
   const dark = mode !== "light";
   root.setAttribute("data-theme", dark ? "dark" : "light");
+  root.setAttribute("data-backdrop", llqaBackdrop(backdrop));
   root.style.colorScheme = dark ? "dark" : "light";
   Object.entries(vars).forEach(([k, v]) => root.style.setProperty("--" + k, v));
 }
-function llqaApplyTheme(mode, accent, tone) {
-  const vars = llqaThemeVars(mode, accent, tone);
-  llqaPaintTheme(mode, vars);
+function llqaApplyTheme(mode, accent, tone, backdrop) {
+  const vars = llqaThemeVars(mode, accent, tone, backdrop);
+  llqaPaintTheme(mode, vars, backdrop);
   return vars;
 }
+// the same colours as inline CSS variables, for a part of the page with its own theme (the dark sidebar)
+const llqaVarStyle = (vars) => Object.fromEntries(Object.entries(vars || {}).map(([k, v]) => ["--" + k, v]));
 // text for a cell filled with `pct`% of a theme colour: white or near-black, whichever reads better
 function llqaTextOn(tone, pct) {
   const K = llqaColor;
   const u = LLQA_THEME.used || {};
   const mode = u.mode === "light" ? "light" : "dark";
+  const key = mode + "/" + llqaBackdrop(u.backdrop);
   const ink = K.hex((u.vars && u.vars[tone]) || LLQA_THEME.ink[mode][tone] || "#888888") || [136, 136, 136];
-  const mixed = K.over(ink, Math.max(0, Math.min(1, (pct || 0) / 100)), K.hex(LLQA_THEME.card[mode]));
+  const mixed = K.over(ink, Math.max(0, Math.min(1, (pct || 0) / 100)), K.hex(LLQA_THEME.card[key]));
   return K.contrast([255, 255, 255], mixed) >= K.contrast([11, 13, 20], mixed) ? "#ffffff" : "#0b0d14";
 }
+
+// v69: the accent colours offered in Settings — a curated, named set (any other colour still works)
+const LLQA_ACCENTS = [
+  ["#4a7aff", "LLQA Blue"], ["#2563eb", "Royal Blue"], ["#1e3a8a", "Navy"], ["#4f46e5", "Indigo"],
+  ["#7c3aed", "Violet"], ["#86198f", "Plum"], ["#db2777", "Rose"], ["#be123c", "Crimson"],
+  ["#881337", "Burgundy"], ["#c2410c", "Terracotta"], ["#d97706", "Amber"], ["#b7791f", "Gold"],
+  ["#166534", "Forest"], ["#059669", "Emerald"], ["#0f766e", "Teal"], ["#0e7490", "Ocean"],
+  ["#475569", "Slate"], ["#1f2937", "Charcoal"],
+];
+const llqaAccentName = (hex) => {
+  const h = String(hex || "").toLowerCase();
+  const f = LLQA_ACCENTS.find(([x]) => x === h);
+  return f ? f[1] : "Custom";
+};
+
+/* ---------- v69: icons instead of emoji in the app's own navigation and notices ---------- */
+const LLQA_ICON = {};
+const llqaIcon = (name) => LLQA_ICON[name] || (LLQA_ICON[name] = makeIcon(name));
+const LLQA_EMOJI_ICON = {
+  "📋": "clipboard-list", "🔁": "repeat", "🗓": "calendar-days", "📅": "calendar", "🏆": "trophy", "🧩": "puzzle",
+  "🧑‍🏫": "presentation", "🌡": "gauge", "🤖": "bot", "🧪": "flask-conical", "💬": "message-square", "⏳": "hourglass",
+  "💰": "wallet", "📨": "inbox", "🕐": "clock", "🎯": "target", "📈": "trending-up", "↩": "undo-2", "🔔": "bell",
+  "🌙": "moon", "🏖": "tree-palm", "🎉": "party-popper", "🎁": "gift", "✍": "pen-line", "✉": "mail", "💳": "credit-card",
+  "🎓": "graduation-cap", "⚠": "alert-triangle", "✅": "check-circle", "❌": "x-circle", "📞": "phone", "📚": "book-open",
+  "🕊": "check-circle", "✨": "sparkles", "💵": "banknote", "🙌": "sparkles", "📌": "target", "🚀": "sparkles",
+  // v69: the rest of the app's buttons, headings, tags and status lines
+  "ℹ": "info", "👥": "users", "⚙": "settings", "📷": "camera", "💻": "laptop", "🛟": "life-buoy", "📡": "wifi", "📍": "map-pin",
+  "🌐": "globe", "🔒": "lock", "🔐": "shield-check", "🆔": "id-card", "⏸": "pause", "✋": "hand", "⚡": "zap", "📖": "book-open",
+  "🔥": "flame", "⛔": "ban", "☀": "sun", "👤": "user-round", "⭐": "star", "🖥": "monitor", "🆕": "circle-plus", "📣": "megaphone",
+  "🔗": "link", "⬆": "circle-arrow-up", "⏭": "skip-forward", "🏠": "house", "🏢": "building-2", "📱": "smartphone", "⏰": "alarm-clock",
+  "👁": "eye", "👨‍👧": "users", "🕒": "clock", "🖨": "printer", "🗣": "messages-square", "🔍": "search", "◀": "chevron-left", "▶": "chevron-right",
+};
+const LLQA_EMOJI_LEAD = /^((?:\p{Extended_Pictographic}\uFE0F?(?:\u200D\p{Extended_Pictographic}\uFE0F?)*))\s*/u;
+// "🤖 Autopilot · 3" → "Autopilot · 3"
+const llqaStripEmoji = (s) => String(s == null ? "" : s).replace(LLQA_EMOJI_LEAD, "");
+// "🤖 Autopilot" → [bot icon, "Autopilot"]; text without a leading emoji is returned as it was
+// opt: size (px, or "1.1em" to follow the text), color, gap, keep (an emoji with no icon stays as it was)
+const llqaIconize = (s, opt) => {
+  if (typeof s !== "string") return s;
+  const o = opt || {};
+  const m = LLQA_EMOJI_LEAD.exec(s);
+  if (!m) return s;
+  const name = o.icon || LLQA_EMOJI_ICON[m[1].replace(/\uFE0F/g, "")] || o.fallback || null;
+  const rest = s.slice(m[0].length);
+  if (!name) return o.keep ? s : rest;
+  const em = typeof o.size === "string";
+  // keep the space after the icon when there was one (e.g. "🗓 " followed by a name)
+  const gap = !rest && m[0].length === m[1].length ? 0 : o.gap != null ? o.gap : em ? "0.4em" : 6;
+  return [
+    React.createElement(llqaIcon(name), { key: "ico", size: o.size || 13, color: o.color, "aria-hidden": true, "data-icon": name, style: { marginRight: gap, verticalAlign: em ? "-0.15em" : "-2px", flexShrink: 0 } }),
+    rest,
+  ];
+};
+// the same, sized to the text around it (used for labels across the app)
+const LLQA_EM = { size: "1.1em", keep: true };
+const llqaLabel = (s) => llqaIconize(s, LLQA_EM);
+// tab bars: each view has its own icon (the label keeps its words and counts)
+const LLQA_TAB_ICONS = {
+  individual: "user-round", overview: "layout-grid", finder: "search", analytics: "bar-chart-3", today: "clipboard-list",
+  leavecover: "repeat", holidays: "calendar-days", scorecards: "trophy", makeup: "puzzle", teacherday: "presentation", capacity: "gauge",
+  master: "layers", current: "users", autopilot: "bot", pipeline: "flask-conical", contacts: "message-square", waitlist: "hourglass",
+  fees: "wallet", requests: "inbox", references: "user-plus", health: "activity", clock: "clock", leads: "target", revenue: "trending-up", winback: "undo-2",
+};
+const llqaTabContent = (k, label) => {
+  const name = LLQA_TAB_ICONS[k];
+  const text = llqaStripEmoji(label);
+  if (!name) return text;
+  return [React.createElement(llqaIcon(name), { key: "ico", size: 13, style: { marginRight: 6, verticalAlign: "-2px" } }), text];
+};
 
 // "Auto (System)" follows the computer's own light / dark setting, live
 function llqaSysDark() {
@@ -1710,26 +1807,364 @@ function llqaWatchSys(cb) {
   } catch (e) { return () => {}; }
 }
 
-// Settings > Appearance > Preview: the real button, tags and link with the current choices
-const LLQAThemePreview = () =>
+/* ---------- v69: Settings > Appearance ----------
+   Mode, accent (a curated, named palette + any custom colour), background, sidebar,
+   color intensity and a live preview. Every combination is tuned to stay readable. */
+const LLQA_MODE_THUMBS = {
+  dark: { bg: "#09090b", side: "#111113", card: "#1c1c1f", line: "#2a2a2e", text: "#e4e4e7" },
+  light: { bg: "#f3f5f9", side: "#e8edf4", card: "#ffffff", line: "#dfe5ee", text: "#334155" },
+};
+const LLQA_BACKDROP_INFO = {
+  neutral: { label: "Neutral", hint: "Clean grey surfaces", dark: ["#09090b", "#1c1c1f"], light: ["#f3f5f9", "#ffffff"] },
+  midnight: { label: "Midnight", hint: "Deep navy, calm and focused", dark: ["#070b14", "#141c2c"], light: ["#eaeff7", "#ffffff"] },
+  warm: { label: "Warm", hint: "Soft stone, easy on the eyes", dark: ["#0c0a09", "#1f1b19"], light: ["#f5f2ec", "#ffffff"] },
+};
+const LLQA_INTENSITY = [
+  ["full", "Vibrant", "A distinct color for each kind of information"],
+  ["compact", "Balanced", "Your accent for highlights; status colors kept"],
+  ["minimal", "Minimal", "Calm greys; only status colors stand out"],
+];
+
+// a selectable option: a clear frame, a check when chosen, keyboard friendly
+const llqaChoice = (key, on, onPick, kids, extra) =>
   React.createElement(
+    "button",
+    {
+      key,
+      type: "button",
+      onClick: onPick,
+      "aria-pressed": on,
+      style: {
+        position: "relative",
+        textAlign: "left",
+        cursor: "pointer",
+        borderRadius: 12,
+        padding: "10px 12px",
+        background: on ? c.accentBg : c.bgCard,
+        border: "1px solid " + (on ? c.accent : c.border),
+        boxShadow: on ? "0 0 0 3px " + c.accentRing : "none",
+        color: c.text,
+        fontFamily: "inherit",
+        ...(extra || {}),
+      },
+    },
+    on
+      ? React.createElement(
+          "span",
+          { style: { position: "absolute", bottom: 9, right: 9, width: 18, height: 18, borderRadius: 9, background: c.accentFill, display: "flex", alignItems: "center", justifyContent: "center", boxShadow: "0 0 0 2px " + c.bgCard } },
+          React.createElement(Check, { size: 11, color: c.accentText, strokeWidth: 3 }),
+        )
+      : null,
+    kids,
+  );
+
+// a small picture of the CRM in that mode (sidebar, header, cards, a button in your accent)
+const llqaModeThumb = (m) => {
+  const t = LLQA_MODE_THUMBS[m];
+  const box = (x, y, w, h, bg, r) => React.createElement("div", { key: x + "-" + y + "-" + w, style: { position: "absolute", left: x, top: y, width: w, height: h, background: bg, borderRadius: r || 3 } });
+  return React.createElement(
     "div",
-    { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", maxWidth: 440 } },
+    { style: { position: "relative", width: "100%", height: 64, background: t.bg, borderRadius: 8, overflow: "hidden", border: "1px solid " + t.line } },
+    box(0, 0, 26, 64, t.side, 0),
+    box(6, 8, 14, 4, c.accentFill, 2),
+    box(6, 17, 12, 3, t.line, 2),
+    box(6, 24, 12, 3, t.line, 2),
+    box(34, 8, 60, 5, t.text, 2),
+    box(34, 20, 40, 18, t.card, 5),
+    box(80, 20, 40, 18, t.card, 5),
+    box(34, 44, 86, 12, t.card, 4),
+    box(106, 6, 20, 8, c.accentFill, 3),
+  );
+};
+
+const LLQAAppearance = ({ settings, update, setTheme }) => {
+  const s = settings || {};
+  const theme = s.theme || "dark";
+  const used = (LLQA_THEME.used && LLQA_THEME.used.mode) || (theme === "light" ? "light" : "dark");
+  const accent = String(s.accentColor || "#4a7aff").toLowerCase();
+  const tone = s.toneMode || "full";
+  const backdrop = llqaBackdrop(s.backdrop);
+  const side = s.sidebarStyle === "dark" ? "dark" : "match";
+  const label = (t) => React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: c.text, marginTop: 8 } }, t);
+  // readable on a chosen (tinted) card too; keeps clear of the check mark in the corner
+  const hint = (t) => React.createElement("div", { style: { fontSize: 10.5, color: c.textSec, marginTop: 2, lineHeight: 1.4, paddingRight: 22 } }, t);
+  const row = (key, title, desc, control) =>
     React.createElement(
-      "span",
-      { style: { background: c.gradientPrimary, color: c.accentText, border: "1px solid " + c.accentBorder, boxShadow: c.glowPrimary, borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 600 } },
-      "Main button",
+      "div",
+      { key, style: { display: "grid", gridTemplateColumns: "minmax(170px, 230px) minmax(0, 1fr)", gap: 18, padding: "16px 0", borderBottom: "1px solid " + c.border, alignItems: "start" } },
+      React.createElement(
+        "div",
+        null,
+        React.createElement("div", { style: { color: c.text, fontSize: 12.5, fontWeight: 700 } }, title),
+        React.createElement("div", { style: { color: c.textSec, fontSize: 10.5, marginTop: 4, lineHeight: 1.45 } }, desc),
+      ),
+      React.createElement("div", { style: { minWidth: 0 } }, control),
+    );
+  const grid = (min, kids) => React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(" + min + "px, 1fr))", gap: 10 } }, kids);
+  const pickTheme = (k) => {
+    update("theme", k);
+    if (setTheme && k !== "auto") setTheme(k);
+  };
+  return React.createElement(
+    SettingCard,
+    { title: "Theme & Colors", icon: llqaIcon("palette") },
+    row(
+      "mode",
+      "Mode",
+      "Light, Dark, or follow your computer's setting.",
+      grid(
+        150,
+        [["light", "Light", llqaIcon("sun")], ["dark", "Dark", llqaIcon("moon")], ["auto", "System", llqaIcon("monitor")]].map(([k, l, I]) =>
+          llqaChoice(
+            k,
+            theme === k,
+            () => pickTheme(k),
+            [
+              k === "auto"
+                ? React.createElement(
+                    "div",
+                    { key: "t", style: { display: "grid", gridTemplateColumns: "1fr 1fr", borderRadius: 8, overflow: "hidden" } },
+                    React.createElement("div", { key: "l", style: { overflow: "hidden" } }, llqaModeThumb("light")),
+                    React.createElement("div", { key: "d", style: { overflow: "hidden" } }, llqaModeThumb("dark")),
+                  )
+                : React.createElement("div", { key: "t" }, llqaModeThumb(k)),
+              React.createElement(
+                "div",
+                { key: "n", style: { display: "flex", alignItems: "center", gap: 6, marginTop: 8, fontSize: 12, fontWeight: 700, color: c.text } },
+                React.createElement(I, { size: 13, color: c.textSec }),
+                k === "auto" ? "System · " + (llqaSysDark() ? "Dark now" : "Light now") : l,
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+    row(
+      "accent",
+      "Accent color",
+      "Buttons, links, the open page and highlights. Each color is fine-tuned automatically so text stays readable.",
+      React.createElement(
+        "div",
+        null,
+        React.createElement(
+          "div",
+          { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(34px, 34px))", gap: 10, maxWidth: 9 * 34 + 8 * 10 } },
+          LLQA_ACCENTS.map(([h, n]) => {
+            const on = accent === h;
+            const onTxt = llqaColor.contrast([255, 255, 255], llqaColor.hex(h)) >= 3 ? "#ffffff" : "#0b0d14";
+            return React.createElement(
+              "button",
+              {
+                key: h,
+                type: "button",
+                title: n + " · " + h,
+                "aria-label": n,
+                "aria-pressed": on,
+                onClick: () => update("accentColor", h),
+                style: {
+                  width: 34,
+                  height: 34,
+                  borderRadius: 17,
+                  cursor: "pointer",
+                  background: "linear-gradient(145deg, " + llqaColor.toHex(llqaColor.shift(llqaColor.hex(h), 0.06)) + ", " + h + ")",
+                  border: "2px solid " + (on ? c.bg : "transparent"),
+                  boxShadow: on ? "0 0 0 2px " + h + ", 0 6px 14px -6px " + h : "inset 0 0 0 1px rgba(255,255,255,0.12)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  padding: 0,
+                },
+              },
+              on ? React.createElement(Check, { size: 15, color: onTxt, strokeWidth: 3 }) : null,
+            );
+          }),
+        ),
+        React.createElement(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: 10, marginTop: 14, flexWrap: "wrap" } },
+          React.createElement("span", { style: { width: 14, height: 14, borderRadius: 7, background: accent, boxShadow: "inset 0 0 0 1px rgba(127,127,127,0.35)" } }),
+          React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: c.text } }, llqaAccentName(accent)),
+          React.createElement("span", { style: { fontSize: 11, color: c.textMuted, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" } }, accent),
+          React.createElement("span", { style: { flex: 1 } }),
+          React.createElement(
+            "label",
+            {
+              title: "Choose any color",
+              style: { position: "relative", display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 10px", borderRadius: 8, border: "1px solid " + c.border, cursor: "pointer", fontSize: 11, fontWeight: 600, color: c.textSec, background: c.bgCard },
+            },
+            React.createElement("span", { style: { width: 14, height: 14, borderRadius: 7, background: "conic-gradient(from 180deg,#ef4444,#f59e0b,#10b981,#06b6d4,#3b82f6,#8b5cf6,#ec4899,#ef4444)" } }),
+            "Custom",
+            React.createElement("input", {
+              type: "color",
+              value: /^#[0-9a-f]{6}$/i.test(accent) ? accent : "#4a7aff",
+              onChange: (e) => update("accentColor", String(e.target.value).toLowerCase()),
+              style: { position: "absolute", inset: 0, opacity: 0, cursor: "pointer", width: "100%", height: "100%" },
+            }),
+          ),
+          React.createElement("input", {
+            type: "text",
+            key: "hex-" + accent,
+            defaultValue: accent,
+            "aria-label": "Hex color",
+            maxLength: 7,
+            onChange: (e) => {
+              const v = String(e.target.value).trim();
+              if (/^#[0-9a-fA-F]{6}$/.test(v)) update("accentColor", v.toLowerCase());
+            },
+            style: { width: 88, padding: "6px 8px", borderRadius: 8, background: c.bgInput, color: c.text, fontSize: 11.5, fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace", textAlign: "center" },
+          }),
+        ),
+      ),
+    ),
+    row(
+      "backdrop",
+      "Background",
+      "The tone of the page and panels behind your work.",
+      grid(
+        150,
+        LLQA_BACKDROPS.map((k) => {
+          const b = LLQA_BACKDROP_INFO[k];
+          const [bg, card] = b[used];
+          return llqaChoice(k, backdrop === k, () => update("backdrop", k), [
+            React.createElement(
+              "div",
+              { key: "sw", style: { height: 40, borderRadius: 8, background: bg, border: "1px solid " + c.border, position: "relative", overflow: "hidden" } },
+              React.createElement("div", { style: { position: "absolute", left: 10, right: 34, top: 9, bottom: 9, borderRadius: 5, background: card } }),
+              React.createElement("div", { style: { position: "absolute", right: 10, top: 14, width: 16, height: 12, borderRadius: 3, background: c.accentFill } }),
+            ),
+            React.createElement("div", { key: "l" }, label(b.label)),
+            React.createElement("div", { key: "h" }, hint(b.hint)),
+          ]);
+        }),
+      ),
+    ),
+    row(
+      "sidebar",
+      "Sidebar",
+      "Keep the menu in the same mode as the page, or always dark for a strong frame in Light mode.",
+      grid(150, [
+        llqaChoice("match", side === "match", () => update("sidebarStyle", "match"), [
+          React.createElement("div", { key: "l" }, label("Match theme")),
+          React.createElement("div", { key: "h" }, hint("Same colors as the page")),
+        ]),
+        llqaChoice("dark", side === "dark", () => update("sidebarStyle", "dark"), [
+          React.createElement("div", { key: "l" }, label("Always dark")),
+          React.createElement("div", { key: "h" }, hint("A dark menu, also in Light mode")),
+        ]),
+      ]),
+    ),
+    row(
+      "tone",
+      "Color intensity",
+      "How much color the CRM uses. Status colors (paid, due, overdue) always stay.",
+      grid(
+        150,
+        LLQA_INTENSITY.map(([k, l, d]) =>
+          llqaChoice(k, tone === k, () => update("toneMode", k), [
+            React.createElement(
+              "div",
+              { key: "dots", style: { display: "flex", gap: 4 } },
+              (k === "full" ? [c.accent, c.purple, c.cyan, c.warn, c.success] : k === "compact" ? [c.accent, c.accent, c.warn, c.success] : [c.textMuted, c.textMuted, c.success, c.danger]).map((col, i) =>
+                React.createElement("span", { key: i, style: { width: 10, height: 10, borderRadius: 5, background: col } }),
+              ),
+            ),
+            React.createElement("div", { key: "l" }, label(l)),
+            React.createElement("div", { key: "h" }, hint(d)),
+          ]),
+        ),
+      ),
     ),
     React.createElement(
-      "span",
-      { style: { background: c.accentBg, color: c.accent, border: "1px solid " + llqaAlpha(c.accent, "55"), borderRadius: 7, padding: "7px 14px", fontSize: 12, fontWeight: 600 } },
-      "Second",
-    ),
-    React.createElement("span", { style: { color: c.accent, fontSize: 12, fontWeight: 700, textDecoration: "underline", textUnderlineOffset: 3 } }, "Link"),
-    [["success", "paid"], ["warn", "due soon"], ["danger", "overdue"], ["purple", "trial"], ["cyan", "new"]].map(([k, t]) =>
-      React.createElement(Badge, { key: k, text: t, color: k }),
+      "div",
+      { key: "pv", style: { paddingTop: 16 } },
+      React.createElement("div", { style: { color: c.text, fontSize: 12.5, fontWeight: 700, marginBottom: 4 } }, "Preview"),
+      React.createElement("div", { style: { color: c.textSec, fontSize: 10.5, marginBottom: 12 } }, "Your choices on real parts of the CRM. Changes are saved and applied immediately."),
+      React.createElement(LLQAThemePreview, null),
     ),
   );
+};
+
+// a miniature dashboard drawn with the live colors
+const LLQAThemePreview = () => {
+  const tile = (key, label, value, sub, tone, I) =>
+    React.createElement(
+      "div",
+      { key, style: { flex: "1 1 150px", minWidth: 0, background: c.bgCard, border: "1px solid " + c.border, borderRadius: 10, padding: "10px 12px", position: "relative", overflow: "hidden" } },
+      React.createElement("div", { style: { position: "absolute", left: 0, right: 0, top: 0, height: 3, background: "linear-gradient(90deg, " + tone + ", " + llqaAlpha(tone, "00") + " 85%)" } }),
+      React.createElement(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: 8 } },
+        React.createElement("span", { style: { width: 24, height: 24, borderRadius: 7, background: llqaAlpha(tone, "22"), display: "flex", alignItems: "center", justifyContent: "center" } }, React.createElement(I, { size: 13, color: tone })),
+        React.createElement("span", { style: { fontSize: 10.5, color: c.textSec, fontWeight: 600 } }, label),
+      ),
+      React.createElement("div", { style: { fontSize: 19, fontWeight: 800, color: c.text, marginTop: 6 } }, value),
+      React.createElement("div", { style: { fontSize: 10, color: c.textMuted, marginTop: 2 } }, sub),
+    );
+  const bars = [38, 52, 46, 61, 57, 72];
+  return React.createElement(
+    "div",
+    { style: { borderRadius: 14, border: "1px solid " + c.border, background: c.bgDeep, padding: 14 } },
+    React.createElement(
+      "div",
+      { style: { display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" } },
+      React.createElement("div", { style: { fontSize: 13, fontWeight: 800, color: c.text, flex: 1 } }, "Students"),
+      React.createElement(
+        "span",
+        { style: { background: c.accentBg, color: c.accent, border: "1px solid " + llqaAlpha(c.accent, "55"), borderRadius: 8, padding: "6px 12px", fontSize: 11.5, fontWeight: 600 } },
+        "Export",
+      ),
+      React.createElement(
+        "span",
+        { style: { background: c.gradientPrimary, color: c.accentText, border: "1px solid " + c.accentBorder, boxShadow: c.glowPrimary, borderRadius: 8, padding: "6px 12px", fontSize: 11.5, fontWeight: 700 } },
+        "Add student",
+      ),
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      tile("a", "Active students", "128", "USA 84 · UK 26 · Canada 18", c.accent, Users),
+      tile("b", "Fees received", "4,250 USD", "+ 640 GBP · 37 payments", c.success, DollarSign),
+      tile("c", "Fee overdue", "3", "1 final notice", c.danger, AlertTriangle),
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "grid", gridTemplateColumns: "minmax(0, 1.2fr) minmax(0, 1fr)", gap: 10 } },
+      React.createElement(
+        "div",
+        { style: { background: c.bgCard, border: "1px solid " + c.border, borderRadius: 10, padding: "10px 12px" } },
+        [
+          ["Aisha Khan", "Quran", "paid", "success"],
+          ["Omar Siddiqui", "Tajweed", "due soon", "warn"],
+          ["Zainab Ali", "Quran", "trial", "purple"],
+        ].map(([n, course, st, tn], i) =>
+          React.createElement(
+            "div",
+            { key: n, style: { display: "flex", alignItems: "center", gap: 8, padding: "7px 0", borderBottom: i < 2 ? "1px solid " + c.border : "none" } },
+            React.createElement("span", { style: { width: 24, height: 24, borderRadius: 12, background: c.accentFill, color: c.accentText, fontSize: 10, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center" } }, n[0]),
+            React.createElement("span", { style: { flex: 1, fontSize: 11.5, fontWeight: 600, color: c.text } }, n),
+            React.createElement(Badge, { text: course, color: "accent" }),
+            React.createElement(Badge, { text: st, color: tn }),
+          ),
+        ),
+      ),
+      React.createElement(
+        "div",
+        { style: { background: c.bgCard, border: "1px solid " + c.border, borderRadius: 10, padding: "10px 12px", display: "flex", flexDirection: "column" } },
+        React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: c.text, marginBottom: 8 } }, "Fees received"),
+        React.createElement(
+          "div",
+          { style: { flex: 1, display: "flex", alignItems: "flex-end", gap: 6, minHeight: 64, borderBottom: "1px solid " + c.border } },
+          bars.map((v, i) => React.createElement("div", { key: i, style: { flex: 1, height: v + "%", borderRadius: "4px 4px 0 0", background: i === bars.length - 1 ? c.accent : llqaAlpha(c.accent, "73") } })),
+        ),
+        React.createElement(
+          "div",
+          { style: { display: "flex", gap: 6, marginTop: 4 } },
+          ["Jun", "Jul", "Aug", "Sep", "Oct", "Nov"].map((m, i) => React.createElement("span", { key: m, style: { flex: 1, textAlign: "center", fontSize: 9.5, color: i === 5 ? c.textSec : c.textMuted, fontWeight: i === 5 ? 700 : 500 } }, m)),
+        ),
+      ),
+    ),
+  );
+};
 
 const CC = [
   "#4a7aff",
@@ -4765,7 +5200,7 @@ const LLQALogClassModal = ({ info, form, setForm, students, dailyProgress, onClo
       React.createElement(
         "h3",
         { style: { color: c.text, fontSize: 16, margin: "0 0 4px" } },
-        "✍ Log today's class — " + (info.studentName || "?"),
+        llqaLabel("✍ Log today's class — " + (info.studentName || "?")),
       ),
       React.createElement(
         "div",

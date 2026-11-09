@@ -398,7 +398,7 @@ const SubjectsMod = ({
                 fontSize: 18,
               },
             },
-            "\uD83D\uDCCB",
+            llqaLabel("\uD83D\uDCCB"),
           ),
           React.createElement(
             "div",
@@ -1555,7 +1555,7 @@ const SubjectsMod = ({
                                           border: "1px solid " + llqaAlpha(c.cyan, "44"),
                                         },
                                       },
-                                      "\uD83D\uDC65 " + cell.family,
+                                      llqaLabel("\uD83D\uDC65 " + cell.family),
                                     )
                                   : null,
                                 React.createElement(

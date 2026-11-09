@@ -20,7 +20,7 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
           lineHeight: 1.5,
         },
       },
-      kids,
+      llqaLabel(kids), // v69: line icon, not emoji
     );
   // v64.5: editing an existing student shows the classes but doesn't change
   // them here — Class Shifting moves classes and keeps the Timetable right.
@@ -31,7 +31,7 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
       React.createElement(
         "div",
         { style: { color: c.text, fontSize: 13, fontWeight: 700, marginBottom: 8 } },
-        "📅 Classes",
+        llqaLabel("📅 Classes"),
       ),
       React.createElement(LLQAClassList, { s: pf }),
       llqaCanManage()
@@ -48,7 +48,7 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
                 }),
               style: { marginTop: 4, padding: "8px 14px", borderRadius: 8, border: "1px solid " + c.accent, background: c.accentBg, color: c.accent, fontSize: 12, fontWeight: 700, cursor: "pointer" },
             },
-            "📅 Change classes (day, time or teacher)",
+            llqaLabel("📅 Change classes (day, time or teacher)"),
           )
         : null,
       box(
@@ -325,7 +325,7 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
           cursor: "pointer",
         },
       },
-      label,
+      llqaIconize(label, { size: 12, keep: true, gap: 5 }), // v69: line icon, not emoji
     );
   const patternActive = (days) =>
     valid.length === days.length && days.every((d) => valid.some((r) => r.day === d));
@@ -336,7 +336,7 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
     React.createElement(
       "div",
       { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 8 } },
-      React.createElement("h4", { style: { color: c.text, margin: 0, fontSize: 14, fontWeight: 700 } }, "📅 Smart Schedule Builder"),
+      React.createElement("h4", { style: { color: c.text, margin: 0, fontSize: 14, fontWeight: 700 } }, llqaLabel("📅 Smart Schedule Builder")),
       React.createElement(
         "div",
         { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
@@ -471,7 +471,7 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
       ? box(c.bgDeep, c.textSec, "No class time yet — you can still save the student and book later.")
       : pl.problems.length
         ? box(c.dangerBg, c.danger, [
-            React.createElement("div", { key: "h", style: { fontWeight: 700, marginBottom: 4 } }, "⛔ Fix before saving:"),
+            React.createElement("div", { key: "h", style: { fontWeight: 700, marginBottom: 4 } }, llqaLabel("⛔ Fix before saving:")),
             ...pl.problems.map((p, k) => React.createElement("div", { key: k }, "• " + p)),
           ])
         : box(c.successBg, c.success,

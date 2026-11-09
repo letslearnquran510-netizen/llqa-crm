@@ -853,7 +853,7 @@ const TimetableMod = ({
                 color: mode === k ? c.accentText : c.textSec,
               },
             },
-            l,
+            llqaTabContent(k, l), // v69: an icon per view (no emoji)
           ),
         ),
     ),
@@ -903,7 +903,7 @@ const TimetableMod = ({
                     fontSize: 18,
                   },
                 },
-                "\uD83D\uDCCB",
+                llqaLabel("\uD83D\uDCCB"),
               ),
               React.createElement(
                 "div",
@@ -1055,7 +1055,7 @@ const TimetableMod = ({
             React.createElement("input", {
               value: studentSearch,
               onChange: (e) => setStudentSearch(e.target.value),
-              placeholder: "\u{1F50D} Find student...",
+              placeholder: "Find a student\u2026",
               style: {
                 padding: "6px 10px",
                 background: c.bgInput,
@@ -1666,7 +1666,7 @@ const TimetableMod = ({
                                       border: "1px solid " + llqaAlpha(c.cyan, "44"),
                                     },
                                   },
-                                  "\uD83D\uDC65 " + cell.family,
+                                  llqaLabel("\uD83D\uDC65 " + cell.family),
                                 )
                               : null,
                             React.createElement(
@@ -1713,12 +1713,12 @@ const TimetableMod = ({
                               "div",
                               {
                                 style: {
-                                  color: c.textMuted,
+                                  color: c.textSec,
                                   fontSize: 11,
                                   fontWeight: 500,
                                 },
                               },
-                              llqaCellTime(cell.t), // v66
+                              llqaCellTime(cell.t), // v66 · v69: readable on tinted cells
                             ),
                             cell.f &&
                               cell.f.length > 0 &&
@@ -2122,7 +2122,7 @@ const TimetableMod = ({
                               "div",
                               {
                                 style: {
-                                  color: c.purple,
+                                  color: c.textSec, // v69: readable on every stage colour
                                   fontWeight: 600,
                                   fontSize: 7,
                                   overflow: "hidden",

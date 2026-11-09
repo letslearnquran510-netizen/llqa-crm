@@ -34,7 +34,7 @@ const DashMod = ({ teachers, setPage, students }) => {
               fontWeight: 700,
             },
           },
-          "Welcome back, " + llqaFirstName() + " \uD83D\uDC4B", // v68: the person signed in
+          llqaGreeting() + ", " + llqaFirstName(), // v69: good morning / afternoon / evening, the person signed in
         ),
         React.createElement(
           "p",
@@ -51,7 +51,7 @@ const DashMod = ({ teachers, setPage, students }) => {
             day: "numeric",
             year: "numeric",
           }),
-          " \xB7 Here's what's happening at LLQA today",
+          " \xB7 Today's overview of the academy",
         ),
       ),
       React.createElement(
