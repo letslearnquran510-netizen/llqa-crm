@@ -7,7 +7,7 @@ const PayslipModal = ({ t, onClose, selectedMonth, appSettings }) => {
     .join("")
     .substring(0, 2)
     .toUpperCase();
-  const monthName = llqaLocalDay(selectedMonth + "-01").toLocaleDateString( // v70
+  const monthName = new Date(selectedMonth + "-01").toLocaleDateString(
     "en-US",
     { month: "long", year: "numeric" },
   );

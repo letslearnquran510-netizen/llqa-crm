@@ -342,7 +342,7 @@ const SmartFinder = () => {
             "Day",
           ),
           React.createElement(
-            LLQASelect, // v70: the CRM's own list
+            "select",
             {
               value: fDay,
               onChange: (e) => setFDay(e.target.value),
@@ -371,7 +371,7 @@ const SmartFinder = () => {
             "From Time",
           ),
           React.createElement(
-            LLQASelect, // v70: the CRM's own list
+            "select",
             {
               value: fFrom,
               onChange: (e) => setFFrom(e.target.value),
@@ -407,7 +407,7 @@ const SmartFinder = () => {
             "To Time",
           ),
           React.createElement(
-            LLQASelect, // v70: the CRM's own list
+            "select",
             {
               value: fTo,
               onChange: (e) => setFTo(e.target.value),
@@ -443,7 +443,7 @@ const SmartFinder = () => {
             "Location",
           ),
           React.createElement(
-            LLQASelect, // v70: the CRM's own list
+            "select",
             {
               value: fLoc,
               onChange: (e) => setFLoc(e.target.value),
@@ -522,17 +522,15 @@ const SmartFinder = () => {
             style: {
               padding: "5px 14px",
               borderRadius: 8,
-              background: results.length ? c.successBg : c.bgDeep, // v70: nothing found is not shown as a success
-              color: results.length ? c.success : c.textSec,
+              background: c.successBg,
+              color: c.success,
               fontSize: 11,
               fontWeight: 600,
             },
           },
-          !results.length
-            ? (fm === "freeslots" ? "No free slots found" : "No results found")
-            : fm === "freeslots"
-            ? "\u2713 " + results.length + (results.length === 1 ? " free slot found" : " free slots found")
-            : "\u2713 " + results.length + (results.length === 1 ? " result found" : " results found"),
+          fm === "freeslots"
+            ? "\u2713 " + results.length + " free slots found"
+            : "\u2713 " + results.length + " results found",
         ),
         React.createElement(
           "span",
@@ -683,12 +681,6 @@ const SmartFinder = () => {
           React.createElement(
             "tbody",
             null,
-            !results.length && (() => { // v70: an empty result says why
-              const anyTeacher = ["Morning", "Evening", "Night", "Weekend"].some((sh) => llqaShiftTeachers(sh).length);
-              if (!anyTeacher) return llqaEmptyRow("No teachers yet", "Add teachers in HR \u2192 Teachers. Their free times and classes show here.");
-              if (fm === "freeslots") return llqaEmptyRow("No free slots match these filters", "Try another day, time or location.");
-              return fSearch ? llqaEmptyRow("Nothing matches \u201c" + fSearch + "\u201d", "Check the spelling, or search with part of the name.") : llqaEmptyRow("No classes booked yet", "Booked classes show here.");
-            })(),
             results.slice(0, 500).map((r, i) => {
               const shCol = (r.shift || "").includes("Morning")
                 ? c.warn

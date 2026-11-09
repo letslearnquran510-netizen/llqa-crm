@@ -275,7 +275,7 @@ const TeachMod = ({
           },
         },
         at.length,
-        " active \u00B7 ", // v70
+        " active | ",
         teachers.filter(
           (t) => t.status === "resigned" || t.status === "terminated",
         ).length,
@@ -330,7 +330,7 @@ const TeachMod = ({
                 t.location || "",
                 t.teamLead || "",
                 t.status || "",
-                llqaTeacherStudents(t), // v70
+                t.students || 0,
                 (() => {
                   const cf = computeFree(t);
                   return cf.free;
@@ -413,13 +413,12 @@ const TeachMod = ({
       React.createElement(SC, {
         icon: Star,
         label: "Avg Rating",
-        value: !at.some((t) => t.perfRating > 0) ? "\u2014" : ( // v70: nobody rated yet is not "0.0"
+        value: (
           at
             .filter((t) => t.perfRating > 0)
             .reduce((s, t) => s + t.perfRating, 0) /
           (at.filter((t) => t.perfRating > 0).length || 1)
         ).toFixed(1),
-        sub: at.some((t) => t.perfRating > 0) ? at.filter((t) => t.perfRating > 0).length + " of " + at.length + " rated" : "no ratings yet",
         color: c.warn,
       }),
     ),
@@ -556,7 +555,7 @@ const TeachMod = ({
             }),
           ),
           React.createElement(
-            LLQASelect, // v70: the CRM's own list
+            "select",
             {
               value: fs,
               onChange: (e) => setFs(e.target.value),
@@ -667,7 +666,6 @@ const TeachMod = ({
             React.createElement(
               "tbody",
               null,
-              !fd.length && llqaEmptyRow((teachers || []).length ? "No teacher matches this search or filter" : "No teachers yet", (teachers || []).length ? "Clear the search or pick another filter." : "Add your first teacher with \u201cAdd Teacher\u201d."), // v70
               fd.map((t, i) =>
                 React.createElement(
                   "tr",
@@ -753,7 +751,7 @@ const TeachMod = ({
                         fontWeight: 700,
                       },
                     },
-                    llqaTeacherStudents(t), // v70
+                    t.students,
                   ),
                   React.createElement(
                     "td",
@@ -1021,7 +1019,6 @@ const TeachMod = ({
             React.createElement(
               "tbody",
               null,
-              llqaEmptyRow("No leave requests yet", "Leave requests show here with their dates, days and status."), // v70: shows only when the table is empty
               leaves.map((l, i) =>
                 React.createElement(
                   "tr",
@@ -1192,8 +1189,7 @@ const TeachMod = ({
           ),
         ),
       ),
-    st === "perf" && !at.some((t) => t.perfRating > 0 || t.classCompletion > 0 || t.studentSatisfaction > 0) && llqaEmptyState({ key: "perf-none", icon: "star", title: "No performance data yet", text: "No rating, class completion or student satisfaction is recorded for any teacher yet. The ranking and charts show here once they are." }), // v70
-    st === "perf" && at.some((t) => t.perfRating > 0 || t.classCompletion > 0 || t.studentSatisfaction > 0) &&
+    st === "perf" &&
       React.createElement(
         React.Fragment,
         null,
@@ -1452,7 +1448,6 @@ const TeachMod = ({
             React.createElement(
               "tbody",
               null,
-              llqaEmptyRow("No teacher has a performance rating yet", "Ratings are not recorded for any teacher yet."), // v70: shows only when the table is empty
               at
                 .filter((t) => t.perfRating > 0)
                 .sort((a, b) => b.perfRating - a.perfRating)
@@ -1485,7 +1480,7 @@ const TeachMod = ({
                           fontWeight: 700,
                         },
                       },
-                      llqaTeacherStudents(t), // v70
+                      t.students,
                     ),
                     React.createElement(
                       "td",
@@ -1640,7 +1635,7 @@ const TeachMod = ({
                   padding: 20,
                 },
               },
-              "No feedback yet.", // v70
+              "No feedbacks yet.",
             )
           : React.createElement(
               "div",
@@ -2415,7 +2410,7 @@ const TeachMod = ({
               modal.data.name,
             ),
             "?",
-            llqaTeacherStudents(modal.data) > 0 && // v70: removing a teacher warns about their booked students again
+            modal.data.students > 0 &&
               React.createElement(
                 "span",
                 {
@@ -2424,8 +2419,8 @@ const TeachMod = ({
                   },
                 },
                 " ",
-                llqaTeacherStudents(modal.data),
-                llqaTeacherStudents(modal.data) === 1 ? " student needs a new teacher." : " students need a new teacher.",
+                modal.data.students,
+                " students need reassignment.",
               ),
           ),
           React.createElement(

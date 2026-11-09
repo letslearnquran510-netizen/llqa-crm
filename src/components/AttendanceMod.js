@@ -295,25 +295,26 @@ const AttendanceMod = ({
           icon: Download,
           variant: "outline",
           onClick: () => {
-            // v70: the page's own records (the old code read "attendanceData", which never existed, so the button crashed)
-            const headers = ["Date", "Teacher", "Code", "Shift", "Location", "Status", "Time In", "Time Out", "Late (min)", "Fine (Rs)", "Note"];
-            const clean = (v) => (v == null || v === "\u2014" || v === "?" || v === "-" ? "" : v);
-            const rows = teachers
-              .flatMap((t) => (history[t.id] || []).map((h) => ({ t, h })))
-              .sort((x, y) => String(x.h.date || "").localeCompare(String(y.h.date || "")) || String(x.t.name || "").localeCompare(String(y.t.name || "")))
-              .map(({ t, h }) => [
-                h.date || "",
-                t.name || "",
-                t.code || "",
-                t.shift || "",
-                clean(t.location),
-                h.status || "",
-                clean(h.checkIn),
-                clean(h.checkOut),
-                h.lateMin || 0,
-                h.fine || 0,
-                h.regularized ? "Corrected: " + (h.regReason || "") : "",
-              ]);
+            const headers = [
+              "Date",
+              "Teacher",
+              "Code",
+              "Status",
+              "Time In",
+              "Network",
+              "Location",
+              "Verified By",
+            ];
+            const rows = (attendanceData || []).map((a) => [
+              a.date || "",
+              a.teacher || "",
+              a.code || "",
+              a.status || "",
+              a.timeIn || "",
+              a.network || "",
+              a.location || "",
+              a.verifiedBy || "",
+            ]);
             if (rows.length === 0) {
               alert("No attendance data to export.");
               return;
@@ -671,7 +672,7 @@ const AttendanceMod = ({
             }),
           ),
           React.createElement(
-            LLQASelect, // v70: the CRM's own list
+            "select",
             {
               value: fShift,
               onChange: (e) => setFShift(e.target.value),
@@ -883,7 +884,6 @@ const AttendanceMod = ({
             React.createElement(
               "tbody",
               null,
-              !filteredTeachers.length && llqaEmptyRow(teachers.length ? "No teacher matches this search or shift" : "No teachers to mark", teachers.length ? "Clear the search or pick another shift." : "Teachers added in HR \u2192 Teachers show here every day for attendance."), // v70
               filteredTeachers.map((t, i) => {
                 const rec = todayRecords[t.id];
                 return React.createElement(
@@ -1066,7 +1066,7 @@ const AttendanceMod = ({
                       "div",
                       {
                         style: {
-                          fontSize: 9,
+                          fontSize: 8,
                           color: c.textMuted,
                           fontFamily: "monospace",
                         },
@@ -1101,7 +1101,7 @@ const AttendanceMod = ({
                             cursor: "pointer",
                             padding: "3px 6px",
                             color: c.success,
-                            fontSize: 9,
+                            fontSize: 8,
                             fontWeight: 700,
                           },
                         },
@@ -1119,7 +1119,7 @@ const AttendanceMod = ({
                             cursor: "pointer",
                             padding: "3px 6px",
                             color: c.warn,
-                            fontSize: 9,
+                            fontSize: 8,
                             fontWeight: 700,
                           },
                         },
@@ -1137,7 +1137,7 @@ const AttendanceMod = ({
                             cursor: "pointer",
                             padding: "3px 6px",
                             color: c.danger,
-                            fontSize: 9,
+                            fontSize: 8,
                             fontWeight: 700,
                           },
                         },
@@ -1155,7 +1155,7 @@ const AttendanceMod = ({
                             cursor: "pointer",
                             padding: "3px 6px",
                             color: c.accent,
-                            fontSize: 9,
+                            fontSize: 8,
                             fontWeight: 700,
                           },
                         },
@@ -1173,7 +1173,7 @@ const AttendanceMod = ({
                             cursor: "pointer",
                             padding: "3px 6px",
                             color: c.purple,
-                            fontSize: 9,
+                            fontSize: 8,
                             fontWeight: 700,
                           },
                         },
@@ -1192,7 +1192,7 @@ const AttendanceMod = ({
                                 cursor: "pointer",
                                 padding: "3px 6px",
                                 color: c.text,
-                                fontSize: 9,
+                                fontSize: 8,
                                 fontWeight: 700,
                               },
                             },
@@ -1223,7 +1223,7 @@ const AttendanceMod = ({
             },
           },
           React.createElement(
-            LLQASelect, // v70: the CRM's own list
+            "select",
             {
               value: selectedTeacher,
               onChange: (e) => setSelectedTeacher(parseInt(e.target.value)),
@@ -1392,7 +1392,7 @@ const AttendanceMod = ({
                               background: c.bgDeep,
                               borderBottom: "1px solid " + c.border,
                               color: c.textMuted,
-                              fontSize: 9,
+                              fontSize: 8,
                               fontWeight: 600,
                               minWidth: 24,
                             },
@@ -1406,7 +1406,6 @@ const AttendanceMod = ({
                 React.createElement(
                   "tbody",
                   null,
-                  llqaEmptyRow("No teachers yet", "Teachers added in HR \u2192 Teachers show here with a day-by-day calendar."), // v70: shows only when the table is empty
                   teachers.map((t) =>
                     React.createElement(
                       "tr",
@@ -1476,7 +1475,7 @@ const AttendanceMod = ({
                                   ? llqaAlpha(statusColor(status), "22")
                                   : "transparent",
                                 color: rec ? statusColor(status) : c.textMuted,
-                                fontSize: 9,
+                                fontSize: 8,
                                 fontWeight: 700,
                                 cursor: "pointer",
                                 border: "1px solid " + c.border,
@@ -1777,10 +1776,10 @@ const AttendanceMod = ({
                         {
                           style: {
                             color: c.textMuted,
-                            fontSize: 9,
+                            fontSize: 8,
                           },
                         },
-                        llqaLocalDay(rec.date).getDate(), // v70
+                        new Date(rec.date).getDate(),
                       ),
                       React.createElement(
                         "div",
@@ -1809,7 +1808,7 @@ const AttendanceMod = ({
                           {
                             style: {
                               color: c.warn,
-                              fontSize: 9,
+                              fontSize: 7,
                             },
                           },
                           rec.lateMin,
@@ -1901,7 +1900,6 @@ const AttendanceMod = ({
             React.createElement(
               "tbody",
               null,
-              llqaEmptyRow("No teachers yet", "Each teacher\u2019s month (present, late, absent) shows here."), // v70: shows only when the table is empty
               teachers.map((t, i) => {
                 const s = monthlySummary[t.id];
                 return React.createElement(
@@ -2291,7 +2289,6 @@ const AttendanceMod = ({
             React.createElement(
               "tbody",
               null,
-              llqaEmptyRow("No fines this month", "Late arrivals and absences that carry a fine or a deduction show here."), // v70: shows only when the table is empty
               teachers
                 .map((t) => ({
                   t,
@@ -2567,11 +2564,9 @@ const AttendanceMod = ({
                   gap: 6,
                 },
               },
-              llqaEmptyNote("Teachers with no absence or late day this month show here once their days are marked."), // v70
               teachers
                 .filter(
                   (t) =>
-                    monthlySummary[t.id].totalDays > 0 && // v70: no days marked is not perfect attendance
                     monthlySummary[t.id].absent === 0 &&
                     monthlySummary[t.id].late === 0,
                 )
@@ -2661,9 +2656,8 @@ const AttendanceMod = ({
                 gap: 6,
               },
             },
-            llqaEmptyNote("Nobody is below 85% attendance this month (only marked days count)."), // v70
             teachers
-              .filter((t) => monthlySummary[t.id].totalDays > 0 && monthlySummary[t.id].attPct < 85) // v70: no days marked is not 0%
+              .filter((t) => monthlySummary[t.id].attPct < 85)
               .slice(0, 5)
               .map((t) =>
                 React.createElement(
@@ -3214,7 +3208,6 @@ const AttendanceMod = ({
             React.createElement(
               "tbody",
               null,
-              llqaEmptyRow("No attendance records yet", "Every check-in, check-out and change shows here, newest first."), // v70: shows only when the table is empty
               teachers
                 .flatMap((t) =>
                   (history[t.id] || []).slice(-7).map((r) => ({

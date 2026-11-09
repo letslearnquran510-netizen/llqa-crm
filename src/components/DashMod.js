@@ -99,11 +99,11 @@ const DashMod = ({ teachers, setPage, students }) => {
           },
           "Log Progress",
         ),
-        llqaCanOpen("ar") && // v70: payments are recorded (and saved to the cloud) in Accounts Receivable
+        llqaCanOpen("finance") && // v68: only for people who can open record payment
         React.createElement(
           "button",
           {
-            onClick: () => setPage && setPage("ar"),
+            onClick: () => setPage && setPage("finance"),
             style: {
               padding: "8px 14px",
               background: c.purpleBg,
