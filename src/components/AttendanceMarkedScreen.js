@@ -144,7 +144,7 @@ const AttendanceMarkedScreen = ({
                 right: 0,
                 background: "rgba(0,0,0,0.6)",
                 color: "#fff",
-                fontSize: 8,
+                fontSize: 9,
                 padding: "2px",
                 textAlign: "center",
                 fontWeight: 600,

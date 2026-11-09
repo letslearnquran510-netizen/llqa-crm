@@ -996,7 +996,7 @@ const HRMod = ({
                   "Decision",
                 ),
                 React.createElement(
-                  "select",
+                  LLQASelect, // v70: the CRM's own list
                   {
                     value: form.decision || "Pending",
                     onChange: (e) =>
@@ -1112,7 +1112,7 @@ const HRMod = ({
                     "Stage",
                   ),
                   React.createElement(
-                    "select",
+                    LLQASelect, // v70: the CRM's own list
                     {
                       value: form.stage || "Offer Sent",
                       onChange: (e) =>
@@ -1378,7 +1378,7 @@ const HRMod = ({
 
   return React.createElement(
     "div",
-    { style: { padding: 30, maxWidth: 1200, margin: "0 auto" } },
+    { style: { padding: 0 } }, // v70: same width and edges as every other page
     React.createElement(
       "div",
       {

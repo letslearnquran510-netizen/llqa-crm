@@ -257,7 +257,7 @@ const AccountsPMod = ({ apLiabilities, setApLiabilities }) => {
           {
             style: {
               marginLeft: 5,
-              fontSize: 8,
+              fontSize: 9,
               fontWeight: 700,
               color: c.danger,
               background: c.dangerBg,

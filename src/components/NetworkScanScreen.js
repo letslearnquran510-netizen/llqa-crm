@@ -260,7 +260,7 @@ const NetworkScanScreen = ({ onConnected, onCancel, isWFH, userRole }) => {
                   display: "flex",
                   flexDirection: "column",
                   gap: 6,
-                  maxHeight: 340,
+                  maxHeight: 400, // v70: room for every network, none cut in half
                   overflowY: "auto",
                 },
               },

@@ -828,7 +828,7 @@ const LoginScreen = ({
                 "Select Your Profile",
               ),
               React.createElement(
-                "select",
+                LLQASelect, // v70: the CRM's own list
                 {
                   value: teacherId,
                   onChange: (e) => setTeacherId(e.target.value),
