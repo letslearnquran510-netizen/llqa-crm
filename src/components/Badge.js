@@ -13,16 +13,6 @@ const Badge = ({ text, color = "accent" }) => {
     "span",
     {
       style: {
-        // v70: words centred top to bottom, and never stretched by a taller neighbour in a row
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 4,
-        alignSelf: "center",
-        verticalAlign: "middle",
-        boxSizing: "border-box",
-        minHeight: 20,
-        lineHeight: 1.2,
         padding: "3px 10px",
         borderRadius: 20,
         fontSize: 10,
@@ -34,6 +24,6 @@ const Badge = ({ text, color = "accent" }) => {
         whiteSpace: "nowrap",
       },
     },
-    llqaIconize(text, { size: 11, keep: true, gap: 0 }), // v69: line icon, not emoji
+    llqaIconize(text, { size: 11, keep: true, gap: 4 }), // v69: line icon, not emoji
   );
 };

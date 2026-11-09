@@ -1109,7 +1109,6 @@ const StudentsMod = ({
             React.createElement(
               "tbody",
               null,
-              !fd.length && llqaEmptyRow(sts.length ? "No student matches this search or filter" : "No students yet", sts.length ? "Clear the search or pick another filter." : "Students added in Sales (\u201cAdd Student\u201d) show here."), // v70
               fd.map((s, i) =>
                 React.createElement(
                   "tr",
@@ -1541,7 +1540,7 @@ const StudentsMod = ({
                           "span",
                           {
                             style: {
-                              fontSize: 9,
+                              fontSize: 8,
                               padding: "1px 5px",
                               borderRadius: 3,
                               background: llqaAlpha(bc(s.lB), "20"),
@@ -1556,7 +1555,7 @@ const StudentsMod = ({
                           "span",
                           {
                             style: {
-                              fontSize: 9,
+                              fontSize: 8,
                               padding: "1px 5px",
                               borderRadius: 3,
                               background: c.purpleBg,
@@ -1571,7 +1570,7 @@ const StudentsMod = ({
                           "span",
                           {
                             style: {
-                              fontSize: 9,
+                              fontSize: 8,
                               padding: "1px 5px",
                               borderRadius: 3,
                               background:
@@ -1614,7 +1613,7 @@ const StudentsMod = ({
                             {
                               style: {
                                 color: c.textSec,
-                                fontSize: 9,
+                                fontSize: 8,
                               },
                             },
                             "of 30",
@@ -1640,7 +1639,7 @@ const StudentsMod = ({
                             {
                               style: {
                                 color: c.textSec,
-                                fontSize: 9,
+                                fontSize: 8,
                               },
                             },
                             "Pg ",
@@ -1911,7 +1910,6 @@ const StudentsMod = ({
             React.createElement(
               "tbody",
               null,
-              llqaEmptyRow("No active students yet", "Each active student\u2019s classes attended and missed show here."), // v70: shows only when the table is empty
               act
                 .sort((a, b) => a.attendance - b.attendance)
                 .map((s, i) =>
@@ -2044,7 +2042,7 @@ const StudentsMod = ({
                               cursor: "pointer",
                               padding: "3px 6px",
                               color: c.success,
-                              fontSize: 9,
+                              fontSize: 8,
                               fontWeight: 600,
                             },
                           },
@@ -2061,7 +2059,7 @@ const StudentsMod = ({
                               cursor: "pointer",
                               padding: "3px 6px",
                               color: c.danger,
-                              fontSize: 9,
+                              fontSize: 8,
                               fontWeight: 600,
                             },
                           },
@@ -2078,7 +2076,7 @@ const StudentsMod = ({
                               cursor: "pointer",
                               padding: "3px 6px",
                               color: c.warn,
-                              fontSize: 9,
+                              fontSize: 8,
                               fontWeight: 600,
                             },
                           },
@@ -2430,7 +2428,7 @@ const StudentsMod = ({
                               {
                                 style: {
                                   display: "inline-block",
-                                  fontSize: 9,
+                                  fontSize: 8,
                                   padding: "1px 6px",
                                   borderRadius: 8,
                                   background: c.accentBg,

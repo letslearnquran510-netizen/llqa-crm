@@ -43,7 +43,6 @@ const TimetableMod = ({
   const [quickBook, setQuickBook] = useState(null);
   const persistTeacherSchedule = (t) => {
     if (!setAppTeachers || !appTeachers) return;
-    if (!t || !String(t.name || "").trim() || t.name === "\u2014") return; // v70: never save the empty "—" placeholder as a teacher
     if (t._isNew && t._appId) {
       setAppTeachers(
         appTeachers.map((at) =>
@@ -494,8 +493,8 @@ const TimetableMod = ({
           t.department === "Both") &&
         ((t.shift || "").includes(shift) || (!t.shift && shift === "Night")),
     )
-    .map((t, i) => ({
-      sno: baseTeachers.length + i + 1, // v70: every teacher was "#1" / "S/No: 1"
+    .map((t) => ({
+      sno: baseTeachers.length + 1,
       name: t.name,
       code: t.code || "",
       location: t.location || "IBA",
@@ -613,7 +612,7 @@ const TimetableMod = ({
       var _ts = ttStage(cell);
       if (_ts) return _ts.bg;
       if (cell.f && cell.f.length > 0) return c.warnBg;
-      return c.bookedBg; // v70
+      return c.accentBg;
     }
     return "transparent";
   };
@@ -625,7 +624,7 @@ const TimetableMod = ({
       var _tb = ttStage(cell); // v68: the trial stage shows as a solid border (its fill is pale so names stay readable)
       if (_tb) return "1.5px solid " + _tb.bd;
       if (cell.f && cell.f.length > 0) return `1px solid ${c.warn}`;
-      return "1px solid " + llqaAlpha(c.booked, "44"); // v70
+      return `1px solid ${llqaAlpha(c.accent, "44")}`;
     }
     return `1px solid ${c.border}`;
   };
@@ -654,9 +653,9 @@ const TimetableMod = ({
           },
         },
         teachers.length,
-        teachers.length === 1 ? " teacher \u00B7 " : " teachers \u00B7 ", // v70
+        " teachers | ",
         slots.length,
-        shift === "Weekend" ? " slots a day \u00B7 Sat-Sun schedule" : " slots a day \u00B7 Mon-Fri schedule", // v70: the Weekend shift runs Sat\u2013Sun
+        " slots/day | Mon-Fri schedule",
       ),
       React.createElement(
         "div",
@@ -858,8 +857,7 @@ const TimetableMod = ({
           ),
         ),
     ),
-    mode === "individual" && teachers.length === 0 && llqaNoTeachers(shift), // v70
-    mode === "individual" && teachers.length > 0 &&
+    mode === "individual" &&
       React.createElement(
         "div",
         null,
@@ -1124,7 +1122,7 @@ const TimetableMod = ({
           [
             ["Trial \u00B7 new (<3 classes)", c.danger],
             ["Trial passed \u00B7 awaiting payment", c.warn],
-            ["Active \u00B7 paid", c.booked], // v70
+            ["Active \u00B7 paid", c.accent],
           ].map((p, pi) =>
             React.createElement(
               "span",
@@ -1221,9 +1219,9 @@ const TimetableMod = ({
                 },
                 "Code: ",
                 currentTeacher.code,
-                " \u00B7 S/No: ", // v70
+                " | S/No: ",
                 currentTeacher.sno,
-                " \u00B7 Lead: ",
+                " | Lead: ",
                 currentTeacher.lead || "—",
               ),
             ),
@@ -1235,7 +1233,6 @@ const TimetableMod = ({
                 display: "flex",
                 gap: 8,
                 flexWrap: "wrap",
-                alignItems: "center", // v70
               },
             },
             React.createElement(Badge, {
@@ -1247,11 +1244,11 @@ const TimetableMod = ({
               color: "purple",
             }),
             React.createElement(Badge, {
-              text: ((shiftStats.perTeacher[teacherIdx] || {}).booked || 0) + " booked", // v70
+              text: shiftStats.perTeacher[teacherIdx]?.booked + " booked",
               color: "success",
             }),
             React.createElement(Badge, {
-              text: ((shiftStats.perTeacher[teacherIdx] || {}).free || 0) + " free", // v70
+              text: shiftStats.perTeacher[teacherIdx]?.free + " free",
               color: "warn",
             }),
             shift !== "Weekend"
@@ -1261,7 +1258,6 @@ const TimetableMod = ({
                     onClick: () => copyMonToWeekdays(currentTeacher),
                     title: "Copy Monday\u2019s schedule to Tue-Fri",
                     style: {
-                      display: "inline-flex", alignItems: "center", gap: 5, // v70
                       padding: "5px 11px",
                       background: c.cyanBg,
                       border: "1px solid " + llqaAlpha(c.cyan, "66"),
@@ -1272,8 +1268,7 @@ const TimetableMod = ({
                       fontWeight: 600,
                     },
                   },
-                  React.createElement(llqaIcon("copy"), { size: 12, "aria-hidden": true }),
-                  "Copy Mon \u2192 Weekdays", // v70: "Wkdays" written out
+                  "\u29C9 Copy Mon \u2192 Wkdays",
                 )
               : null,
             React.createElement(
@@ -1282,7 +1277,6 @@ const TimetableMod = ({
                 onClick: () => printSchedule(currentTeacher),
                 title: "Print this teacher\u2019s schedule",
                 style: {
-                  display: "inline-flex", alignItems: "center", gap: 5, // v70
                   padding: "5px 11px",
                   background: c.bgDeep,
                   border: "1px solid " + c.border,
@@ -1293,8 +1287,7 @@ const TimetableMod = ({
                   fontWeight: 600,
                 },
               },
-              React.createElement(llqaIcon("printer"), { size: 12, "aria-hidden": true }),
-              "Print",
+              "\u2399 Print",
             ),
           ),
         ),
@@ -1615,7 +1608,7 @@ const TimetableMod = ({
                                   "div",
                                   {
                                     style: {
-                                      color: c.textSec, // v70
+                                      color: c.purple,
                                       fontWeight: 700,
                                       fontSize: 12,
                                       marginBottom: 2,
@@ -1663,7 +1656,7 @@ const TimetableMod = ({
                                   {
                                     style: {
                                       display: "inline-block",
-                                      fontSize: 9,
+                                      fontSize: 8,
                                       padding: "1px 6px",
                                       borderRadius: 8,
                                       background: c.bgCard, // v68: a clear tag on any cell colour
@@ -1791,7 +1784,7 @@ const TimetableMod = ({
             },
           },
           [
-            ["Booked", c.bookedBg, c.booked], // v70
+            ["Booked", c.accentBg, c.accent],
             ["Free", c.successBg, c.success],
             ["Special Note", c.warnBg, c.warn],
             ["No Class", c.bgDeep, c.textMuted],
@@ -2002,7 +1995,6 @@ const TimetableMod = ({
             React.createElement(
               "tbody",
               null,
-              !filteredTeachers.length && llqaEmptyRow(teachers.length ? "No teacher matches this filter" : "No teachers in the " + shift + " shift yet", teachers.length ? "Clear the filter to see every teacher." : "Add a teacher in HR → Teachers and choose the " + shift + " shift."), // v70
               filteredTeachers.map((t, i) =>
                 React.createElement(
                   "tr",
@@ -2043,7 +2035,7 @@ const TimetableMod = ({
                         },
                       },
                       t.code,
-                      " \u00B7 ", // v70
+                      " | ",
                       t.location,
                     ),
                   ),
@@ -2099,7 +2091,7 @@ const TimetableMod = ({
                             background: hasFlag
                               ? c.warnBg
                               : isBooked
-                                ? (ttStage(cell) || {}).bg || c.bookedBg
+                                ? (ttStage(cell) || {}).bg || c.accentBg
                                 : isFree
                                   ? c.successBg
                                   : "transparent",
@@ -2107,13 +2099,13 @@ const TimetableMod = ({
                               ? "1px solid " + c.warn
                               : isBooked
                                 ? "1px solid " +
-                                  ((ttStage(cell) || {}).bd || llqaAlpha(c.booked, "66"))
+                                  ((ttStage(cell) || {}).bd || llqaAlpha(c.accent, "66"))
                                 : isFree
                                   ? "1px solid " + llqaAlpha(c.success, "44")
                                   : "1px solid " + c.border,
                             borderRadius: 4,
                             padding: "4px 4px",
-                            fontSize: 9,
+                            fontSize: 8,
                             minHeight: 28,
                             cursor:
                               isBooked || isFree || !cell
@@ -2132,7 +2124,7 @@ const TimetableMod = ({
                                 style: {
                                   color: c.textSec, // v69: readable on every stage colour
                                   fontWeight: 600,
-                                  fontSize: 9,
+                                  fontSize: 7,
                                   overflow: "hidden",
                                   textOverflow: "ellipsis",
                                   whiteSpace: "nowrap",
@@ -2148,7 +2140,7 @@ const TimetableMod = ({
                               style: {
                                 color: c.text,
                                 fontWeight: 600,
-                                fontSize: 9,
+                                fontSize: 8,
                                 overflow: "hidden",
                                 textOverflow: "ellipsis",
                                 whiteSpace: "nowrap",
@@ -2162,7 +2154,7 @@ const TimetableMod = ({
                             {
                               style: {
                                 color: c.textSec,
-                                fontSize: 9,
+                                fontSize: 7,
                               },
                             },
                             cell.a ? "(" + cell.a + ")" : "",
@@ -2186,7 +2178,7 @@ const TimetableMod = ({
                             {
                               style: {
                                 color: c.textMuted,
-                                fontSize: 9,
+                                fontSize: 8,
                               },
                             },
                             "\u2014",
@@ -2198,7 +2190,7 @@ const TimetableMod = ({
                             {
                               style: {
                                 color: c.textMuted,
-                                fontSize: 9,
+                                fontSize: 7,
                                 opacity: 0.7,
                               },
                             },
@@ -2213,8 +2205,7 @@ const TimetableMod = ({
           ),
         ),
       ),
-    mode === "analytics" && teachers.length === 0 && llqaNoTeachers(shift), // v70
-    mode === "analytics" && teachers.length > 0 &&
+    mode === "analytics" &&
       React.createElement(
         "div",
         {
@@ -2313,7 +2304,7 @@ const TimetableMod = ({
                           : entry.utilization >= 70
                             ? c.warn
                             : entry.utilization >= 40
-                              ? c.booked // v70
+                              ? c.accent
                               : c.success,
                     }),
                   ),
@@ -2746,8 +2737,7 @@ const TimetableMod = ({
               }),
             ),
           ),
-          quickBook.step === 1 && teachers.length === 0 && React.createElement(React.Fragment, null, llqaNoTeachers(shift, true), React.createElement("div", { style: { display: "flex", justifyContent: "flex-end", marginTop: 14 } }, React.createElement(Btn, { variant: "secondary", onClick: () => setQuickBook(null) }, "Close"))), // v70
-          quickBook.step === 1 && teachers.length > 0 &&
+          quickBook.step === 1 &&
             React.createElement(
               React.Fragment,
               null,
@@ -2970,7 +2960,7 @@ const TimetableMod = ({
                         "div",
                         {
                           style: {
-                            fontSize: 9,
+                            fontSize: 8,
                             color: isFree
                               ? c.success
                               : isBooked

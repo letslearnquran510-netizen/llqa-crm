@@ -294,7 +294,7 @@ const PayrollMod = ({
             },
           },
           "Payroll \u2014 ",
-          llqaLocalDay(selectedMonth + "-01").toLocaleDateString("en-US", { // v70
+          new Date(selectedMonth + "-01").toLocaleDateString("en-US", {
             month: "long",
             year: "numeric",
           }),
@@ -570,7 +570,7 @@ const PayrollMod = ({
             }),
           ),
           React.createElement(
-            LLQASelect, // v70: the CRM's own list
+            "select",
             {
               value: fStatus,
               onChange: (e) => setFStatus(e.target.value),
@@ -613,7 +613,7 @@ const PayrollMod = ({
             ),
           ),
           React.createElement(
-            LLQASelect, // v70: the CRM's own list
+            "select",
             {
               value: fShift,
               onChange: (e) => setFShift(e.target.value),
@@ -823,7 +823,6 @@ const PayrollMod = ({
             React.createElement(
               "tbody",
               null,
-              !filtered.length && llqaEmptyRow(teachers.length ? "No teacher matches this search or filter" : "No teachers on the payroll", teachers.length ? "Clear the search or pick another status or shift." : "Teachers added in HR \u2192 Teachers (with a salary) show here each month."), // v70
               filtered.map((t, i) =>
                 React.createElement(
                   "tr",
@@ -1187,7 +1186,6 @@ const PayrollMod = ({
             React.createElement(
               "tbody",
               null,
-              llqaEmptyRow("No salary payments recorded yet", "Salaries marked as paid show here, month by month."), // v70: shows only when the table is empty
               teachers
                 .flatMap((t) =>
                   (payHistory[t.id] || []).map((r) => ({
@@ -1491,7 +1489,6 @@ const PayrollMod = ({
             React.createElement(
               "tbody",
               null,
-              llqaEmptyRow("No teachers yet", "Tenure and performance bonuses for each teacher show here."), // v70: shows only when the table is empty
               teachers.map((t, i) => {
                 const b = calcBonuses(t);
                 const yrs = tenureYears(t.joinDate);
@@ -1740,7 +1737,6 @@ const PayrollMod = ({
             React.createElement(
               "tbody",
               null,
-              llqaEmptyRow("No advances or loans this month", "Advances and loans given to teachers show here with their instalments."), // v70: shows only when the table is empty
               teachers
                 .filter(
                   (t) =>
@@ -2264,7 +2260,6 @@ const PayrollMod = ({
             React.createElement(
               "tbody",
               null,
-              llqaEmptyRow("No teachers yet", "Each teacher\u2019s pay for the year so far shows here."), // v70: shows only when the table is empty
               teachers.map((t, i) => {
                 const y = ytd[t.id];
                 return React.createElement(

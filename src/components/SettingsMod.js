@@ -713,7 +713,7 @@ const SettingsMod = ({
                     animation: "fadeIn .3s",
                   },
                 },
-                React.createElement(savedFlash === "save" ? Check : llqaIcon("undo-2"), { // v70: "RotateCw" does not exist (Reset crashed the page)
+                React.createElement(savedFlash === "save" ? Check : RotateCw, {
                   size: 16,
                   color: savedFlash === "save" ? c.success : c.warn,
                 }),
@@ -1917,9 +1917,9 @@ const SettingsMod = ({
                     {
                       onClick: () => {
                         setForm({
-                          templateName: name, // v70: was "t" (not defined), so Edit did nothing
-                          templateSubject: "",
-                          templateBody: "",
+                          templateName: t.name,
+                          templateSubject: t.subject || "",
+                          templateBody: t.body || "",
                         });
                         setModal({
                           type: "editTemplate",
@@ -2047,7 +2047,7 @@ const SettingsMod = ({
                   {
                     onClick: () => {
                       setForm({
-                        gateway: name, // v70: was "n" (not defined), so Connect / Configure did nothing
+                        gateway: n,
                         apiKey: "",
                         secretKey: "",
                         mode: "test",
@@ -2058,7 +2058,7 @@ const SettingsMod = ({
                             ? "configureGateway"
                             : "connectGateway",
                         data: {
-                          name: name, // v70
+                          name: n,
                           status: st,
                         },
                       });
@@ -2161,14 +2161,14 @@ const SettingsMod = ({
                   {
                     onClick: () => {
                       setForm({
-                        methodName: name, // v70: was "n" (not defined), so Edit did nothing
+                        methodName: n,
                         accountNumber: "",
                         accountTitle: "",
                       });
                       setModal({
                         type: "editLocalPayment",
                         data: {
-                          name: name, // v70
+                          name: n,
                         },
                       });
                     },
@@ -2349,13 +2349,13 @@ const SettingsMod = ({
                   {
                     onClick: () => {
                       setForm({
-                        courseName: name, // v70: was "p" (not defined), so Edit price did nothing
-                        price: price,
-                        frequency: /^per month/i.test(freq || "") ? "Monthly" : freq || "Monthly",
+                        courseName: p.name,
+                        price: p.price,
+                        frequency: p.frequency || "Monthly",
                       });
                       setModal({
                         type: "editPrice",
-                        data: { name, price, cur, freq },
+                        data: p,
                       });
                     },
                     style: {
@@ -3077,7 +3077,7 @@ const SettingsMod = ({
                               alignItems: "center",
                               justifyContent: "center",
                               border: "2px solid " + c.bgDeep,
-                              fontSize: 9,
+                              fontSize: 8,
                               color: c.successText,
                             },
                           },
@@ -5035,13 +5035,13 @@ const SettingsMod = ({
                   {
                     onClick: () => {
                       setForm({
-                        automationName: when, // v70: was "r" (not defined), so Edit did nothing
-                        trigger: "",
-                        action: "",
+                        automationName: r.name,
+                        trigger: r.trigger || "",
+                        action: r.action || "",
                       });
                       setModal({
                         type: "editAutomation",
-                        data: { when, then, st },
+                        data: r,
                       });
                     },
                     style: {

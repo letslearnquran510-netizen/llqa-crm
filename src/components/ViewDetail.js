@@ -102,9 +102,9 @@ const ViewDetail = ({
               },
               "Code: ",
               t.code,
-              " \u00B7 ", // v70
+              " | ",
               t.location,
-              " \u00B7 ",
+              " | ",
               t.gender,
             ),
           ),
@@ -148,7 +148,7 @@ const ViewDetail = ({
           ["Phone", t.phone, Phone],
           ["CNIC", t.cnic, Hash],
           ["Bank", t.bank, CreditCard],
-          ["Students", String(llqaTeacherStudents(t)), Users], // v70
+          ["Students", String(t.students), Users],
           [
             "Free Slots",
             (() => {

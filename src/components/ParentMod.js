@@ -41,7 +41,7 @@ const ParentMod = ({
       },
       isParent
         ? "No student linked to this parent ID. Contact administration."
-        : llqaEmptyState({ icon: "users", title: "No students yet", text: "Each family\u2019s portal (progress, attendance, invoices, notes) shows here once students are added." }), // v70
+        : "No students available.",
     );
   }
   const myProgress = (dailyProgress || [])
@@ -995,7 +995,7 @@ const ParentMod = ({
           llqaLabel("\uD83D\uDC41 Admin View \u2014 Viewing as Parent of:"),
         ),
         React.createElement(
-          LLQASelect, // v70: the CRM's own list
+          "select",
           {
             value: selectedStuId || "",
             onChange: (e) => setSelectedStuId(Number(e.target.value)),
@@ -1045,13 +1045,13 @@ const ParentMod = ({
         hue2 +
         "))";
       const joinedDate = stu.dor
-        ? llqaLocalDay(stu.dor).toLocaleDateString("en-US", { // v70
+        ? new Date(stu.dor).toLocaleDateString("en-US", {
             month: "short",
             year: "numeric",
           })
         : "-";
       const dobDate = stu.dob
-        ? llqaLocalDay(stu.dob).toLocaleDateString("en-US", { // v70
+        ? new Date(stu.dob).toLocaleDateString("en-US", {
             month: "short",
             day: "numeric",
             year: "numeric",
@@ -1723,7 +1723,7 @@ const ParentMod = ({
                               },
                             },
                             " \u2022 " +
-                              llqaLocalDay(stu.lastDate).toLocaleDateString( // v70
+                              new Date(stu.lastDate).toLocaleDateString(
                                 "en-US",
                                 {
                                   month: "short",
@@ -3591,7 +3591,7 @@ const ParentMod = ({
                   "Add Teacher Feedback",
                 ),
                 React.createElement(
-                  LLQASelect, // v70: the CRM's own list
+                  "select",
                   {
                     value: fbCat,
                     onChange: (e) => setFbCat(e.target.value),

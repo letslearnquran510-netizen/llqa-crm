@@ -9,8 +9,6 @@ const SubjectsMod = ({
         ...t,
         sno: i + 1,
         subjects: t.subjects || ALL_SUBJECTS,
-        grades: t.grades || "", // v70: a grade range is not set in HR
-        rating: Number(t.rating != null ? t.rating : t.perfRating) || 0, // v70: HR keeps it as perfRating
         mon: {},
         tue: {},
         wed: {},
@@ -64,8 +62,8 @@ const SubjectsMod = ({
           wed: "Wed",
           thu: "Thu",
           fri: "Fri",
-          sat: "Sat", // v70: was "sat" — a weekend class saved here disappeared
-          sun: "Sun",
+          sat: "sat",
+          sun: "sun",
         };
 
         for (const lowerDay in daysMap) {
@@ -136,8 +134,7 @@ const SubjectsMod = ({
     if (fSubj !== "all") d = d.filter((t) => t.subjects.includes(fSubj));
     if (fGrade !== "all") {
       d = d.filter((t) => {
-        if (!t.grades) return true; // v70: no range set = not limited (this crashed the page)
-        const [gFrom, gTo] = String(t.grades).split("-");
+        const [gFrom, gTo] = t.grades.split("-");
         return (
           ALL_GRADES.indexOf(fGrade) >= ALL_GRADES.indexOf(gFrom) &&
           ALL_GRADES.indexOf(fGrade) <= ALL_GRADES.indexOf(gTo)
@@ -159,10 +156,9 @@ const SubjectsMod = ({
           const cell = t[d] ? t[d][i] : null;
           if (cell && typeof cell === "object") {
             totalB++;
-            const sk = cell.sub || cell.c || "No subject", gk = cell.gr || cell.grade || "not set", stk = cell.st || cell.state || "Not set"; // v70: classes booked in Sales keep state / course, not st / gr
-            subjCount[sk] = (subjCount[sk] || 0) + 1;
-            gradeCount[gk] = (gradeCount[gk] || 0) + 1;
-            stateCount[stk] = (stateCount[stk] || 0) + 1;
+            subjCount[cell.sub] = (subjCount[cell.sub] || 0) + 1;
+            gradeCount[cell.gr] = (gradeCount[cell.gr] || 0) + 1;
+            stateCount[cell.st] = (stateCount[cell.st] || 0) + 1;
           }
         }
       });
@@ -483,8 +479,7 @@ const SubjectsMod = ({
         Btn,
         {
           icon: Plus,
-          disabled: !teachers.length, // v70: nothing to assign to yet (the button threw an error)
-          onClick: () => teachers.length && openAssign(teachers[0], "mon", 4),
+          onClick: () => openAssign(teachers[0], "mon", 4),
         },
         "Assign Class",
       ),
@@ -503,7 +498,7 @@ const SubjectsMod = ({
         icon: Users,
         label: (subjShift === "weekend" ? "Weekend" : "Weekday") + " Teachers",
         value: teachers.length,
-        sub: teachers.length ? teachers.filter((t) => t.location === "WFH").length + " WFH \xB7 " + teachers.filter((t) => t.location !== "WFH").length + " IBA" : "none yet", // v70: was a fixed "7 WFH \xB7 1 IBA"
+        sub: "7 WFH \xB7 1 IBA",
         color: c.accent,
       }),
       React.createElement(SC, {
@@ -789,7 +784,6 @@ const SubjectsMod = ({
               gap: 10,
             },
           },
-          !filtered.length && llqaEmptyState({ icon: "book-open", title: "No subject teachers to show", text: "Add a teacher with the Subject department in HR \u2192 Teachers, or clear the filters above.", style: { gridColumn: "1 / -1" } }), // v70
           filtered.map((t) => {
             const l = teacherLoad(t);
             return React.createElement(
@@ -892,8 +886,8 @@ const SubjectsMod = ({
                         fontWeight: 700,
                       },
                     },
-                    t.rating || "\u2014", // v70: no rating yet
-                    t.rating ? "\u2605" : "",
+                    t.rating,
+                    "\u2605",
                   ),
                   React.createElement(
                     "div",
@@ -923,7 +917,7 @@ const SubjectsMod = ({
                     {
                       key: s,
                       style: {
-                        fontSize: 9,
+                        fontSize: 8,
                         padding: "2px 6px",
                         borderRadius: 3,
                         background: llqaAlpha(rColor(s), "20"),
@@ -953,7 +947,7 @@ const SubjectsMod = ({
                       fontWeight: 600,
                     },
                   },
-                  t.grades || "Any", // v70
+                  t.grades,
                 ),
               ),
               React.createElement(
@@ -1050,8 +1044,7 @@ const SubjectsMod = ({
           }),
         ),
       ),
-    tab === "individual" && !teachers.length && llqaEmptyState({ key: "subj-none", icon: "book-open", title: teachers.length ? "Individual needs two subject teachers" : "No subject teachers yet", text: "Add a teacher in HR \u2192 Teachers with the Subject (or Both) department. Their classes and free times show here." }), // v70
-    tab === "individual" && teachers.length > 0 &&
+    tab === "individual" &&
       React.createElement(
         React.Fragment,
         null,
@@ -1552,7 +1545,7 @@ const SubjectsMod = ({
                                       {
                                         style: {
                                           display: "inline-block",
-                                          fontSize: 9,
+                                          fontSize: 8,
                                           padding: "1px 6px",
                                           borderRadius: 8,
                                           background: llqaAlpha(c.cyan, "22"),
@@ -1837,7 +1830,6 @@ const SubjectsMod = ({
             React.createElement(
               "tbody",
               null,
-              llqaEmptyRow("No subject teachers yet", "Teachers with the Subject (or Both) department show here with their week."), // v70: shows only when the table is empty
               teachers.map((t) =>
                 React.createElement(
                   "tr",
@@ -1868,7 +1860,7 @@ const SubjectsMod = ({
                       "div",
                       {
                         style: {
-                          fontSize: 9,
+                          fontSize: 8,
                           color: c.textSec,
                         },
                       },
@@ -1918,7 +1910,7 @@ const SubjectsMod = ({
                               "div",
                               {
                                 style: {
-                                  fontSize: 9,
+                                  fontSize: 7,
                                   color: rColor(cell.sub),
                                   fontWeight: 700,
                                 },
@@ -1929,7 +1921,7 @@ const SubjectsMod = ({
                               "div",
                               {
                                 style: {
-                                  fontSize: 9,
+                                  fontSize: 6,
                                   color: c.text,
                                 },
                               },
@@ -1944,7 +1936,7 @@ const SubjectsMod = ({
                               style: {
                                 textAlign: "center",
                                 color: c.success,
-                                fontSize: 9,
+                                fontSize: 7,
                                 fontWeight: 600,
                               },
                             },
@@ -2200,8 +2192,7 @@ const SubjectsMod = ({
           ),
         ),
       ),
-    tab === "compare" && teachers.length < 2 && llqaEmptyState({ key: "subj-none", icon: "book-open", title: teachers.length ? "Compare needs two subject teachers" : "No subject teachers yet", text: "Add a teacher in HR \u2192 Teachers with the Subject (or Both) department. Their classes and free times show here." }), // v70: this crashed with no teachers
-    tab === "compare" && teachers.length >= 2 &&
+    tab === "compare" &&
       React.createElement(
         React.Fragment,
         null,
@@ -2314,7 +2305,7 @@ const SubjectsMod = ({
                     {
                       key: s,
                       style: {
-                        fontSize: 9,
+                        fontSize: 8,
                         padding: "2px 6px",
                         borderRadius: 3,
                         background: llqaAlpha(rColor(s), "20"),
@@ -2363,7 +2354,7 @@ const SubjectsMod = ({
                         fontWeight: 700,
                       },
                     },
-                    t.grades || "Any", // v70
+                    t.grades,
                   ),
                 ),
                 React.createElement(
@@ -2425,8 +2416,8 @@ const SubjectsMod = ({
                         fontWeight: 700,
                       },
                     },
-                    t.rating || "\u2014", // v70: no rating yet
-                    t.rating ? "\u2605" : "",
+                    t.rating,
+                    "\u2605",
                   ),
                 ),
                 React.createElement(
@@ -2646,8 +2637,8 @@ const SubjectsMod = ({
             ],
             [
               "Rating × 10",
-              ((teachers[cmp1] || {}).rating || 0) * 10, // v70: was NaN
-              ((teachers[cmp2] || {}).rating || 0) * 10,
+              teachers[cmp1].rating * 10,
+              teachers[cmp2].rating * 10,
               c.cyan,
             ],
           ].map(([metric, v1, v2, col]) =>
@@ -2715,8 +2706,7 @@ const SubjectsMod = ({
           ),
         ),
       ),
-    tab === "analytics" && !teachers.length && llqaEmptyState({ key: "subj-none", icon: "book-open", title: teachers.length ? "Analytics needs two subject teachers" : "No subject teachers yet", text: "Add a teacher in HR \u2192 Teachers with the Subject (or Both) department. Their classes and free times show here." }), // v70
-    tab === "analytics" && teachers.length > 0 &&
+    tab === "analytics" &&
       React.createElement(
         React.Fragment,
         null,
@@ -2842,7 +2832,7 @@ const SubjectsMod = ({
                 BarChart,
                 {
                   data: stats.gradeCount.map(([k, v]) => ({
-                    name: k === "not set" ? "Grade not set" : "Grade " + k, // v70
+                    name: "Grade " + k,
                     count: v,
                   })),
                 },
