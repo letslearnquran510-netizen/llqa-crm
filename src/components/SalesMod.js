@@ -730,7 +730,7 @@ const SalesMod = ({
                       fontSize: 12,
                     },
                   },
-                  "No records match your search/filter.",
+                  (isMstr ? master : current).length ? "No records match your search or filters." : isMstr ? "No students yet. Every student you add is kept here for good." : "No students yet. Add your first student with \u201cAdd Student\u201d.", // v70
                 ),
               )
             : rows.map((r, i) => {
@@ -1072,7 +1072,7 @@ const SalesMod = ({
                         {
                           style: {
                             marginLeft: 6,
-                            fontSize: 8,
+                            fontSize: 9,
                             fontWeight: 700,
                             color: c.purple,
                             background: c.purpleBg,

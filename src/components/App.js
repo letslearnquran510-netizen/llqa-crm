@@ -46,6 +46,7 @@ function App() {
     };
     document.body.style.fontSize = fMap[fs] || "14px";
     document.body.style.zoom = dMap[d] || "1";
+    document.documentElement.style.setProperty("--llqaZoom", dMap[d] || "1"); // v70: full-height layout at every Density
   }, [appSettings && appSettings.density, appSettings && appSettings.fontSize]);
   const [page, setPage] = useState("dashboard");
   const [open, setOpen] = useState(true);
@@ -838,7 +839,7 @@ function App() {
     {
       style: {
         display: "flex",
-        minHeight: "100vh",
+        minHeight: "calc(100vh / var(--llqaZoom, 1))", // v70: fills the window at every Density
         background: "transparent", // v69: the page background (with its soft glow) shows through
         fontFamily: "var(--font)",
         color: c.text,
@@ -852,13 +853,18 @@ function App() {
         style: {
           ...(llqaSideDark ? llqaVarStyle(llqaSideVars) : {}),
           width: open ? 210 : 54,
-          minHeight: "100vh",
+          // v70: always the full window height, and it stays in view while the page scrolls
+          position: "sticky",
+          top: 0,
+          alignSelf: "flex-start",
+          height: "calc(100vh / var(--llqaZoom, 1))",
           background: llqaSideDark ? "linear-gradient(" + c.bgDeep + ", " + c.bgDeep + "), " + c.bg : c.bgDeep,
           borderRight: "1px solid " + c.border,
           display: "flex",
           flexDirection: "column",
           transition: "width .2s",
-          overflow: "hidden",
+          overflowX: "hidden",
+          overflowY: "auto",
           flexShrink: 0,
         },
       },

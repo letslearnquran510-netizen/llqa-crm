@@ -342,7 +342,7 @@ const LLQAScheduleBuilder = ({ pf, setPf, appTeachers, own }) => {
         { style: { display: "flex", gap: 6, flexWrap: "wrap" } },
         // v67: the family's wish for the teacher, used by the matching
         React.createElement(
-          "select",
+          LLQASelect, // v70: the CRM's own list
           {
             key: "tg",
             value: pf.teacherGender || "",
