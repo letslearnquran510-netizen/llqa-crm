@@ -276,7 +276,7 @@ const LoginScreen = ({
       style: {
         minHeight: "100vh",
         background: c.bg,
-        fontFamily: "'Segoe UI',sans-serif",
+        fontFamily: "var(--font)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -461,7 +461,7 @@ const LoginScreen = ({
             {
               id: "parent",
               title: "Parent Portal",
-              desc: "Login with your unique Parent ID provided by the academy",
+              desc: "Log in with the Parent ID provided by the academy",
               icon: Users,
               col: c.cyan,
             },
@@ -1299,7 +1299,7 @@ const LoginScreen = ({
                       borderRadius: 6,
                     },
                   },
-                  "\u26A0 No permissions granted to this role. Contact Super Admin.",
+                  llqaLabel("\u26A0 No permissions granted to this role. Contact Super Admin."),
                 ),
             React.createElement(
               "label",

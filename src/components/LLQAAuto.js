@@ -1068,7 +1068,7 @@ const llqaPill = (text, col, bg, key) =>
         whiteSpace: "nowrap",
       },
     },
-    text,
+    llqaIconize(text, { size: 11, keep: true, gap: 4 }), // v69: line icon, not emoji
   );
 const llqaMini = (label, onClick, opt) => {
   const o = opt || {};
@@ -1076,12 +1076,19 @@ const llqaMini = (label, onClick, opt) => {
   // v68: a solid button uses the button version of its colour and the text that reads on it
   const fill = o.tone === "danger" ? c.dangerFill : o.tone === "success" ? c.successFill : o.tone === "warn" ? c.warnFill : o.tone === "accent" ? c.gradientPrimary : c.textSec;
   const onFill = o.tone === "danger" ? c.dangerText : o.tone === "success" ? c.successText : o.tone === "warn" ? c.warnText : o.tone === "accent" ? c.accentText : c.bg;
+  // v69: a leading emoji becomes a line icon drawn in the button's own colour (same on every computer)
+  const isz = o.big ? 13 : 12;
+  const kids = o.icon
+    ? [React.createElement(llqaIcon(o.icon), { key: "ico", size: isz, "aria-hidden": true, "data-icon": o.icon, style: { marginRight: label ? 5 : 0, verticalAlign: "-2px" } }), label]
+    : llqaIconize(label, { size: isz, keep: true, gap: 5 });
+  const iconOnly = Array.isArray(kids) && !kids[1];
   return React.createElement(
     "button",
     {
       key: o.key || label,
       type: "button",
       title: o.title || "",
+      "aria-label": iconOnly ? o.title || undefined : undefined,
       disabled: !!o.disabled,
       onClick: (e) => {
         if (e && e.stopPropagation) e.stopPropagation();
@@ -1101,7 +1108,7 @@ const llqaMini = (label, onClick, opt) => {
         whiteSpace: "nowrap",
       },
     },
-    label,
+    kids,
   );
 };
 const llqaShell = (title, sub, body, footer, opt) => {
@@ -1141,7 +1148,7 @@ const llqaShell = (title, sub, body, footer, opt) => {
         React.createElement(
           "div",
           null,
-          React.createElement("h3", { style: { color: c.text, fontSize: 16, margin: 0 } }, title),
+          React.createElement("h3", { style: { color: c.text, fontSize: 16, margin: 0 } }, llqaIconize(title, { size: 17, color: c.accent, keep: true, gap: 8 })),
           sub ? React.createElement("div", { style: { color: c.textSec, fontSize: 11, marginTop: 3 } }, sub) : null,
         ),
         o.onClose
@@ -1235,8 +1242,8 @@ const LLQAMessageModal = ({ studentId, student, template, extra, msgKey, onSent,
         digits
           ? "✓ Will message +" + digits
           : phone
-            ? "⚠ Can't tell the country code — type the number with + and the country code."
-            : "⚠ No number saved for this family.",
+            ? llqaLabel("⚠ Can't tell the country code — type the number with + and the country code.")
+            : llqaLabel("⚠ No number saved for this family."),
       ),
       React.createElement("textarea", {
         value: text,
@@ -1295,7 +1302,7 @@ const LLQASendQueue = ({ items, title, onClose }) => {
       React.createElement(
         "div",
         { style: { fontSize: 11, marginBottom: 8, color: digits ? c.success : c.danger } },
-        digits ? "To +" + digits : "⚠ No usable number for this family — skip, or fix the number in their record.",
+        digits ? "To +" + digits : llqaLabel("⚠ No usable number for this family — skip, or fix the number in their record."),
       ),
       React.createElement("textarea", {
         value: text,
@@ -1568,6 +1575,11 @@ const LLQALogHost = ({ info, onClose }) => {
 // v66: a new notice shows for 12 seconds, then folds into the "🔔 N notices"
 // button (so notices never sit on top of the page's buttons); nothing is lost.
 const LLQA_FRESH_MS = 12000;
+// v69: the icon for a notice, from the emoji its text starts with (bell when there is none)
+const llqaNoticeIcon = (text) => {
+  const m = LLQA_EMOJI_LEAD.exec(String(text || ""));
+  return (m && LLQA_EMOJI_ICON[m[1].replace(/\uFE0F/g, "")]) || "bell";
+};
 const LLQAToasts = () => {
   const now = Date.now();
   const all = LLQAUI.toasts;
@@ -1591,16 +1603,26 @@ const LLQAToasts = () => {
           key: t.id,
           style: {
             background: "linear-gradient(" + c.bgCard + ", " + c.bgCard + "), " + c.bg,
-            border: "1px solid " + llqaAlpha(c.accent, "55"),
-            borderRadius: 10,
-            padding: "10px 12px",
-            boxShadow: c.shadow3d,
+            border: "1px solid " + c.border, // v69: calm frame, strong shadow
+            borderRadius: 12,
+            padding: "12px 12px 10px",
+            boxShadow: "var(--liftShadow), " + c.shadow3d,
             width: "100%",
             boxSizing: "border-box",
             pointerEvents: "auto",
           },
         },
-        React.createElement("div", { style: { fontSize: 12, color: c.text, lineHeight: 1.45, marginBottom: 8 } }, t.text),
+        // v69: an icon tile for the kind of notice, then the words (no leading emoji)
+        React.createElement(
+          "div",
+          { style: { display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 8 } },
+          React.createElement(
+            "span",
+            { style: { width: 26, height: 26, borderRadius: 8, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: c.accentBg, boxShadow: "inset 0 0 0 1px " + llqaAlpha(c.accent, "33") } },
+            React.createElement(llqaIcon(llqaNoticeIcon(t.text)), { size: 14, color: c.accent }),
+          ),
+          React.createElement("div", { style: { fontSize: 12, color: c.text, lineHeight: 1.45, flex: 1, minWidth: 0, paddingTop: 3 } }, llqaStripEmoji(t.text)),
+        ),
         React.createElement(
           "div",
           { style: { display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" } },
@@ -1760,7 +1782,9 @@ const LLQAToasts = () => {
               boxShadow: c.shadow3d,
             },
           },
-          LLQAUI.open ? "Hide notices" : "🔔 " + rest + " notice" + (rest === 1 ? "" : "s"),
+          LLQAUI.open
+            ? "Hide notices"
+            : [React.createElement(llqaIcon("bell"), { key: "b", size: 13, color: c.accent, style: { marginRight: 6, verticalAlign: "-2px" } }), rest + " notice" + (rest === 1 ? "" : "s")], // v69
         )
       : null,
   );
@@ -2045,7 +2069,7 @@ const LLQAEnrollToggle = ({ pf, setPf }) => {
           textAlign: "left",
         },
       },
-      React.createElement("div", { style: { fontSize: 12, fontWeight: 700 } }, title),
+      React.createElement("div", { style: { fontSize: 12, fontWeight: 700 } }, llqaIconize(title, { size: 13, keep: true })),
       React.createElement("div", { style: { fontSize: 10, marginTop: 2, color: on ? c.accent : c.textMuted } }, sub), // v68: readable (was faded)
     );
   return React.createElement(
@@ -2082,7 +2106,7 @@ const LLQAEnrollToggle = ({ pf, setPf }) => {
       ? React.createElement(
           "div",
           { style: { marginTop: 8, padding: "7px 10px", borderRadius: 8, background: c.bgDeep, color: c.textSec, fontSize: 11, lineHeight: 1.45 } },
-          "📅 Registered " + llqaDateYear(pf.dor) + " — saved as an existing student: they get the Parent Portal intro (not a welcome or first-class message), and the fee cycle starts from their next due day; earlier months count as settled.",
+          llqaLabel("📅 Registered " + llqaDateYear(pf.dor) + " — saved as an existing student: they get the Parent Portal intro (not a welcome or first-class message), and the fee cycle starts from their next due day; earlier months count as settled."),
         )
       : null,
   );
@@ -2114,7 +2138,7 @@ const llqaH = (text, sub) =>
   React.createElement(
     "div",
     { style: { margin: "4px 0 10px" } },
-    React.createElement("div", { style: { color: c.text, fontSize: 14, fontWeight: 700 } }, text),
+    React.createElement("div", { style: { color: c.text, fontSize: 14, fontWeight: 700 } }, llqaIconize(text, { size: 15, color: c.accent, keep: true, gap: 7 })),
     sub ? React.createElement("div", { style: { color: c.textSec, fontSize: 11, marginTop: 2 } }, sub) : null,
   );
 const llqaSearch = (value, onChange, placeholder) =>
@@ -2155,7 +2179,7 @@ const llqaChips = (items, value, onPick) =>
             cursor: "pointer",
           },
         },
-        label + (n != null ? " (" + n + ")" : ""),
+        llqaIconize(label + (n != null ? " (" + n + ")" : ""), { size: 12, keep: true, gap: 5 }), // v69: line icon, not emoji
       ),
     ),
   );
@@ -2240,12 +2264,13 @@ const LLQATrialCard = ({ x, ctx }) => {
       React.createElement(
         "div",
         { key: "m", style: { color: c.textMuted, fontSize: 10, lineHeight: 1.6 } },
-        (info.days != null ? "Started " + (info.days === 0 ? "today" : info.days + " day" + (info.days === 1 ? "" : "s") + " ago") : "No start date") +
+        // v69: a trial that starts later reads "Starts tomorrow" / "Starts in 3 days" (was "Started -1 days ago")
+        (info.days == null ? "No start date" : info.days < 0 ? "Starts " + (info.days === -1 ? "tomorrow" : "in " + -info.days + " days") : "Started " + (info.days === 0 ? "today" : info.days + " day" + (info.days === 1 ? "" : "s") + " ago")) +
           (s.lastDate ? " · last class " + (info.sinceLast === 0 ? "today" : info.sinceLast + "d ago") : info.done ? "" : " · no class yet") +
           (next ? " · next " + next : "") +
           " · " + (s.teacher || "no teacher"),
         React.createElement("br", null),
-        last ? "💬 " + llqaTplName(last.template) + " " + llqaAgo(last.at) : "💬 No message yet",
+        last ? llqaLabel("💬 " + llqaTplName(last.template) + " " + llqaAgo(last.at)) : llqaLabel("💬 No message yet"),
       ),
       React.createElement(
         "div",
@@ -2330,7 +2355,7 @@ const LLQAPipelineTab = (props) => {
               React.createElement(
                 "div",
                 { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 2 } },
-                React.createElement("div", { style: { color: c.text, fontSize: 12, fontWeight: 700 } }, title),
+                React.createElement("div", { style: { color: c.text, fontSize: 12, fontWeight: 700 } }, llqaIconize(title, { size: 13, keep: true, gap: 6 })), // v69: line icon
                 React.createElement("div", { style: { color: c.textSec, fontSize: 11, fontWeight: 700 } }, list.length),
               ),
               React.createElement("div", { style: { color: c.textMuted, fontSize: 10, marginBottom: 8 } }, sub),
@@ -2502,7 +2527,7 @@ const LLQAContactsTab = (props) => {
                     td([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, s.name), React.createElement("div", { key: "c", style: { color: c.textMuted, fontSize: 10 } }, [s.code, s.course, s.teacher].filter(Boolean).join(" · "))], "a"),
                     td([
                       React.createElement("div", { key: "p" }, s.parent || "—"),
-                      React.createElement("div", { key: "ph", style: { fontSize: 10, color: r.digits ? c.textSec : c.danger } }, r.digits ? "+" + r.digits : s.phone ? "⚠ " + s.phone + " (add country code)" : "⚠ no number"),
+                      React.createElement("div", { key: "ph", style: { fontSize: 10, color: r.digits ? c.textSec : c.danger } }, r.digits ? "+" + r.digits : s.phone ? llqaLabel("⚠ " + s.phone + " (add country code)") : llqaLabel("⚠ no number")),
                     ], "b"),
                     td([React.createElement("div", { key: "t" }, llqaLocalNow(r.tz) || "—"), React.createElement("div", { key: "z", style: { color: c.textMuted, fontSize: 10 } }, llqaZoneLabel(r.tz))], "c"),
                     td(React.createElement("div", { style: { display: "flex", gap: 4, flexWrap: "wrap" } }, pills.length ? pills : llqaPill("Active", c.success)), "d"),
@@ -2530,7 +2555,7 @@ const LLQAContactsTab = (props) => {
             React.createElement(
               "div",
               { key: m.id, style: { display: "flex", justifyContent: "space-between", gap: 10, fontSize: 11, padding: "5px 0", borderBottom: "1px solid " + llqaAlpha(c.border, "55"), color: c.textSec } },
-              React.createElement("span", null, (m.channel === "whatsapp" ? "💬 " : "📞 ") + (m.name || "—") + (m.template ? " · " + llqaTplName(m.template) : "")),
+              React.createElement("span", null, llqaLabel((m.channel === "whatsapp" ? "💬 " : "📞 ") + (m.name || "—") + (m.template ? " · " + llqaTplName(m.template) : ""))),
               React.createElement("span", null, llqaAgo(m.at) + (m.by ? " · " + m.by : "")),
             ),
           ),
@@ -2593,7 +2618,7 @@ const LLQAWaitlistTab = (props) => {
     ),
     add
       ? llqaCard([
-          llqaH("Add a family to the waitlist", "Or use ⏳ in the Add Student form when a time is full."),
+          llqaH("Add a family to the waitlist", "Or use “Waitlist” in the Add Student form when a time is full."),
           React.createElement(
             "div",
             { key: "g", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "0 10px" } },
@@ -2618,7 +2643,7 @@ const LLQAWaitlistTab = (props) => {
         ])
       : null,
     rows.length === 0
-      ? llqaCard(React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "No families waiting. When a wanted time is full in the Add Student form, use ⏳ Waitlist — they'll show here and you'll be told when the time frees up."))
+      ? llqaCard(React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "No families waiting. When a wanted time is full in the Add Student form, use “Waitlist” there — they'll show here and you'll be told when the time frees up."))
       : rows.map(({ w, m }) => {
           const free = m.free.length > 0;
           const alt = !free && m.tz
@@ -2832,7 +2857,7 @@ const LLQAClockTab = (props) => {
         React.createElement(
           "div",
           { style: { flex: "1 1 400px" } },
-          React.createElement("div", { style: { color: c.text, fontSize: 14, fontWeight: 700 } }, "🤖 Automatic fixing — " + (auto ? "ON" : "OFF")),
+          React.createElement("div", { style: { color: c.text, fontSize: 14, fontWeight: 700 } }, llqaLabel("🤖 Automatic fixing — " + (auto ? "ON" : "OFF"))),
           React.createElement(
             "div",
             { style: { color: c.textSec, fontSize: 11, marginTop: 3, lineHeight: 1.5 } },
@@ -2993,7 +3018,7 @@ const LLQATodayClasses = (props) => {
             React.createElement(
               "div",
               { style: { color: c.text, fontSize: 13 } },
-              React.createElement("b", null, ((hol.kind || "holiday") === "ramadan" ? "🌙 " : "🗓 ") + (hol.name || "Holiday")),
+              React.createElement("b", null, llqaLabel(((hol.kind || "holiday") === "ramadan" ? "🌙 " : "🗓 ") + (hol.name || "Holiday"))),
               " · " + llqaRangeLabel(hol.from, hol.to) + " · " + ((hol.kind || "holiday") === "holiday" ? "academy closed — no classes" : "classes run as usual") + (hol.note ? " · " + hol.note : ""),
             ),
             manage ? llqaMini("🗓 Holidays", () => llqaGo("timetable", "holidays"), { key: "h", tone: "accent" }) : null,
@@ -3087,7 +3112,7 @@ const LLQATodayClasses = (props) => {
                     ], "s"),
                     td([
                       React.createElement("div", { key: "b", style: { fontWeight: it.covered ? 700 : 400, color: it.covered ? c.accent : c.text } }, it.by),
-                      it.covered ? React.createElement("div", { key: "f", style: { color: c.textMuted, fontSize: 10 } }, "🔁 covering for " + it.teacher) : null,
+                      it.covered ? React.createElement("div", { key: "f", style: { color: c.textMuted, fontSize: 10 } }, llqaLabel("🔁 covering for " + it.teacher)) : null,
                       it.tLeave && !it.covered ? React.createElement("div", { key: "l" }, llqaPill((it.kept ? "takes it · " : "on leave · ") + (it.tLeave.status || "pending") + (it.tLeave.halfDay ? " · half day" : ""), it.kept ? c.success : it.tLeave.status === "approved" ? c.warn : c.textSec, null, "lv")) : null,
                     ], "te"),
                     td(React.createElement("span", { style: { color: it.st.col, fontWeight: 700, fontSize: 11 } }, it.st.text), "st", { whiteSpace: "nowrap" }),
@@ -3156,11 +3181,17 @@ const llqaDashCard = (key, icon, title, value, sub, alert, go) =>
     React.createElement(
       "div",
       { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 } },
-      React.createElement("div", { style: { color: c.textSec, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.4 } }, icon + " " + title),
+      // v69: a line icon (in the card's colour when it needs you) instead of the emoji
+      React.createElement(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: 6, color: c.textSec, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: 0.5, minWidth: 0 } },
+        React.createElement(llqaIcon(LLQA_EMOJI_ICON[String(icon).replace(/\uFE0F/g, "")] || "layout-grid"), { size: 13, color: alert || c.textSec, style: { flexShrink: 0 } }),
+        title,
+      ),
       React.createElement("div", { style: { color: c.textMuted, fontSize: 11 } }, "→"),
     ),
     React.createElement("div", { style: { color: alert || c.text, fontSize: 22, fontWeight: 800, marginTop: 3, letterSpacing: -0.2 } }, value),
-    React.createElement("div", { style: { color: c.textMuted, fontSize: 10.5, marginTop: 2, lineHeight: 1.4 } }, sub),
+    React.createElement("div", { style: { color: c.textSec, fontSize: 10.5, marginTop: 2, lineHeight: 1.4 } }, sub), // v69: readable on a coloured card
   );
 const LLQADashCards = (props) => {
   const ctx = llqaCtx(props);
@@ -3226,7 +3257,7 @@ const LLQADashCards = (props) => {
     sales && card("risk", "⚠", "At-risk students", highRisk, risky.length - highRisk + " more to watch", highRisk ? c.danger : null, () => llqaGo("sales", "autopilot")),
     sales && card("fees", "💰", "Fee cycle", feeOver, feeOver + " overdue · " + feeDueNow + " due now" + ((ctx.automation || {}).feeAuto !== false ? " · auto ✓" : " · auto off"), feeOver ? c.danger : feeDueNow ? c.warn : null, () => llqaGo("sales", "fees")),
     tt && card("cover", "🔁", "Leave cover", needCover, needCover ? "classes need a substitute (today/tomorrow)" : "no teacher away without cover", needCover ? c.danger : null, () => llqaGo("timetable", "leavecover")),
-    sales && card("req", "📨", "Parent requests", reqWaiting, askWaiting + " approval" + (askWaiting === 1 ? "" : "s") + " waiting for parents", reqWaiting ? c.warn : null, () => llqaGo("sales", "requests")),
+    sales && card("req", "📨", "Parent requests", reqWaiting, askWaiting + " proposal" + (askWaiting === 1 ? "" : "s") + " awaiting parent approval", reqWaiting ? c.warn : null, () => llqaGo("sales", "requests")),
     tt &&
     card(
       "hol",
@@ -4289,14 +4320,14 @@ const llqaPlanClassAt = (teachers, s, rows, teacher, rowDay, slot) => {
     return {
       error:
         s.name + "'s Quran classes are with " + master + ". A Quran student keeps one teacher, so this class can't go to " + teacher.name +
-        ".\n\nTo move all of their classes to " + teacher.name + ", use 📅 Change classes.",
+        ".\n\nTo move all of their classes to " + teacher.name + ", use “Change classes”.",
     };
   if (rows.some((r) => r.day === rowDay && r.time === time)) return { error: s.name + " already has a class on " + rowDay + " at " + B.timeLabel(time) + "." };
   const pl = B.plan({ rows: [{ day: rowDay, time, teacher: teacher.name }], country: s.country, state: s.state, teachers, isQuran: isQ, master: isQ ? teacher.name : "", own: s });
   if (pl.problems.length) return { error: pl.problems.join("\n") };
   const it = pl.items[0];
   if (!it || String(it.teacherId) !== String(teacher.id) || it.rowDay !== rowDay || it.slot !== slot)
-    return { error: "That cell doesn't match " + s.name + "'s time zone — use 📅 Change classes." };
+    return { error: "That cell doesn't match " + s.name + "'s time zone — use “Change classes”." };
   const res = B.book(teachers, [it], { ...s, sub: isQ ? "" : llqaSubjects(s) || "Subject" });
   if (!res.ok) return { error: res.problems.join("\n") };
   return { teachers: res.teachers, it, rows: [...rows, { day: it.day, time: it.time, teacher: it.teacher, pktDay: it.pktDay, pktSlot: it.slot }] };
@@ -4525,7 +4556,7 @@ const llqaTable = (heads, rows) =>
       React.createElement("tbody", null, rows),
     ),
   );
-const llqaSmall = (text, col, key) => React.createElement("div", { key, style: { color: col || c.textMuted, fontSize: 10, marginTop: 2 } }, text);
+const llqaSmall = (text, col, key) => React.createElement("div", { key, style: { color: col || c.textMuted, fontSize: 10, marginTop: 2 } }, llqaIconize(text, { size: 11, keep: true, gap: 4 }));
 const llqaSelectStyle = { padding: "5px 8px", background: c.bgDeep, border: "1px solid " + c.border, borderRadius: 7, color: c.text, fontSize: 11 };
 const llqaSel = (value, onChange, options, opt) =>
   React.createElement(
@@ -4545,7 +4576,7 @@ const llqaAutoSwitch = (key, title, onText, offText) => {
       React.createElement(
         "div",
         { style: { flex: "1 1 400px" } },
-        React.createElement("div", { style: { color: c.text, fontSize: 14, fontWeight: 700 } }, "🤖 " + title + " — " + (on ? "ON" : "OFF")),
+        React.createElement("div", { style: { color: c.text, fontSize: 14, fontWeight: 700 } }, llqaLabel("🤖 " + title + " — " + (on ? "ON" : "OFF"))),
         React.createElement("div", { style: { color: c.textSec, fontSize: 11, marginTop: 3, lineHeight: 1.5 } }, on ? onText : offText),
       ),
       manage
@@ -4755,7 +4786,7 @@ const LLQAAskModal = ({ studentId, text, onClose }) => {
       null,
       React.createElement(Inp, { label: "Student", value: sid, onChange: setSid, options: llqaStudentOptions() }),
       s && !s.parentId
-        ? React.createElement("div", { style: { color: c.warn, fontSize: 11, marginTop: -6, marginBottom: 8 } }, "⚠ This family has no Parent ID yet, so the link can't open their portal — they can still reply on WhatsApp.")
+        ? React.createElement("div", { style: { color: c.warn, fontSize: 11, marginTop: -6, marginBottom: 8 } }, llqaLabel("⚠ This family has no Parent ID yet, so the link can't open their portal — they can still reply on WhatsApp."))
         : null,
       React.createElement(
         "div",
@@ -4812,7 +4843,7 @@ const LLQALeaveCoverTab = (props) => {
     llqaToast(
       res.recs.length
         ? { kind: "covers", key: "covers", covers: res.recs, text: "🔁 " + res.recs.length + " class" + (res.recs.length === 1 ? "" : "es") + " given to substitutes" + (res.missing.length ? " · " + res.missing.length + " have no free teacher then" : "") + "." }
-        : { kind: "info", ttl: 7000, text: "No free teacher for those classes — mark them off, or move them with 📅 Change classes." },
+        : { kind: "info", ttl: 7000, text: "No free teacher for those classes — mark them off, or move them with “Change classes”." },
     );
   };
   const decided = (rows) => rows.map((r) => r.it.cover).filter((x) => x && (x.cancelled || (x.coverId != null && x.coverId !== "")));
@@ -5005,7 +5036,7 @@ const LLQAHolidaysTab = (props) => {
         React.createElement(
           "div",
           null,
-          React.createElement("div", { style: { color: c.text, fontSize: 13, fontWeight: 700 } }, (kind === "ramadan" ? "🌙 " : kind === "notice" ? "📣 " : "🗓 ") + (d.name || "Holiday") + " · " + llqaRangeLabel(d.from, d.to)),
+          React.createElement("div", { style: { color: c.text, fontSize: 13, fontWeight: 700 } }, llqaLabel((kind === "ramadan" ? "🌙 " : kind === "notice" ? "📣 " : "🗓 ") + (d.name || "Holiday") + " · " + llqaRangeLabel(d.from, d.to))),
           llqaSmall(
             (LLQA_DAY_KINDS.find((k) => k[0] === kind) || LLQA_DAY_KINDS[0])[1] + (a ? " · " + a.n + " class" + (a.n === 1 ? "" : "es") + " booked in these days · " + a.fams.length + " famil" + (a.fams.length === 1 ? "y" : "ies") : "") + (d.note ? " · " + d.note : ""),
             c.textSec,
@@ -5413,7 +5444,7 @@ const LLQAFeeCycleTab = (props) => {
                         }, { key: "h", tone: "danger", title: "Final notice sent: pause classes until paid" })
                       : null,
                     llqaCanManage() && s.feeHold
-                      ? llqaMini("▶ Resume", () => llqaFeeResume(s), { key: "rs", tone: cy.status === "overdue" ? undefined : "success", title: cy.status === "overdue" ? "Still overdue — resume anyway" : "Paid — resume classes" })
+                      ? llqaMini("Resume", () => llqaFeeResume(s), { icon: "play", key: "rs", tone: cy.status === "overdue" ? undefined : "success", title: cy.status === "overdue" ? "Still overdue — resume anyway" : "Paid — resume classes" })
                       : null,
                     llqaMini("📞", () => llqaCall(digits, { studentId: s.id, name: s.name }), { key: "c", disabled: !digits, title: "Call" }),
                   ),
@@ -5704,7 +5735,7 @@ const llqaParentAskBanner = (stu, user, tab, open) => {
       onClick: open,
       style: { cursor: "pointer", background: c.accentBg, border: "1px solid " + c.accent, borderRadius: 10, padding: "10px 14px", marginBottom: 12, color: c.text, fontSize: 13, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 },
     },
-    React.createElement("span", null, "✋ The academy is asking for your approval (" + n + "). "),
+    React.createElement("span", null, llqaLabel("✋ The academy is asking for your approval (" + n + "). ")),
     React.createElement("b", { style: { color: c.accent } }, "Open →"),
   );
 };
@@ -7233,7 +7264,7 @@ const LLQATeacherDayTab = () => {
       llqaStat("Need a teacher", day.needs.length, "teacher on leave, no cover yet", day.needs.length ? c.danger : c.text),
     ),
     day.holiday
-      ? llqaCard(React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "🗓 " + (day.holiday.name || "Holiday") + " — the academy is closed, no classes."))
+      ? llqaCard(React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, llqaLabel("🗓 " + (day.holiday.name || "Holiday") + " — the academy is closed, no classes.")))
       : null,
     React.createElement(
       "div",
@@ -7342,7 +7373,7 @@ const LLQACapacityTab = (props) => {
       llqaStat("Waiting families", Object.values(cap.demand).reduce((a, n) => a + n, 0), "want a time in this shift", Object.keys(cap.demand).length ? c.warn : c.text),
     ),
     llqaCard([
-      llqaH("🌡 Free teachers at each time", "Number = teachers free then (Pakistan time, every week). Red = full · amber = nearly full · green = room. ⏳ = families on the waitlist for that time. Click a time to see who is free."),
+      llqaH("🌡 Free teachers at each time", "Number = teachers free then (Pakistan time, every week). Red = full · amber = nearly full · green = room. The hourglass shows families on the waitlist for that time. Click a time to see who is free."),
       React.createElement(
         "div",
         { key: "g", style: { overflowX: "auto" } },
@@ -7386,7 +7417,7 @@ const LLQACapacityTab = (props) => {
                       },
                     },
                     n,
-                    dem ? React.createElement("div", { style: { fontSize: 9, fontWeight: 700 } }, "⏳" + dem) : null,
+                    dem ? React.createElement("div", { style: { fontSize: 9, fontWeight: 700 } }, llqaLabel("⏳" + dem)) : null,
                   );
                 }),
               ),
@@ -7803,7 +7834,7 @@ const LLQAWinbackTab = () => {
         ])
       : null,
     llqaCard([
-      llqaH("↩ Families who left", "Win-back messages are suggested in Autopilot when due. ↩ Re-enroll makes the student active again (billed from today) and opens 📅 Change classes to book times."),
+      llqaH("↩ Families who left", "Win-back messages are suggested in Autopilot when due. “Re-enroll” makes the student active again (billed from today) and opens “Change classes” to book times."),
       left.length === 0
         ? React.createElement("div", { key: "e", style: { color: c.success, fontSize: 12 } }, "✓ Nobody left in the last 6 months.")
         : llqaTable(
@@ -7898,8 +7929,8 @@ const LLQADashCards3 = () => {
           "div",
           { key: "rn", style: { flexBasis: "100%", fontSize: 11, color: llqaRunnerAlive() ? c.success : c.danger } },
           llqaRunnerAlive()
-            ? "🤖 24/7 runner online — last check " + llqaAgo(rInfo.at) + (rInfo.saveError ? " · ⚠ save problem: " + rInfo.saveError : "") + " · your tab leaves the automatic work to it"
-            : "⚠ 24/7 runner offline since " + llqaAgo(rInfo.at) + " — this tab does the automatic work while it is down",
+            ? llqaLabel("🤖 24/7 runner online — last check " + llqaAgo(rInfo.at) + (rInfo.saveError ? " · ⚠ save problem: " + rInfo.saveError : "") + " · your tab leaves the automatic work to it")
+            : llqaLabel("⚠ 24/7 runner offline since " + llqaAgo(rInfo.at) + " — this tab does the automatic work while it is down"),
         );
   // v68: the cards themselves go into the main card grid (llqaDashCards3Items); this keeps the runner line
   return runnerLine ? React.createElement("div", { style: { marginBottom: 14 } }, runnerLine) : null;
@@ -7924,6 +7955,11 @@ const llqaDashCards3Items = () => {
    Replaces the old sample figures ("Rs 0", "0/0", a fixed activity list) and the
    charts that were never connected. Each part shows only for people who can open
    the page it comes from. */
+// v69: "Good morning" / "Good afternoon" / "Good evening" by the computer's own clock
+const llqaGreeting = () => {
+  const h = new Date().getHours();
+  return h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening";
+};
 const llqaFirstName = () => {
   const u = (LLQAApp.ctx && LLQAApp.ctx.user) || {};
   return String(u.name || "").trim().split(/\s+/)[0] || "there";
@@ -7993,7 +8029,11 @@ const llqaEmpty = (icon, text) =>
   React.createElement(
     "div",
     { style: { padding: "22px 14px", textAlign: "center", color: c.textMuted, fontSize: 11.5, lineHeight: 1.5, border: "1px dashed " + c.border, borderRadius: 10, background: c.bgDeep } },
-    React.createElement("div", { style: { fontSize: 20, marginBottom: 6 } }, icon),
+    React.createElement(
+      "div",
+      { style: { width: 38, height: 38, borderRadius: 19, margin: "0 auto 8px", display: "flex", alignItems: "center", justifyContent: "center", background: c.bgHover, boxShadow: "inset 0 0 0 1px " + c.border } },
+      React.createElement(llqaIcon(LLQA_EMOJI_ICON[String(icon).replace(/\uFE0F/g, "")] || "layout-grid"), { size: 18, color: c.textSec }), // v69: line icon
+    ),
     text,
   );
 
@@ -8115,7 +8155,11 @@ const llqaFeedRow = (key, icon, tone, title, detail, right, go, last) =>
       onKeyDown: (e) => { if (go && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); go(); } },
       style: { display: "flex", gap: 10, alignItems: "flex-start", padding: "9px 0", borderBottom: last ? "none" : "1px solid " + c.border, cursor: go ? "pointer" : "default" },
     },
-    React.createElement("div", { style: { width: 30, height: 30, borderRadius: 8, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, background: llqaAlpha(tone, "22"), boxShadow: "inset 0 0 0 1px " + llqaAlpha(tone, "33") } }, icon),
+    React.createElement(
+      "div",
+      { style: { width: 30, height: 30, borderRadius: 8, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", background: llqaAlpha(tone, "22"), boxShadow: "inset 0 0 0 1px " + llqaAlpha(tone, "33") } },
+      React.createElement(llqaIcon(LLQA_EMOJI_ICON[String(icon).replace(/\uFE0F/g, "")] || "bell"), { size: 15, color: tone }), // v69: line icon
+    ),
     React.createElement(
       "div",
       { style: { flex: 1, minWidth: 0 } },

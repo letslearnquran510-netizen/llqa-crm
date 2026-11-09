@@ -63,7 +63,7 @@ const NetworkScanScreen = ({ onConnected, onCancel, isWFH, userRole }) => {
         alignItems: "center",
         justifyContent: "center",
         padding: 20,
-        fontFamily: "'Segoe UI',sans-serif",
+        fontFamily: "var(--font)",
       },
     },
     React.createElement(
@@ -378,7 +378,7 @@ const NetworkScanScreen = ({ onConnected, onCancel, isWFH, userRole }) => {
                       " signal \xB7 ",
                       n.speed,
                       " \xB7 ",
-                      n.secure ? "🔒 WPA2" : "⚠ Open",
+                      n.secure ? llqaLabel("🔒 WPA2") : llqaLabel("⚠ Open"),
                     ),
                   ),
                   selected?.ssid === n.ssid &&
@@ -479,7 +479,7 @@ const NetworkScanScreen = ({ onConnected, onCancel, isWFH, userRole }) => {
                     marginBottom: 3,
                   },
                 },
-                "\uD83D\uDCF1 OTP sent to your registered phone",
+                llqaLabel("\uD83D\uDCF1 OTP sent to your registered phone"),
               ),
               React.createElement(
                 "div",
@@ -719,7 +719,7 @@ const NetworkScanScreen = ({ onConnected, onCancel, isWFH, userRole }) => {
                       paddingTop: 6,
                     },
                   },
-                  "\u26A1 Home WiFi or Mobile Data (with OTP verification)",
+                  llqaLabel("\u26A1 Home WiFi or Mobile Data (with OTP verification)"),
                 ),
             ),
             React.createElement(

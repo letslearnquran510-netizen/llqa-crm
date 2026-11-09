@@ -865,7 +865,7 @@ const ProcurementMod = ({
       Table(
         rows,
         invCols,
-        "All items are above their reorder point \u2014 nothing to restock. \u{1F389}",
+        "All items are above their reorder point \u2014 nothing to restock.",
       ),
     );
   } else if (tab === "suppliers") {

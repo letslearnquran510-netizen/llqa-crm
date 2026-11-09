@@ -1401,8 +1401,8 @@ const SalesMod = ({
           React.createElement(
             "summary",
             { style: { cursor: "pointer", color: c.accent, fontWeight: 600, lineHeight: 1.5 } },
-            "🕐 " + clock.length + " class" + (clock.length === 1 ? " is" : "es are") +
-              " still on the Pakistan time from before the student's clock change, so the family's local time has moved. Tell these families, or move the classes in Class Shifting.",
+            llqaLabel("🕐 " + clock.length + " class" + (clock.length === 1 ? " is" : "es are") +
+              " still on the Pakistan time from before the student's clock change, so the family's local time has moved. Tell these families, or move the classes in Class Shifting."),
           ),
           clock.map((x, i) =>
             React.createElement(
@@ -1571,8 +1571,8 @@ const SalesMod = ({
         ["clock", "🕐 Clock Changes" + (llqaTabBadge("clock") ? " · " + llqaTabBadge("clock") : "")],
         // v67
         ["leads", "🎯 Leads" + (llqaTabBadge("leads") ? " · " + llqaTabBadge("leads") : "")],
-        ["revenue", "📈 Revenue & churn"],
-        ["winback", "↩ Win-back & referrals" + (llqaTabBadge("winback") ? " · " + llqaTabBadge("winback") : "")],
+        ["revenue", "📈 Revenue & Churn"],
+        ["winback", "↩ Win-back & Referrals" + (llqaTabBadge("winback") ? " · " + llqaTabBadge("winback") : "")],
       ].map(([k, l]) =>
         React.createElement(
           "button",
@@ -1594,7 +1594,7 @@ const SalesMod = ({
               color: tab === k ? c.accentText : c.textSec,
             },
           },
-          l,
+          llqaTabContent(k, l), // v69: an icon per tab (no emoji)
         ),
       ),
     ),

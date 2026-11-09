@@ -28,7 +28,7 @@ const AttendanceMarkedScreen = ({
         alignItems: "center",
         justifyContent: "center",
         padding: 20,
-        fontFamily: "'Segoe UI',sans-serif",
+        fontFamily: "var(--font)",
       },
     },
     React.createElement(
@@ -150,7 +150,7 @@ const AttendanceMarkedScreen = ({
                 fontWeight: 600,
               },
             },
-            "\uD83D\uDCF7 LIVE",
+            llqaLabel("\uD83D\uDCF7 LIVE"),
           ),
         ),
         React.createElement(
@@ -268,7 +268,7 @@ const AttendanceMarkedScreen = ({
                   color: c.textSec,
                 },
               },
-              k,
+              llqaLabel(k), // v69: line icon, not emoji
             ),
             React.createElement(
               "span",

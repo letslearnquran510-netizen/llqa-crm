@@ -288,7 +288,7 @@ const LLQARescuePanel = () => {
     React.createElement(
       "div",
       { key: "h", style: { color: c.text, fontWeight: 700, marginBottom: 4 } },
-      "🛟 Rescued data — " + T.list.length + " record" + (T.list.length === 1 ? "" : "s") + " from " + devs.length + " computer" + (devs.length === 1 ? "" : "s"),
+      llqaLabel("🛟 Rescued data — " + T.list.length + " record" + (T.list.length === 1 ? "" : "s") + " from " + devs.length + " computer" + (devs.length === 1 ? "" : "s")),
     ),
     React.createElement(
       "div",
@@ -304,7 +304,7 @@ const LLQARescuePanel = () => {
         React.createElement(
           "div",
           { style: { color: c.text, fontWeight: 700 } },
-          (dev === me ? "💻 This computer" : "🖥 " + dev) + " — " + all.length + " records",
+          llqaLabel((dev === me ? "💻 This computer" : "🖥 " + dev) + " — " + all.length + " records"),
         ),
         React.createElement(
           "div",
@@ -373,7 +373,7 @@ const LLQARescueNotice = ({ onOpen }) => {
     React.createElement(
       "div",
       { style: { color: c.accent, fontWeight: 700, fontSize: 12 } },
-      "🛟 " + n + " record" + (n === 1 ? "" : "s") + " from " + pcs + " computer" + (pcs === 1 ? "" : "s") + " waiting",
+      llqaLabel("🛟 " + n + " record" + (n === 1 ? "" : "s") + " from " + pcs + " computer" + (pcs === 1 ? "" : "s") + " waiting"),
     ),
     React.createElement(
       "div",
@@ -508,7 +508,7 @@ const ConnectionBadge = (props) => {
           textAlign: "left",
         },
       },
-      React.createElement("div", { style: { color: c.danger, fontWeight: 700, fontSize: 12 } }, "⚠ " + v.title),
+      React.createElement("div", { style: { color: c.danger, fontWeight: 700, fontSize: 12 } }, llqaLabel("⚠ " + v.title)),
       React.createElement(
         "div",
         { style: { color: c.textSec, fontSize: 11, lineHeight: 1.5, marginTop: 4 } },

@@ -2869,9 +2869,9 @@ const ShiftingMod = ({
                         fontSize: 11,
                       },
                     },
-                    "\u26A0 " +
+                    llqaLabel("\u26A0 " +
                       f.toT +
-                      " has no free slots. Pick a different New Teacher.",
+                      " has no free slots. Pick a different New Teacher."),
                   ),
                 );
               }
@@ -4198,7 +4198,7 @@ const ShiftingMod = ({
                                       fontWeight: 700,
                                     },
                                   },
-                                  "\u26A0 SKIP",
+                                  llqaLabel("\u26A0 SKIP"),
                                 )
                               : React.createElement(
                                   "span",

@@ -607,7 +607,7 @@ const AttendanceMod = ({
                             borderRadius: 4,
                           },
                         },
-                        "\u26A0 Late " + a.lateMin + " min",
+                        llqaLabel("\u26A0 Late " + a.lateMin + " min"),
                       )
                     : React.createElement(
                         "div",

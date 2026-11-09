@@ -24,11 +24,13 @@ function App() {
   const [sysDark, setSysDark] = useState(() => llqaSysDark());
   React.useEffect(() => llqaWatchSys(setSysDark), []);
   const themeUsed = theme === "auto" ? (sysDark ? "dark" : "light") : theme === "light" ? "light" : "dark";
-  const themeVars = React.useMemo(
-    () => llqaThemeVars(themeUsed, appSettings && appSettings.accentColor, appSettings && appSettings.toneMode),
-    [themeUsed, appSettings && appSettings.accentColor, appSettings && appSettings.toneMode],
-  );
-  React.useLayoutEffect(() => llqaPaintTheme(themeUsed, themeVars), [themeUsed, themeVars]);
+  // v69: + background tone (Neutral / Midnight / Warm) and an always-dark sidebar option
+  const llqaAcc = appSettings && appSettings.accentColor, llqaTone = appSettings && appSettings.toneMode;
+  const llqaBack = llqaBackdrop(appSettings && appSettings.backdrop);
+  const themeVars = React.useMemo(() => llqaThemeVars(themeUsed, llqaAcc, llqaTone, llqaBack), [themeUsed, llqaAcc, llqaTone, llqaBack]);
+  React.useLayoutEffect(() => llqaPaintTheme(themeUsed, themeVars, llqaBack), [themeUsed, themeVars, llqaBack]);
+  const llqaSideDark = (appSettings && appSettings.sidebarStyle) === "dark" && themeUsed === "light";
+  const llqaSideVars = React.useMemo(() => (llqaSideDark ? llqaThemeVars("dark", llqaAcc, llqaTone, llqaBack, false) : null), [llqaSideDark, llqaAcc, llqaTone, llqaBack]);
   React.useEffect(() => {
     const d = (appSettings && appSettings.density) || "Normal";
     const fs = (appSettings && appSettings.fontSize) || "Medium";
@@ -837,18 +839,21 @@ function App() {
       style: {
         display: "flex",
         minHeight: "100vh",
-        background: c.bg,
-        fontFamily: "'Segoe UI',sans-serif",
+        background: "transparent", // v69: the page background (with its soft glow) shows through
+        fontFamily: "var(--font)",
         color: c.text,
       },
     },
     React.createElement(
       "div",
       {
+        // v69: "Always dark" sidebar — its own theme scope, colours tuned for dark
+        ...(llqaSideDark ? { "data-theme": "dark", "data-backdrop": llqaBack } : {}),
         style: {
+          ...(llqaSideDark ? llqaVarStyle(llqaSideVars) : {}),
           width: open ? 210 : 54,
           minHeight: "100vh",
-          background: c.bgDeep,
+          background: llqaSideDark ? "linear-gradient(" + c.bgDeep + ", " + c.bgDeep + "), " + c.bg : c.bgDeep,
           borderRight: "1px solid " + c.border,
           display: "flex",
           flexDirection: "column",
@@ -1378,7 +1383,8 @@ function App() {
                   fontSize: 11,
                 },
               },
-              themeUsed === "dark" ? "🌙" : "☀️",
+              // v69: line icons (were emoji)
+              React.createElement(llqaIcon(themeUsed === "dark" ? "moon" : "sun"), { size: 12, color: themeUsed === "dark" ? "#c7d2fe" : "#d97706", strokeWidth: 2.25, "aria-hidden": true }),
             ),
           ),
           React.createElement(

@@ -712,7 +712,7 @@ const AccountsPMod = ({ apLiabilities, setApLiabilities }) => {
             render: (l) => stBadge(l),
           },
         ],
-        "Nothing outstanding \u2014 all payables are settled. \u{1F389}",
+        "Nothing outstanding \u2014 all payables are settled.",
       ),
     );
   } else if (tab === "vendors") {
