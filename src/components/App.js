@@ -80,10 +80,10 @@ function App() {
     "settings/portalAccess",
     DEFAULT_ACCESS,
   );
-  const [attendanceHistory, setAttendanceHistory] = useFirestoreDoc(
-    "data/attendanceHistory",
-    initAttHist,
-  );
+  // v72: attendance by month in 16 parts (attendance/…, see useLLQAAttendance); the single document used before
+  // is only read, for the days the months don't have
+  const [attendanceLegacy] = useFirestoreDoc("data/attendanceHistory", initAttHist);
+  const [attendanceHistory, setAttendanceHistory, attNeed] = useLLQAAttendance(user, attendanceLegacy);
   // v71: payroll approvals, payments, advances and bonuses are kept in the cloud (they were lost on every reload)
   const [payrollHistory, setPayrollHistory] = useFirestoreDoc("data/payrollHistory", {});
   const [leaves, setLeaves] = useFirestoreCollection("leaves", []);
@@ -301,53 +301,45 @@ function App() {
     }
   }, [user, access, page]);
   React.useEffect(() => {
-    if (!user || (user.role !== "teacher" && user.role !== "teamlead")) return;
+    // v72: attendance and fines go by the web server's time, not this computer's clock (checked now and every 10 min)
+    llqaSyncClock();
+    const id = setInterval(llqaSyncClock, 600000);
+    return () => clearInterval(id);
+  }, []);
 
-    const sendHeartbeat = () => {
-      // v64.3: never write attendance before it has arrived from the cloud
-      if (!LLQACloud.ready("doc:data/attendanceHistory")) return;
-      const today = todayPK();
-      const now = new Date();
-      const pkNow = new Date(
-        now.toLocaleString("en-US", { timeZone: "Asia/Karachi" }),
-      );
-      const timeNow =
-        String(pkNow.getHours()).padStart(2, "0") +
-        ":" +
-        String(pkNow.getMinutes()).padStart(2, "0");
-
-      setAttendanceHistory((prev) => {
-        if (!prev) return prev;
-        const newHist = { ...prev };
-        const uid = user.id || user.teacherId;
-        const userRecs = [...(newHist[uid] || [])];
-        const recIdx = userRecs.findIndex((h) => h.date === today);
-        if (
-          recIdx > -1 &&
-          userRecs[recIdx].status === "Present" &&
-          (userRecs[recIdx].checkOut === "?" ||
-            userRecs[recIdx].checkOut === "-" ||
-            !userRecs[recIdx].checkOut)
-        ) {
-          userRecs[recIdx] = { ...userRecs[recIdx], lastActive: timeNow };
-          newHist[uid] = userRecs;
-          return newHist;
-        }
-        return prev;
-      });
+  React.useEffect(() => {
+    // v72: a teacher's CRM notes "open now" every 2 minutes (and when the tab is hidden or closed) in
+    // presence/<office day> — small, apart from attendance, so it no longer rewrites everyone's attendance for every
+    // open screen. Signed out earlier (in another tab, or before coming back) and still working before the exit: the
+    // day opens again.
+    if (!user || user.role !== "teacher") return;
+    const uid = String(user.id != null ? user.id : user.teacherId);
+    llqaPresencePrune();
+    const beat = () => {
+      try {
+        const set = (LLQAApp.ctx && LLQAApp.ctx.appSettings) || appSettings;
+        const t = ((LLQAApp.ctx && LLQAApp.ctx.teachers) || teachers || []).find((x) => String(x.id) === uid);
+        const nowMs = llqaNowMs();
+        const od = llqaOfficeDay(llqaOffice(t, set), nowMs);
+        if (!od) return;
+        llqaPresenceBeat(uid, od.date, nowMs, llqaFineRules(set).silenceMin);
+        if (nowMs >= od.endMs || !llqaAttReady()) return;
+        const h = (llqaAttView()[uid] || []).find((x) => x.date === od.date);
+        if (!h || h.signOut !== "manual" || llqaIsOpen(h)) return;
+        llqaAttWrite((prev) => {
+          const list = prev[uid] || [];
+          const i = list.findIndex((x) => x.date === od.date);
+          if (i < 0 || list[i].signOut !== "manual" || llqaIsOpen(list[i])) return prev;
+          return { ...prev, [uid]: list.map((x, j) => (j === i ? llqaWithFine(llqaReopenDay(x), set, "CRM", "back at " + llqaHm12(llqaPkHm(nowMs)) + " (signed out at " + llqaHm12(x.checkOut) + ")") : x)) };
+        });
+      } catch (e) {}
     };
-
-    const intervalId = setInterval(sendHeartbeat, 300000); // 5 minutes
-
+    const intervalId = setInterval(beat, 120000);
     const handleVisibility = () => {
-      if (document.visibilityState === "hidden") {
-        sendHeartbeat();
-      }
+      if (document.visibilityState === "hidden") beat();
     };
     document.addEventListener("visibilitychange", handleVisibility);
-
-    sendHeartbeat();
-
+    beat();
     return () => {
       clearInterval(intervalId);
       document.removeEventListener("visibilitychange", handleVisibility);
@@ -355,92 +347,57 @@ function App() {
   }, [user]);
 
   React.useEffect(() => {
-    if (!user || user.role !== "superadmin") return;
-
-    const runDaemon = () => {
-      // v64.3: never write attendance before it has arrived from the cloud
-      if (!LLQACloud.ready("doc:data/attendanceHistory")) return;
-      setAttendanceHistory((prev) => {
-        if (!prev) return prev;
-        const now = new Date();
-        const pkNow = new Date(
-          now.toLocaleString("en-US", { timeZone: "Asia/Karachi" }),
-        );
-        const currentTotalM = pkNow.getHours() * 60 + pkNow.getMinutes();
-        const today = todayPK();
-
-        let changed = false;
-        const newHist = { ...prev };
-
-        Object.keys(newHist).forEach((tId) => {
-          const recs = newHist[tId] || [];
-          let teacherChanged = false;
-          for (let i = 0; i < recs.length; i++) {
-            const r = recs[i];
-            if (
-              r.status === "Present" &&
-              (r.checkOut === "?" || r.checkOut === "-" || !r.checkOut)
-            ) {
-              let shouldCheckout = false;
-              let finalOut = "";
-
-              if (r.date < today) {
-                shouldCheckout = true;
-                if (r.lastActive) {
-                  finalOut = r.lastActive;
-                } else {
-                  let sH = 8,
-                    sM = 0;
-                  if (r.checkIn && r.checkIn.includes(":")) {
-                    sH = parseInt(r.checkIn.split(":")[0], 10) || 8;
-                    sM = parseInt(r.checkIn.split(":")[1], 10) || 0;
-                  }
-                  finalOut =
-                    String((sH + 8) % 24).padStart(2, "0") +
-                    ":" +
-                    String(sM).padStart(2, "0");
-                }
-              } else if (r.date === today) {
-                if (r.lastActive) {
-                  const parts = r.lastActive.split(":");
-                  const activeM =
-                    parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
-                  if (currentTotalM - activeM > 90) {
-                    shouldCheckout = true;
-                    finalOut = r.lastActive;
-                  }
-                } else if (r.checkIn && r.checkIn.includes(":")) {
-                  const parts = r.checkIn.split(":");
-                  const inH = parseInt(parts[0], 10) || 8;
-                  const inM = parseInt(parts[1], 10) || 0;
-                  const inTotal = inH * 60 + inM;
-                  if (currentTotalM - inTotal > 9 * 60) {
-                    shouldCheckout = true;
-                    finalOut =
-                      String((inH + 8) % 24).padStart(2, "0") +
-                      ":" +
-                      String(inM).padStart(2, "0");
-                  }
-                }
-              }
-
-              if (shouldCheckout) {
-                recs[i] = { ...r, checkOut: finalOut };
-                teacherChanged = true;
-                changed = true;
-              }
-            }
-          }
-          if (teacherChanged) newHist[tId] = [...recs];
-        });
-
-        return changed ? newHist : prev;
+    // v72: a few minutes after the exit time the CRM signs the teacher out by itself and closes the day from what it
+    // saw (leaving earlier — the CRM closed before the exit — is fined by the minute). To keep working the teacher
+    // signs in again; the day stays closed.
+    if (!user || user.role !== "teacher") return;
+    const uid = String(user.id != null ? user.id : user.teacherId);
+    let busy = false;
+    const tick = async () => {
+      if (busy || !llqaAttReady()) return;
+      const set = (LLQAApp.ctx && LLQAApp.ctx.appSettings) || appSettings;
+      const recs = llqaAttView()[uid] || [];
+      const r = recs[llqaOpenRecIdx(recs, llqaPkDate(llqaNowMs()))];
+      if (!r || !r.officeStart || !r.officeEnd) return;
+      const rules = llqaFineRules(set);
+      const endMs = llqaPkMs(r.date, r.officeStart) + llqaShiftLen({ start: r.officeStart, end: r.officeEnd }) * 60000;
+      if (llqaNowMs() < endMs + rules.autoOutMin * 60000) return;
+      busy = true;
+      try {
+        await LLQAPresence.fetchDay(r.date);
+      } catch (e) {}
+      const t = ((LLQAApp.ctx && LLQAApp.ctx.teachers) || teachers || []).find((x) => String(x.id) === uid);
+      llqaAttWrite((prev) => {
+        const list = prev[uid] || [];
+        const i = list.findIndex((h) => h.date === r.date);
+        if (i < 0 || !llqaIsOpen(list[i])) return prev;
+        const closed = llqaCloseDay(list[i], t, set, LLQAPresence.spans(r.date, uid, rules.silenceMin), llqaNowMs(), "auto");
+        const why = closed.unknownOut ? "signed out by the CRM — no record of when they left" : closed.earlyMin ? "CRM last open " + llqaHm12(closed.checkOut) + ", " + closed.earlyMin + " min before " + llqaHm12(closed.officeEnd) : "signed out by the CRM after the exit time";
+        return { ...prev, [uid]: list.map((h, j) => (j === i ? llqaWithFine(closed, set, "CRM", why) : h)) };
       });
+      try {
+        llqaToast({ text: "Your office time ended at " + llqaHm12(r.officeEnd) + " — you were signed out. Sign in again to keep working.", ttl: 15000 });
+      } catch (e) {}
+      logout("auto");
     };
+    const id = setInterval(tick, 30000);
+    tick();
+    return () => clearInterval(id);
+  }, [user]);
 
+  React.useEffect(() => {
+    // v72: the admin's screen closes days whose exit time has passed (+ the "gone" minutes), from when each teacher's
+    // CRM was last open: leaving early and time away are fined by the minute; with no sign of them at all, nothing
+    // is fined. Days from before v72 close the old way, without a fine. A tab with an older version does nothing.
+    if (!user || user.role !== "superadmin") return;
+    const runDaemon = () => {
+      if (typeof LLQAUI !== "undefined" && LLQAUI.stale) return;
+      const set = (LLQAApp.ctx && LLQAApp.ctx.appSettings) || appSettings;
+      const list = [...((LLQAApp.ctx && LLQAApp.ctx.teachers) || teachers || [])];
+      llqaCloseFinished(list, set, "CRM", false).catch(() => {});
+    };
     const initialTimeout = setTimeout(runDaemon, 10000);
-    const intervalId = setInterval(runDaemon, 1800000);
-
+    const intervalId = setInterval(runDaemon, 300000); // every 5 minutes (it was every 30)
     return () => {
       clearTimeout(initialTimeout);
       clearInterval(intervalId);
@@ -467,117 +424,75 @@ function App() {
                 : "dashboard",
         );
         if (u.role === "teacher" || u.role === "teamlead") {
-          const today = todayPK();
-          const exists = (autoAttendance || []).find(
-            (a) =>
-              (a.userId === u.id || a.userId === u.teacherId) &&
-              a.date === today,
-          );
-          if (!exists) {
-            const onLeave = (leaves || []).find(
-              (lv) =>
-                lv.teacherId === u.id &&
-                lv.status === "approved" &&
-                lv.from <= today &&
-                lv.to >= today,
+          // v72: a teacher's office day (their own hours, else their shift's) is worked out on the real clock;
+          // signing in after the start is late by every minute, fined at the academy's rate (it was always Rs 0
+          // here). A day off is never fined; outside office hours no attendance is made. The day is written once the
+          // teacher's attendance has come from the cloud (never on top of an old copy). A team lead's sign-in is
+          // logged (it was saved for no one: team leads had no id), without fines.
+          const isT = u.role === "teacher";
+          const lead = isT ? null : (teamLeads || []).find((x) => x.name === u.name);
+          const uid = isT ? String(u.id != null ? u.id : u.teacherId) : "tl:" + (lead ? lead.id : u.name);
+          const t = isT ? (teachers || []).find((x) => String(x.id) === uid) : lead;
+          const set = appSettings;
+          const nowMs = llqaNowMs();
+          const off = llqaOffice(t, set);
+          const od = isT ? llqaOfficeDay(off, nowMs) : { date: llqaPkDate(nowMs), after: 0, len: 0, endMs: nowMs };
+          const onLeave =
+            od &&
+            (leaves || []).find(
+              (lv) => isT && String(lv.teacherId) === uid && lv.status === "approved" && lv.from <= od.date && lv.to >= od.date,
             );
-            if (!onLeave) {
-              const now = new Date();
-              const pkNow = new Date(
-                now.toLocaleString("en-US", {
-                  timeZone: "Asia/Karachi",
+          if (od && !onLeave) {
+            const timeIn = llqaPkHm(nowMs);
+            const rules = llqaFineRules(set);
+            const wd = isT ? llqaWorkDay(t, od.date, set) : { ok: true };
+            const lateMin = isT && wd.ok && od.after > 0 ? Math.min(od.after, od.len) : 0;
+            const status = lateMin > rules.grace ? "Late" : "Present";
+            if (!(autoAttendance || []).some((a) => String(a.userId) === uid && a.date === od.date))
+              setAutoAttendance([
+                ...(autoAttendance || []),
+                {
+                  id: Date.now() + Math.floor(Math.random() * 1000),
+                  userId: uid,
+                  userName: u.name,
+                  role: u.role,
+                  date: od.date,
+                  timeIn: timeIn,
+                  status: status,
+                  lateMin: lateMin,
+                  shiftStart: isT ? off.start : "—",
+                  shiftName: isT ? (off.own ? "Own hours" : off.shift) : "",
+                  location: (t && t.location) || "-",
+                  method: "auto-login",
+                },
+              ]);
+            if (isT)
+              llqaWhenAttReady([llqaAttPath(od.date.slice(0, 7), llqaAttPart(uid))], () =>
+                llqaAttWrite((prev) => {
+                  const list = prev[uid] || [];
+                  const i = list.findIndex((h) => h.date === od.date);
+                  if (i < 0)
+                    return {
+                      ...prev,
+                      [uid]: list.concat([
+                        llqaWithFine(
+                          { date: od.date, status, checkIn: timeIn, checkOut: "?", lateMin, earlyMin: 0, officeStart: off.start, officeEnd: off.end, offDay: wd.ok ? "" : wd.why, device: "Teacher Portal", via: "portal", approved: true },
+                          set,
+                          "CRM",
+                          !wd.ok ? "signed in on a day off (" + wd.why + ")" : lateMin ? "signed in " + llqaHm12(timeIn) + ", " + lateMin + " min after " + llqaHm12(off.start) : "signed in on time",
+                        ),
+                      ]),
+                    };
+                  const h = list[i];
+                  // signed out before the exit and back again: the day opens again
+                  if (h.signOut === "manual" && !llqaIsOpen(h) && llqaNowMs() < od.endMs)
+                    return { ...prev, [uid]: list.map((x, j) => (j === i ? llqaWithFine(llqaReopenDay(x), set, "CRM", "signed in again at " + llqaHm12(timeIn)) : x)) };
+                  // marked by hand earlier today: from now the CRM follows them too (the hand-marked times stay)
+                  if (h.device === "Admin Panel" && (h.status === "Present" || h.status === "Late") && !h.via && !llqaIsOpen(h) && llqaHm2m(h.checkOut) == null && llqaNowMs() < od.endMs)
+                    return { ...prev, [uid]: list.map((x, j) => (j === i ? { ...x, checkIn: llqaHm2m(x.checkIn) != null ? x.checkIn : timeIn, checkOut: "?", via: "portal", portalIn: timeIn } : x)) };
+                  return prev;
                 }),
               );
-              const hh = pkNow.getHours();
-              const mm = pkNow.getMinutes();
-              const timeIn =
-                String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
-              const t = teachers.find((tt) => tt.id === u.id);
-              let shiftStartH = 0,
-                shiftStartM = 0,
-                shiftName = "";
-              try {
-                const shifts = Object.keys(TT_DATA || {});
-                for (const sn of shifts) {
-                  const sd = TT_DATA[sn];
-                  if (
-                    sd &&
-                    sd.teachers &&
-                    sd.teachers.find(
-                      (tt) => tt.name === u.name || tt.code === (t && t.code),
-                    )
-                  ) {
-                    shiftName = sn;
-                    const firstSlot = sd.slots && sd.slots[0];
-                    if (firstSlot) {
-                      const parts = firstSlot.split(":");
-                      shiftStartH = parseInt(parts[0], 10) || 0;
-                      shiftStartM = parseInt(parts[1], 10) || 0;
-                    }
-                    break;
-                  }
-                }
-              } catch (_) {}
-              // v66.2: a teacher added in the CRM starts at their own shift's first slot
-              if (!shiftName && llqaShiftStart(t)) {
-                const parts = llqaShiftStart(t).split(":");
-                shiftName = String(t.shift).split(",").map((x) => x.trim()).find((x) => TT_DATA[x]) || String(t.shift);
-                shiftStartH = parseInt(parts[0], 10) || 0;
-                shiftStartM = parseInt(parts[1], 10) || 0;
-              }
-              if (!shiftName) {
-                if (t && t.location === "IBA") {
-                  shiftStartH = 0;
-                } else if (t && t.location === "WFH") {
-                  shiftStartH = 16;
-                }
-              }
-              const lateThr = (appSettings && appSettings.lateThreshold) || 10;
-              const startMin = shiftStartH * 60 + shiftStartM;
-              const nowMin = hh * 60 + mm;
-              const diff = llqaLateBy(nowMin, startMin); // v66.2: across midnight (23:50 for a 00:00 shift is early)
-              let status = "Present";
-              let lateMin = 0;
-              if (diff > lateThr) {
-                status = "Late";
-                lateMin = diff;
-              }
-              const rec = {
-                id: Date.now() + Math.floor(Math.random() * 1000),
-                userId: u.id || u.teacherId,
-                userName: u.name,
-                role: u.role,
-                date: today,
-                timeIn: timeIn,
-                status: status,
-                lateMin: lateMin,
-                shiftStart:
-                  String(shiftStartH).padStart(2, "0") +
-                  ":" +
-                  String(shiftStartM).padStart(2, "0"),
-                shiftName: shiftName || "Default",
-                location: (t && t.location) || "-",
-                method: "auto-login",
-              };
-              setAutoAttendance([...(autoAttendance || []), rec]);
-              const newHist = { ...attendanceHistory };
-              newHist[u.id || u.teacherId] = (
-                newHist[u.id || u.teacherId] || []
-              )
-                .filter((h) => h.date !== today)
-                .concat([
-                  {
-                    date: today,
-                    status: status,
-                    checkIn: timeIn,
-                    checkOut: "?",
-                    lateMin: lateMin,
-                    fine: 0,
-                    approved: true,
-                  },
-                ]);
-              setAttendanceHistory(newHist);
-            }
           }
         }
       },
@@ -585,37 +500,26 @@ function App() {
       appSettings: appSettings,
     });
 
-  const logout = () => {
-    if (user && (user.role === "teacher" || user.role === "teamlead")) {
-      const today = todayPK();
-      const now = new Date();
-      const pkNow = new Date(
-        now.toLocaleString("en-US", { timeZone: "Asia/Karachi" }),
-      );
-      const timeOut =
-        String(pkNow.getHours()).padStart(2, "0") +
-        ":" +
-        String(pkNow.getMinutes()).padStart(2, "0");
-
-      const newHist = { ...attendanceHistory };
-      const uid = user.id || user.teacherId;
-      const userRecs = [...(newHist[uid] || [])];
-      const todayRecIndex = userRecs.findIndex((h) => h.date === today);
-
-      if (todayRecIndex > -1) {
-        if (
-          userRecs[todayRecIndex].checkOut === "?" ||
-          userRecs[todayRecIndex].checkOut === "-" ||
-          !userRecs[todayRecIndex].checkOut
-        ) {
-          userRecs[todayRecIndex] = {
-            ...userRecs[todayRecIndex],
-            checkOut: timeOut,
-          };
-          newHist[uid] = userRecs;
-          setAttendanceHistory(newHist);
+  const logout = function () {
+    // v72: a teacher's open day gets the sign-out time — before the exit that is leaving early, fined by the minute
+    // unless a reason says Don't deduct. logout("auto") is the CRM signing them out after the exit (already closed).
+    if (user && user.role === "teacher" && arguments[0] !== "auto") {
+      const uid = String(user.id != null ? user.id : user.teacherId);
+      const set = (LLQAApp.ctx && LLQAApp.ctx.appSettings) || appSettings;
+      const t = (teachers || []).find((x) => String(x.id) === uid);
+      const nowMs = llqaNowMs();
+      llqaAttWrite((prev) => {
+        const list = prev[uid] || [];
+        const i = llqaOpenRecIdx(list, llqaPkDate(nowMs));
+        if (i < 0) return prev;
+        let rec;
+        if (!list[i].officeStart) rec = { ...list[i], checkOut: llqaPkHm(nowMs), signOut: "manual" }; // a day from before v72
+        else {
+          const closed = llqaCloseDay(list[i], t, set, LLQAPresence.spans(list[i].date, uid, llqaFineRules(set).silenceMin), nowMs, "manual");
+          rec = llqaWithFine(closed, set, user.name || "teacher", closed.earlyMin ? "signed out " + llqaHm12(closed.checkOut) + ", " + closed.earlyMin + " min before " + llqaHm12(closed.officeEnd) : "signed out");
         }
-      }
+        return { ...prev, [uid]: list.map((h, j) => (j === i ? rec : h)) };
+      });
     }
     setUser(null);
     setPage("dashboard");
@@ -644,7 +548,7 @@ function App() {
         setStudents(_mb(students, typeof a === "function" ? a(scStudents) : a))
     : setStudents;
   // v65: what the automation screens and pop-ups read
-  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory, appSettings }); // v71: appSettings (exchange rates for the Autopilot) // v68: Dashboard "Teachers in today"
+  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory, appSettings, attNeed }); // v72: attNeed (older months on request) // v71: appSettings (exchange rates for the Autopilot) // v68: Dashboard "Teachers in today"
   const render = () => {
     switch (page) {
       case "dashboard":
@@ -700,6 +604,9 @@ function App() {
         return React.createElement(SubjectsMod, { teachers, setTeachers });
       case "attendance":
         return React.createElement(AttendanceMod, {
+          appSettings: appSettings, // v72: office times and fines
+          setAppSettings: setAppSettings,
+          setTeachers: setTeachers,
           user: user,
           autoAttendance: autoAttendance,
           setAutoAttendance: setAutoAttendance,
@@ -711,6 +618,7 @@ function App() {
         return React.createElement(PayrollMod, {
           appSettings: appSettings,
           payHistory: payrollHistory, // v71
+          attendanceHistory: attendanceHistory, // v72: attendance fines are deducted
           setPayHistory: setPayrollHistory, // v71
           user: user,
           teachers: teachers,

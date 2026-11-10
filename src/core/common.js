@@ -1438,7 +1438,52 @@ const LLQACloud = (() => {
     });
     replayAll();
   };
-  return { collection, doc, deviceId, retryNow, ready, epochReady, stores: () => stores };
+  // v72: plain reads, merges and listening for small documents written often (when each teacher's CRM was open):
+  // a note that does not arrive is simply sent again with the next one, so none of it waits on this computer
+  const rawRef = (path) => {
+    const i = String(path).indexOf("/");
+    return fb.db.collection(path.slice(0, i)).doc(path.slice(i + 1));
+  };
+  const rawMerge = async (path, data) => {
+    if (!initFirebase()) return false;
+    try {
+      await fbSignIn();
+      await epochReady();
+      if (llqaFrozen) return false;
+      await rawRef(path).set(data, { merge: true });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+  const rawGet = async (path) => {
+    if (!initFirebase()) return null;
+    try {
+      await fbSignIn();
+      await epochReady();
+      const s = await rawRef(path).get();
+      return s.exists ? s.data() || {} : {};
+    } catch (e) {
+      return null;
+    }
+  };
+  const rawListen = (path, cb) => {
+    let off = null, dead = false;
+    if (!initFirebase()) return () => {};
+    (async () => {
+      try {
+        await fbSignIn();
+        await epochReady();
+        if (dead) return;
+        off = rawRef(path).onSnapshot((s) => cb(s.exists ? s.data() || {} : {}), () => {});
+      } catch (e) {}
+    })();
+    return () => {
+      dead = true;
+      if (off) off();
+    };
+  };
+  return { collection, doc, deviceId, retryNow, ready, epochReady, stores: () => stores, rawMerge, rawGet, rawListen };
 })();
 
 const useFirestoreCollection = (collectionName, fallbackData = []) => {
@@ -2583,6 +2628,1097 @@ const LLQAFxCard = ({ settings, update }) => {
   );
 };
 
+/* ============================================================
+   v72: office times and fines that really decide what is deducted
+   - Office start / exit time per shift (Settings → HR & Attendance); a teacher can have their own.
+   - Late, early leaving and time away cost a set rate per minute ("10 minutes = Rs 100" → Rs 10 a minute); every
+     minute counts, no limit. Absent, half day and missed class keep fixed amounts. All of it from Settings.
+   - Which office day a sign-in belongs to is worked out on the real clock (a night shift that starts at 12:00 AM,
+     an evening that ends after midnight); outside office hours (4 h before the start … 4 h after the exit) a
+     sign-in makes no attendance. Days off (Settings → Working on Saturday / Sunday, holidays) are never fined.
+   - When a teacher left is taken from what the CRM saw: their sign-out, or the last time their CRM was open
+     (it notes that every 2 minutes, per computer). With no sign of them at all, nothing is fined automatically.
+   - Every day's fine is worked out from the record (times, minutes, rule) and kept with it, with the reason marked by a
+     lead / manager (once, with Deduct or Don't deduct) and every admin edit (who, when, from → to, why).
+   ============================================================ */
+/* the time attendance and fines use is the web server's, not this computer's clock (a clock set back by hand must not
+   hide late minutes). Every answer from the server carries its time (the "Date" header): the CRM checks it when it
+   opens and every 10 minutes, and goes by it. A second or two is the network, not the clock. */
+const LLQAClock = { offset: 0, at: 0 };
+const llqaNowMs = () => Date.now() + LLQAClock.offset;
+const llqaSyncClock = () => {
+  try {
+    if (typeof location === "undefined" || typeof fetch !== "function" || /^(localhost|127\.0\.0\.1|)$/.test(location.hostname || "")) return Promise.resolve(false);
+    const t0 = Date.now();
+    return fetch(location.pathname + "?clk=" + t0, { method: "HEAD", cache: "no-store" })
+      .then((r) => {
+        const t1 = Date.now();
+        const d = Date.parse((r && r.headers && r.headers.get && r.headers.get("date")) || "");
+        if (!(d > 0) || t1 - t0 > 10000) return false;
+        const off = d + 500 - (t0 + t1) / 2;
+        LLQAClock.offset = Math.abs(off) < 2000 ? 0 : Math.round(off);
+        LLQAClock.at = t1;
+        return true;
+      })
+      .catch(() => false);
+  } catch (e) {
+    return Promise.resolve(false);
+  }
+};
+const LLQA_OFFICE_SHIFTS = ["Morning", "Evening", "Night", "Weekend", "Subject"];
+const LLQA_OFFICE_DEFAULT = {
+  // from the timetable's own slots (first slot → end of the last 30-minute slot); Subject as the old code had it (10:00)
+  Morning: { start: "08:00", end: "16:00" },
+  Evening: { start: "16:00", end: "00:00" },
+  Night: { start: "00:00", end: "08:00" },
+  Weekend: { start: "09:00", end: "17:00" },
+  Subject: { start: "10:00", end: "18:00" },
+};
+const LLQA_WIN = 240; // minutes before the start / after the exit that still belong to that office day
+const llqaHm2m = (s) => {
+  const m = /^(\d{1,2}):(\d{2})/.exec(String(s == null ? "" : s).trim());
+  return m ? (+m[1] % 24) * 60 + Math.min(59, +m[2]) : null;
+};
+const llqaM2hm = (n) => {
+  const v = ((Math.round(n) % 1440) + 1440) % 1440;
+  return String(Math.floor(v / 60)).padStart(2, "0") + ":" + String(v % 60).padStart(2, "0");
+};
+// "17:05" → "5:05 PM" (how the office reads times)
+const llqaHm12 = (s) => {
+  const v = llqaHm2m(s);
+  if (v == null) return String(s || "—");
+  const h = Math.floor(v / 60), m = v % 60;
+  return (h % 12 || 12) + ":" + String(m).padStart(2, "0") + " " + (h < 12 ? "AM" : "PM");
+};
+const llqaShiftOf = (t) => {
+  const s = String((t && t.shift) || "");
+  return LLQA_OFFICE_SHIFTS.find((k) => s.includes(k)) || "Morning";
+};
+// the rules, from Settings (an admin changes them in Settings → HR & Attendance → Office times & fines)
+const llqaFineRules = (settings) => {
+  const s = settings || {};
+  const num = (v, d) => (v === "" || v == null || !(Number(v) >= 0) ? d : Number(v));
+  const rm = Math.max(1, num(s.fineLateMinutes, 10));
+  const ra = num(s.fineLateAmount, 100);
+  return {
+    rateMin: rm,
+    rateAmt: ra,
+    perMin: ra / rm,
+    grace: Math.max(0, Math.floor(num(s.fineGraceMin, 0))),
+    absent: num(s.absentFine, 1500),
+    halfDay: num(s.halfDayFine, 750),
+    missedClass: num(s.missedClassFine, 500),
+    autoOutMin: Math.max(0, Math.floor(num(s.autoSignOutMin, 5))),
+    silenceMin: Math.max(5, Math.floor(num(s.earlySilenceMin, 15))),
+    away: s.fineAway !== false, // time away in the middle of the day (CRM closed that long) is fined too
+    teamLeadReasons: s.fineTeamLeadReasons !== false,
+    times: { ...LLQA_OFFICE_DEFAULT, ...(s.officeTimes || {}) },
+  };
+};
+const llqaRuleText = (r) =>
+  r.rateMin + " min = Rs " + Math.round(r.rateAmt).toLocaleString("en-US") + " (Rs " + (Math.round(r.perMin * 100) / 100).toLocaleString("en-US") + " a minute)" + (r.grace ? ", first " + r.grace + " min free" : "");
+// a teacher's office hours: their own, else their shift's (times left empty, or a start equal to the exit, are not
+// office hours: the shift's — or the timetable's — are used instead of fining a whole day)
+const llqaOkHours = (a, b) => llqaHm2m(a) != null && llqaHm2m(b) != null && llqaHm2m(a) !== llqaHm2m(b);
+const llqaOffice = (t, settings) => {
+  const r = llqaFineRules(settings);
+  const sh = llqaShiftOf(t);
+  const set = r.times[sh];
+  const def = set && llqaOkHours(set.start, set.end) ? set : LLQA_OFFICE_DEFAULT[sh];
+  const own = !!t && llqaOkHours(t.officeStart, t.officeEnd);
+  const start = own ? t.officeStart : def.start, end = own ? t.officeEnd : def.end;
+  return { start, end, shift: sh, own };
+};
+// the length of an office day (an exit at or before the start is the next day: 16:00 → 00:00 is 8 hours)
+const llqaShiftLen = (o) => {
+  const a = llqaHm2m(o.start), b = llqaHm2m(o.end);
+  if (a == null || b == null) return 480;
+  return b > a ? b - a : b + 1440 - a;
+};
+// minutes after the start on a 24-hour clock (0 … 1439)
+const llqaAfterStart = (o, hm) => {
+  const a = llqaHm2m(o.start), b = llqaHm2m(hm);
+  if (a == null || b == null) return null;
+  return (((b - a) % 1440) + 1440) % 1440;
+};
+// late, for a time typed by hand: minutes after the start, at most the whole office day (a time more than 4 hours
+// after the exit is a time before the next start: not late)
+const llqaLateMin = (o, hm) => {
+  const d = llqaAfterStart(o, hm);
+  if (d == null) return 0;
+  const len = llqaShiftLen(o);
+  return d <= len + LLQA_WIN ? Math.min(d, len) : 0;
+};
+// early: minutes before the exit time (0 when the teacher left at or after it)
+const llqaEarlyMin = (o, out) => {
+  const d = llqaAfterStart(o, out);
+  if (d == null) return 0;
+  const len = llqaShiftLen(o);
+  return d < len ? len - d : 0;
+};
+// a moment in Pakistan time (UTC+5, no clock change) and back
+const llqaPkMs = (date, hm) => Date.parse(String(date).slice(0, 10) + "T" + llqaM2hm(llqaHm2m(hm) || 0) + ":00+05:00");
+const llqaPkHm = (ms) => {
+  const d = new Date(ms + 5 * 3600000);
+  return String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0");
+};
+const llqaPkDate = (ms) => new Date(ms + 5 * 3600000).toISOString().slice(0, 10);
+// the office day a moment belongs to: from 4 hours before its start to 4 hours after its exit (an evening that ends
+// after midnight belongs to the day it started; 11:55 PM before a 12:00 AM start belongs to the next day). Outside
+// that: null (signing in then makes no attendance). after = minutes after the start (negative = before it).
+const llqaOfficeDay = (o, ms) => {
+  const a = llqaHm2m(o && o.start);
+  if (a == null || !(ms > 0)) return null;
+  const len = llqaShiftLen(o);
+  const n = llqaHm2m(llqaPkHm(ms));
+  const d = (((n - a) % 1440) + 1440) % 1440;
+  const m0 = Math.floor(ms / 60000) * 60000;
+  let startMs = null, after = 0;
+  if (d <= len + LLQA_WIN) {
+    startMs = m0 - d * 60000;
+    after = d;
+  } else if (1440 - d <= LLQA_WIN) {
+    startMs = m0 + (1440 - d) * 60000;
+    after = d - 1440;
+  } else return null;
+  return { date: llqaPkDate(startMs), startMs, endMs: startMs + len * 60000, after, len };
+};
+// a working day for this teacher? (Settings → Working on Saturday / Sunday; holidays in the calendar; the Weekend
+// shift works Saturday and Sunday)
+const llqaWorkDay = (t, date, settings) => {
+  const s = settings || {};
+  try {
+    const hol = typeof llqaHolidayOn === "function" ? llqaHolidayOn(date, "holiday") : null;
+    if (hol) return { ok: false, why: "holiday" + (hol.name || hol.title ? " (" + (hol.name || hol.title) + ")" : "") };
+  } catch (e) {}
+  const wd = new Date(String(date).slice(0, 10) + "T12:00:00Z").getUTCDay();
+  const name = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"][wd] || "";
+  if (llqaShiftOf(t) === "Weekend") return wd === 0 || wd === 6 ? { ok: true } : { ok: false, why: name + " (Weekend shift)" };
+  if (wd === 6 && s.workingSat === false) return { ok: false, why: "Saturday is not a working day" };
+  if (wd === 0 && s.workingSun === false) return { ok: false, why: "Sunday is not a working day" };
+  return { ok: true };
+};
+/* ---------- when the CRM was open: per office day, per computer, as spans on a two-day clock ----------
+   minute 1440 = 12:00 AM of the office day (so the evening before is 1200…1439, after midnight 2880+):
+   "1435-1530,1545-1678". A new span starts after a gap of the "gone" minutes (Settings, 15 by default). */
+const llqaDayMin = (date, ms) => Math.floor((ms - llqaPkMs(date, "00:00")) / 60000) + 1440;
+const llqaDayMs = (date, m) => llqaPkMs(date, "00:00") + (m - 1440) * 60000;
+const llqaSpans = (s) =>
+  String(s || "")
+    .split(",")
+    .map((p) => {
+      const m = /^\s*(\d+)-(\d+)\s*$/.exec(p);
+      return m && +m[2] >= +m[1] ? [+m[1], +m[2]] : null;
+    })
+    .filter(Boolean);
+const llqaSpanStr = (arr) => arr.map((x) => x[0] + "-" + x[1]).join(",");
+const llqaSpanAdd = (s, m, gap) => {
+  const arr = llqaSpans(s);
+  const last = arr[arr.length - 1];
+  if (last && m <= last[1]) return llqaSpanStr(arr); // nothing new
+  if (last && m - last[1] < gap) last[1] = m;
+  else arr.push([m, m]);
+  return llqaSpanStr(arr.slice(-40));
+};
+// every computer together: spans that overlap or are closer than `gap` join
+const llqaSpanUnion = (strs, gap) => {
+  const all = []
+    .concat(...(strs || []).map(llqaSpans))
+    .sort((a, b) => a[0] - b[0]);
+  const out = [];
+  all.forEach(([a, b]) => {
+    const l = out[out.length - 1];
+    if (l && a - l[1] < gap) l[1] = Math.max(l[1], b);
+    else out.push([a, b]);
+  });
+  return out;
+};
+const llqaIsOpen = (r) => !!r && ["Present", "Late", "Half Day"].includes(r.status) && (r.checkOut === "?" || r.checkOut === "-" || r.checkOut == null || r.checkOut === "");
+// a teacher's day that is still open (signed in, not out): the newest within yesterday … tomorrow
+const llqaOpenRecIdx = (recs, todayStr) => {
+  let best = -1;
+  (recs || []).forEach((r, i) => {
+    if (!llqaIsOpen(r)) return;
+    const diff = Math.abs((Date.parse(r.date + "T00:00:00Z") - Date.parse(todayStr + "T00:00:00Z")) / 864e5);
+    if (diff <= 1 && (best < 0 || String(r.date) > String(recs[best].date))) best = i;
+  });
+  return best;
+};
+// a day closed. how: "manual" (the teacher signed out) / "admin" (an admin checked them out) → they left now;
+// "auto" (signed out by the CRM after the exit) / "silence" (their CRM stayed closed) → they left at the end of the
+// last span that began before the exit. Leaving within 3 minutes of the exit that way counts as a complete day
+// (the CRM notes itself every 2 minutes). Gaps of the "gone" minutes or more inside office hours are time away.
+const llqaCloseDay = (rec, t, settings, spans, nowMs, how) => {
+  const rules = llqaFineRules(settings);
+  const off = llqaOffice(t, settings);
+  const o = { start: rec.officeStart || off.start, end: rec.officeEnd || off.end };
+  const len = llqaShiftLen(o);
+  const startM = 1440 + (llqaHm2m(o.start) || 0);
+  const endM = startM + len;
+  let inM = llqaHm2m(rec.checkIn);
+  if (inM != null) {
+    inM += 1440;
+    if (inM > endM + LLQA_WIN) inM -= 1440;
+    if (inM < startM - LLQA_WIN) inM += 1440;
+  }
+  const sp = (spans || []).filter((x) => Array.isArray(x) && x[1] >= x[0]);
+  const byHand = how === "manual" || how === "admin";
+  let left = null;
+  if (byHand) left = llqaDayMin(rec.date, nowMs);
+  else {
+    sp.forEach(([a, b]) => {
+      if (a < endM && (left == null || b > left)) left = b;
+    });
+    if (left == null && inM != null && sp.length) left = inM;
+  }
+  if (left == null) {
+    // nothing seen of them at all: no automatic fine — an admin can set the time by hand
+    return { ...rec, officeStart: o.start, officeEnd: o.end, checkOut: "—", earlyMin: 0, awayMin: 0, away: "", signOut: how, unknownOut: true };
+  }
+  const complete = byHand ? left >= endM : left >= endM - 3;
+  const earlyMin = complete ? 0 : Math.max(0, endM - left);
+  // time away: gaps between the spans, inside office hours and before they left
+  const lo = Math.max(startM, inM == null ? startM : inM), hi = Math.min(endM, left);
+  let awayMin = 0;
+  const away = [];
+  for (let i = 1; i < sp.length; i++) {
+    const g0 = Math.max(sp[i - 1][1], lo), g1 = Math.min(sp[i][0], hi);
+    if (sp[i][0] - sp[i - 1][1] >= rules.silenceMin && g1 > g0) {
+      awayMin += g1 - g0;
+      if (away.length < 6) away.push(llqaPkHm(llqaDayMs(rec.date, g0)) + "-" + llqaPkHm(llqaDayMs(rec.date, g1)));
+    }
+  }
+  const outMs = llqaDayMs(rec.date, byHand ? left : complete ? endM : left);
+  return {
+    ...rec,
+    officeStart: o.start,
+    officeEnd: o.end,
+    checkOut: llqaPkHm(outMs),
+    earlyMin,
+    awayMin,
+    away: away.join(","),
+    lastSeen: sp.length ? llqaPkHm(llqaDayMs(rec.date, sp[sp.length - 1][1])) : rec.lastSeen || "",
+    signOut: how,
+    unknownOut: false,
+  };
+};
+// signed out (or checked out) before the exit and back again: the day is open again; time away is worked out when
+// it closes
+const llqaReopenDay = (rec) => ({ ...rec, checkOut: "?", earlyMin: 0, awayMin: 0, away: "", signOut: "", unknownOut: false, reopened: (Number(rec.reopened) || 0) + 1 });
+// the rule a day is fined by is the one in force when the day began (kept with it as fineSet): changing the rate
+// later changes the days that begin after it, never days already worked out
+const llqaFineSnap = (settings) => {
+  const r = llqaFineRules(settings);
+  return { m: r.rateMin, a: r.rateAmt, g: r.grace, ab: r.absent, hd: r.halfDay, mc: r.missedClass, aw: r.away };
+};
+const llqaRecRules = (rec, settings) => {
+  const f = rec && rec.fineSet;
+  if (!f || typeof f !== "object") return settings;
+  return { ...(settings || {}), fineLateMinutes: f.m, fineLateAmount: f.a, fineGraceMin: f.g, absentFine: f.ab, halfDayFine: f.hd, missedClassFine: f.mc, fineAway: f.aw !== false };
+};
+// one day's fine, worked out from the record — nothing here is guessed
+const llqaDayFine = (rec, settings) => {
+  const r = llqaFineRules(llqaRecRules(rec, settings));
+  const reasons = (rec && rec.reasons) || {};
+  const waived = (k) => !!(reasons[k] && reasons[k].decision === "waive");
+  const st = String((rec && rec.status) || "");
+  const out = { late: null, early: null, away: null, day: null, total: 0, rule: llqaRuleText(r), off: rec && rec.offDay ? String(rec.offDay) : "" };
+  if (out.off) return out; // a day off (not a working day / holiday): never fined
+  if (st === "Absent") out.day = { kind: "Absent", amount: waived("day") ? 0 : r.absent, full: r.absent, waived: waived("day") };
+  else if (st === "Half Day") out.day = { kind: "Half Day", amount: waived("day") ? 0 : r.halfDay, full: r.halfDay, waived: waived("day") };
+  else if (st === "Missed Class") out.day = { kind: "Missed Class", amount: waived("day") ? 0 : r.missedClass, full: r.missedClass, waived: waived("day") };
+  // minutes count on a working day only (a half day's fine already covers the hours not worked)
+  if (st === "Present" || st === "Late") {
+    const lm = Math.max(0, (Number(rec.lateMin) || 0) - r.grace);
+    if (lm > 0) {
+      const full = Math.round(lm * r.perMin);
+      out.late = { min: Number(rec.lateMin) || 0, counted: lm, amount: waived("late") ? 0 : full, full, waived: waived("late") };
+    }
+    const em = Math.max(0, Number(rec.earlyMin) || 0);
+    if (em > 0) {
+      const full = Math.round(em * r.perMin);
+      out.early = { min: em, amount: waived("early") ? 0 : full, full, waived: waived("early") };
+    }
+    const am = Math.max(0, Number(rec.awayMin) || 0);
+    if (am > 0) {
+      const full = r.away ? Math.round(am * r.perMin) : 0;
+      out.away = { min: am, amount: waived("away") ? 0 : full, full, waived: waived("away"), counted: r.away };
+    }
+  }
+  out.total = (out.day ? out.day.amount : 0) + (out.late ? out.late.amount : 0) + (out.early ? out.early.amount : 0) + (out.away ? out.away.amount : 0);
+  return out;
+};
+// the record with its fine worked out; an admin's own amount (override) wins. Every change of amount is logged.
+const llqaWithFine = (rec, settings, by, why) => {
+  if (!rec) return rec;
+  const base = rec.fineSet && typeof rec.fineSet === "object" ? rec : { ...rec, fineSet: llqaFineSnap(settings) };
+  const calc = llqaDayFine(base, settings);
+  const amount = rec.fineOverride != null && rec.fineOverride !== "" ? Math.max(0, Number(rec.fineOverride) || 0) : calc.total;
+  const next = { ...base, fine: amount, fineRule: calc.rule, fineParts: { late: calc.late ? calc.late.amount : 0, early: calc.early ? calc.early.amount : 0, away: calc.away ? calc.away.amount : 0, day: calc.day ? calc.day.amount : 0 } };
+  if (Number(rec.fine || 0) !== amount) {
+    next.fineLog = [...(rec.fineLog || []), { at: new Date(llqaNowMs()).toISOString(), by: by || "CRM", from: Number(rec.fine || 0), to: amount, why: why || "worked out from the times" }].slice(-12);
+  }
+  return next;
+};
+// now in Pakistan ("HH:MM" and the date)
+const llqaNowPK = () => {
+  const ms = llqaNowMs();
+  return { hm: llqaPkHm(ms), date: llqaPkDate(ms), iso: new Date(ms).toISOString(), ms };
+};
+// "2026-11-10T12:07:00Z" → "10 Nov, 5:07 PM" (Pakistan time)
+const llqaPkWhen = (iso) => {
+  const ms = Date.parse(iso);
+  if (!(ms > 0)) return String(iso || "");
+  const d = llqaPkDate(ms);
+  return Number(d.slice(8, 10)) + " " + ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(d.slice(5, 7)) - 1] + ", " + llqaHm12(llqaPkHm(ms));
+};
+/* ---------- who may do what ---------- */
+const llqaUserCan = (user, perm) => {
+  if (!user) return false;
+  if (user.role === "superadmin") return true;
+  return !!(user.customPermissions && user.customPermissions[perm]);
+};
+// mark a reason (once) and choose Deduct / Don't deduct: admin; a team lead for their own teachers (if allowed);
+// a role given "Mark Late / Early Reasons"
+const llqaCanMarkReason = (user, teacher, settings) => {
+  if (!user) return false;
+  if (user.role === "superadmin" || llqaUserCan(user, "Mark Late / Early Reasons")) return true;
+  if (user.role === "teamlead" && llqaFineRules(settings).teamLeadReasons) {
+    const lead = String((teacher && (teacher.teamLead || teacher.lead)) || "").trim().toLowerCase();
+    return !!lead && lead === String(user.name || "").trim().toLowerCase();
+  }
+  return false;
+};
+// change a reason once marked, or any fine: admin, or a role given "Edit Fines"
+const llqaCanEditFines = (user) => llqaUserCan(user, "Edit Fines");
+// marking a day by hand (P / L / A / leave / half day, check-out, corrections): an admin, or a role given "Mark
+// Attendance". A team lead marks their own teachers' days that have nothing yet; a day already marked or signed in
+// is changed by an admin only (like a reason, it is not changed twice). A teacher never marks their own day.
+const llqaCanMarkAll = (user) => llqaUserCan(user, "Mark Attendance");
+const llqaCanMarkDay = (user, teacher, rec) => {
+  if (llqaCanMarkAll(user)) return true;
+  if (!user || user.role !== "teamlead" || rec) return false;
+  const lead = String((teacher && (teacher.teamLead || teacher.lead)) || "").trim().toLowerCase();
+  return !!lead && lead === String(user.name || "").trim().toLowerCase();
+};
+const llqaCanSetOffice = (user) => llqaUserCan(user, "Set Office Times & Fines");
+
+/* ============================================================
+   v72: attendance kept by month, in 16 parts
+   One cloud document holds at most 1 MB. All attendance in one document (as before) fills it in about two months
+   with ~90 people signing in daily — after that nothing more could be saved — and every "still here" note rewrote
+   it for every open screen. Now:
+   - attendance/2026-11_07 … one document per month per part (a teacher always falls in the same part). A teacher's
+     browser loads only its own part; everyone else loads all parts of this month and last, and older months when a
+     screen asks for them.
+   - data/attendanceHistory (the single document before v72) is still read, for the days the months don't have.
+   - presence/2026-11-10 holds when each teacher's CRM was open that office day (noted every 2 minutes, read by the
+     admin's screens) — small, and kept out of the attendance documents.
+   A change is sent day by day: only the days that changed are written, on top of the newest copy in the cloud, so
+   two people changing different days of the same teacher never undo each other.
+   ============================================================ */
+const LLQA_ATT_PARTS = 16;
+const llqaAttPart = (uid) => {
+  let h = 5381;
+  const s = String(uid);
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 33) ^ s.charCodeAt(i)) >>> 0;
+  return h % LLQA_ATT_PARTS;
+};
+const llqaAttPath = (ym, part) => "attendance/" + ym + "_" + String(part).padStart(2, "0");
+const llqaPrevYm = (ym) => {
+  const y = Number(String(ym).slice(0, 4)), m = Number(String(ym).slice(5, 7));
+  return m <= 1 ? y - 1 + "-12" : y + "-" + String(m - 1).padStart(2, "0");
+};
+// last month, this month — and on a month's last day the next one too (a night shift that starts at 12:00 AM on
+// the 1st is signed in to before midnight)
+const llqaAttBaseMonths = () => {
+  const now = llqaNowMs();
+  const ym = llqaPkDate(now).slice(0, 7), next = llqaPkDate(now + 864e5).slice(0, 7);
+  return next === ym ? [llqaPrevYm(ym), ym] : [llqaPrevYm(ym), ym, next];
+};
+const llqaAttBadKey = (k) => k === "undefined" || k === "null" || k === "";
+// one view of everything loaded: {teacherId: [day records, oldest first]}; the month parts win over the old document
+const llqaAttMerge = (parts, legacy) => {
+  const by = {};
+  const put = (uid, r, keep) => {
+    if (llqaAttBadKey(uid) || !r || typeof r !== "object" || !r.date) return;
+    const m = by[uid] || (by[uid] = {});
+    if (keep && m[r.date]) return;
+    m[r.date] = r;
+  };
+  (parts || []).forEach((d) =>
+    Object.keys(d || {}).forEach((uid) => {
+      if (Array.isArray(d[uid])) d[uid].forEach((r) => put(uid, r, false));
+    }),
+  );
+  Object.keys(legacy || {}).forEach((uid) => {
+    if (Array.isArray(legacy[uid])) legacy[uid].forEach((r) => put(uid, r, true));
+  });
+  const out = {};
+  Object.keys(by).forEach((uid) => {
+    out[uid] = Object.keys(by[uid])
+      .sort()
+      .map((d) => by[uid][d]);
+  });
+  return out;
+};
+// what changed between two views, day by day, grouped by the document each day lives in:
+// {path: {teacherId: {put: {date: record}, del: [dates]}}}
+const llqaAttDiff = (base, next) => {
+  const out = {};
+  const uids = new Set([...Object.keys(base || {}), ...Object.keys(next || {})]);
+  uids.forEach((uid) => {
+    if (llqaAttBadKey(uid)) return;
+    const b = {}, n = {};
+    (Array.isArray((base || {})[uid]) ? base[uid] : []).forEach((r) => r && r.date && (b[r.date] = r));
+    (Array.isArray((next || {})[uid]) ? next[uid] : []).forEach((r) => r && r.date && (n[r.date] = r));
+    const slot = (date) => {
+      const p = llqaAttPath(String(date).slice(0, 7), llqaAttPart(uid));
+      const at = (out[p] = out[p] || {});
+      return (at[uid] = at[uid] || { put: {}, del: [] });
+    };
+    Object.keys(n).forEach((d) => {
+      if (!b[d] || llqaStable(b[d]) !== llqaStable(n[d])) slot(d).put[d] = n[d];
+    });
+    Object.keys(b).forEach((d) => {
+      if (!n[d]) slot(d).del.push(d);
+    });
+  });
+  return out;
+};
+// one document with the changes made (other days and other people exactly as they are now in the cloud)
+const llqaAttApply = (data, changes) => {
+  const next = { ...(data || {}) };
+  Object.keys(changes || {}).forEach((uid) => {
+    const ch = changes[uid];
+    const m = {};
+    (Array.isArray(next[uid]) ? next[uid] : []).forEach((r) => r && r.date && (m[r.date] = r));
+    (ch.del || []).forEach((d) => delete m[d]);
+    Object.keys(ch.put || {}).forEach((d) => (m[d] = ch.put[d]));
+    const arr = Object.keys(m)
+      .sort()
+      .map((d) => m[d]);
+    if (arr.length) next[uid] = arr;
+    else delete next[uid];
+  });
+  return next;
+};
+const LLQAAtt = { paths: [], legacy: {}, need: null };
+const llqaAttView = () => llqaAttMerge(LLQAAtt.paths.map((p) => LLQACloud.doc(p, {}).data), LLQAAtt.legacy);
+const llqaAttReady = (paths) => (paths || LLQAAtt.paths).every((p) => LLQACloud.ready("doc:" + p));
+// a document's changes are written once its newest copy has come from the cloud (never on top of an old copy)
+const llqaAttSend = (path, changes, tries) => {
+  const st = LLQACloud.doc(path, {});
+  st.start();
+  if (!LLQACloud.ready("doc:" + path)) {
+    if ((tries || 0) < 300) setTimeout(() => llqaAttSend(path, changes, (tries || 0) + 1), 1000);
+    else console.error("Attendance not saved (" + path + "): the cloud did not answer in 5 minutes", changes);
+    return;
+  }
+  st.set((d) => llqaAttApply(d, changes));
+};
+// the setter every screen uses: a new view, or a function of the newest view
+const llqaAttWrite = (v) => {
+  const base = llqaAttView();
+  const next = typeof v === "function" ? v(base) : v;
+  if (!next || typeof next !== "object" || Array.isArray(next) || next === base) return;
+  const diff = llqaAttDiff(base, next);
+  Object.keys(diff).forEach((p) => {
+    const ym = p.slice(11, 18);
+    if (typeof LLQAAtt.need === "function") LLQAAtt.need(ym);
+    llqaAttSend(p, diff[p], 0);
+  });
+};
+// run fn once these documents are part of what the screens see and their newest copy has come from the cloud
+const llqaWhenAttReady = (paths, fn, tries) => {
+  paths.forEach((p) => {
+    if (typeof LLQAAtt.need === "function") LLQAAtt.need(p.slice(11, 18));
+    LLQACloud.doc(p, {}).start();
+  });
+  if (paths.every((p) => LLQAAtt.paths.includes(p) && LLQACloud.ready("doc:" + p))) return fn();
+  if ((tries || 0) < 300) setTimeout(() => llqaWhenAttReady(paths, fn, (tries || 0) + 1), 1000);
+  else console.error("Attendance not saved: the cloud did not answer in 5 minutes", paths);
+};
+// days still open whose exit time (+ the "gone" minutes; at once when an admin asks) has passed are closed from when
+// the teacher's CRM was last open. Days from before v72 (no office time kept) close the old way — at the last
+// "still here" time — without a fine.
+const llqaCloseFinished = async (teachersList, settings, by, atOnce) => {
+  if (!llqaAttReady()) return 0;
+  const rules = llqaFineRules(settings);
+  const nowMs = llqaNowMs();
+  const wait = atOnce ? 0 : Math.max(rules.silenceMin, rules.autoOutMin + 5) * 60000;
+  const view = llqaAttView();
+  const todo = [];
+  Object.keys(view).forEach((uid) =>
+    (view[uid] || []).forEach((r) => {
+      if (!llqaIsOpen(r)) return;
+      if (!r.officeStart || !r.officeEnd) {
+        if (String(r.date) < llqaPkDate(nowMs)) todo.push({ uid, date: r.date, old: true });
+        return;
+      }
+      const endMs = llqaPkMs(r.date, r.officeStart) + llqaShiftLen({ start: r.officeStart, end: r.officeEnd }) * 60000;
+      if (nowMs >= endMs + wait) todo.push({ uid, date: r.date });
+    }),
+  );
+  if (!todo.length) return 0;
+  const days = [...new Set(todo.filter((x) => !x.old).map((x) => x.date))];
+  await Promise.all(days.map((d) => LLQAPresence.fetchDay(d)));
+  let n = 0;
+  llqaAttWrite((prev) => {
+    const next = { ...prev };
+    todo.forEach(({ uid, date, old }) => {
+      const list = next[uid] || [];
+      const i = list.findIndex((h) => h.date === date);
+      if (i < 0 || !llqaIsOpen(list[i])) return;
+      let rec;
+      if (old) rec = { ...list[i], checkOut: llqaHm2m(list[i].lastActive) != null ? list[i].lastActive : "—", signOut: "silence" };
+      else {
+        const t = (teachersList || []).find((x) => String(x.id) === String(uid));
+        const closed = llqaCloseDay(list[i], t, settings, LLQAPresence.spans(date, uid, rules.silenceMin), llqaNowMs(), "silence");
+        const why = closed.unknownOut
+          ? "day closed — no record of when they left (not fined)"
+          : closed.earlyMin
+            ? "CRM last open " + llqaHm12(closed.checkOut) + ", " + closed.earlyMin + " min before " + llqaHm12(closed.officeEnd)
+            : closed.awayMin
+              ? "day complete, " + closed.awayMin + " min away"
+              : "day complete";
+        rec = llqaWithFine(closed, settings, by || "CRM", why);
+      }
+      next[uid] = list.map((h, j) => (j === i ? rec : h));
+      n++;
+    });
+    return next;
+  });
+  return n;
+};
+// App: the attendance a signed-in person needs. A teacher: their own part; a parent: none; staff: every part.
+const useLLQAAttendance = (user, legacy) => {
+  const [months, setMonths] = React.useState(llqaAttBaseMonths);
+  const [ver, setVer] = React.useState(0);
+  const own = user && user.role === "teacher" && (user.id != null || user.teacherId != null) ? user.id != null ? user.id : user.teacherId : null;
+  const scope = !user || user.role === "parent" ? "none" : own != null ? "own:" + own : "all"; // a parent loads none
+  const paths = React.useMemo(() => {
+    if (scope === "none") return [];
+    const out = [];
+    months.forEach((ym) => {
+      if (own != null) out.push(llqaAttPath(ym, llqaAttPart(own)));
+      else for (let p = 0; p < LLQA_ATT_PARTS; p++) out.push(llqaAttPath(ym, p));
+    });
+    return out;
+  }, [months.join(","), scope]);
+  LLQAAtt.paths = paths;
+  LLQAAtt.legacy = legacy || {};
+  const key = paths.join("|");
+  React.useEffect(() => {
+    const offs = paths.map((p) => {
+      const st = LLQACloud.doc(p, {});
+      const off = st.subscribe(() => setVer((n) => n + 1));
+      st.start();
+      return off;
+    });
+    setVer((n) => n + 1);
+    return () => offs.forEach((f) => f());
+  }, [key]);
+  const need = React.useCallback((ym) => {
+    if (!/^\d{4}-\d{2}$/.test(String(ym || ""))) return;
+    setMonths((m) => (m.includes(ym) ? m : [...m, ym].sort()));
+  }, []);
+  LLQAAtt.need = need;
+  // a new month begins while the CRM is open
+  React.useEffect(() => {
+    const id = setInterval(() => {
+      const b = llqaAttBaseMonths();
+      setMonths((m) => (b.every((x) => m.includes(x)) ? m : [...new Set([...m, ...b])].sort()));
+    }, 300000);
+    return () => clearInterval(id);
+  }, []);
+  const view = React.useMemo(() => llqaAttMerge(paths.map((p) => LLQACloud.doc(p, {}).data), legacy || {}), [ver, legacy, key]);
+  return [view, llqaAttWrite, need];
+};
+
+/* ---------- when each teacher's CRM was open (presence/<office day>) ---------- */
+const llqaOwnSpans = (uid, date) => {
+  try {
+    return localStorage.getItem("llqa.pres." + uid + "." + date) || "";
+  } catch (e) {
+    return "";
+  }
+};
+// the teacher's own computer notes "open now" (kept on the computer too, so a reload goes on from it)
+const llqaPresenceBeat = (uid, date, ms, gap) => {
+  const cur = llqaOwnSpans(uid, date);
+  const next = llqaSpanAdd(cur, llqaDayMin(date, ms), gap);
+  if (next === cur) return next;
+  try {
+    localStorage.setItem("llqa.pres." + uid + "." + date, next);
+  } catch (e) {}
+  LLQACloud.rawMerge("presence/" + date, { [String(uid)]: { [LLQACloud.deviceId()]: next } });
+  return next;
+};
+// old notes on this computer (more than 3 days) are dropped
+const llqaPresencePrune = () => {
+  try {
+    const old = llqaPkDate(llqaNowMs() - 3 * 864e5);
+    const drop = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      const m = /^llqa\.pres\..+\.(\d{4}-\d{2}-\d{2})$/.exec(k || "");
+      if (m && m[1] < old) drop.push(k);
+    }
+    drop.forEach((k) => localStorage.removeItem(k));
+  } catch (e) {}
+};
+const LLQAPresence = (() => {
+  const data = {}; // office day → {teacherId: {computer: spans}}
+  const live = {}; // office day → stop listening
+  const subs = new Set();
+  const emit = () =>
+    subs.forEach((f) => {
+      try {
+        f();
+      } catch (e) {}
+    });
+  // listen to these office days (the admin's screens: yesterday, today, tomorrow)
+  const watch = (dates) => {
+    Object.keys(live).forEach((d) => {
+      if (!dates.includes(d)) {
+        live[d]();
+        delete live[d];
+      }
+    });
+    dates.forEach((d) => {
+      if (live[d]) return;
+      live[d] = LLQACloud.rawListen("presence/" + d, (v) => {
+        data[d] = v || {};
+        emit();
+      });
+    });
+  };
+  // one day, read once (an older day being closed)
+  const fetchDay = async (d) => {
+    if (live[d] && data[d]) return data[d];
+    try {
+      const v = await LLQACloud.rawGet("presence/" + d);
+      if (v) data[d] = v;
+    } catch (e) {}
+    return data[d] || null;
+  };
+  // a teacher's spans for an office day: every computer together, with this computer's own
+  const spans = (d, uid, gap) => {
+    const per = (data[d] || {})[String(uid)] || {};
+    const strs = Object.keys(per)
+      .map((k) => per[k])
+      .filter((x) => typeof x === "string");
+    const mine = llqaOwnSpans(uid, d);
+    if (mine) strs.push(mine);
+    return llqaSpanUnion(strs, gap);
+  };
+  const known = (d) => !!data[d];
+  return {
+    watch,
+    fetchDay,
+    spans,
+    known,
+    peek: (d) => data[d] || null,
+    subscribe: (f) => {
+      subs.add(f);
+      return () => subs.delete(f);
+    },
+  };
+})();
+// a teacher right now: "here" (their CRM seen in the last few minutes), else when it was last seen today
+const llqaSeen = (uid, date, settings, nowMs) => {
+  const sp = LLQAPresence.spans(date, uid, llqaFineRules(settings).silenceMin);
+  if (!sp.length) return null;
+  const lastMs = llqaDayMs(date, sp[sp.length - 1][1]);
+  return { here: (nowMs || llqaNowMs()) - lastMs < 5 * 60000, at: llqaPkHm(lastMs), spans: sp };
+};
+
+/* ---------- v72: Settings → HR & Attendance → Office times & fines ---------- */
+const llqaTimeInput = (value, onChange, label, key) =>
+  React.createElement("input", {
+    key,
+    type: "time",
+    value: value || "",
+    "aria-label": label,
+    onChange: (e) => onChange(e.target.value),
+    style: { padding: "5px 8px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 5, color: c.text, fontSize: 12 },
+  });
+const llqaNumInput = (value, onChange, label, width, key) =>
+  React.createElement("input", {
+    key,
+    type: "number",
+    min: 0,
+    value: value == null ? "" : value,
+    "aria-label": label,
+    onChange: (e) => onChange(e.target.value),
+    style: { width: width || 80, padding: "6px 10px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 5, color: c.text, fontSize: 12, textAlign: "right" },
+  });
+const LLQAOfficeCard = ({ settings, update, teachers, setTeachers }) => {
+  const r = llqaFineRules(settings);
+  const times = (settings && settings.officeTimes) || {};
+  const pick = ""; // the list always shows its prompt: picking adds at once
+  const setTime = (sh, k, v) => update("officeTimes", { ...times, [sh]: { ...LLQA_OFFICE_DEFAULT[sh], ...(times[sh] || {}), [k]: v } });
+  const own = (teachers || []).filter((t) => llqaOkHours(t.officeStart, t.officeEnd));
+  const noShift = (teachers || []).filter((t) => !own.includes(t) && !LLQA_OFFICE_SHIFTS.some((k) => String(t.shift || "").includes(k)));
+  const setOwn = (id, k, v) => typeof setTeachers === "function" && setTeachers((teachers || []).map((t) => (t.id === id ? { ...t, [k]: v } : t)));
+  const addOwn = (id) => {
+    const t = (teachers || []).find((x) => String(x.id) === String(id));
+    if (!t || typeof setTeachers !== "function") return;
+    const o = llqaOffice(t, settings);
+    setTeachers((teachers || []).map((x) => (x.id === t.id ? { ...x, officeStart: o.start, officeEnd: o.end } : x)));
+  };
+  const row = (label, desc, el, key) => React.createElement(SettingRow, { key, label, desc }, el);
+  const hint = { color: c.textSec, fontSize: 12, lineHeight: 1.5, margin: "0 0 6px" };
+  const head = (t) => React.createElement("div", { style: { fontWeight: 700, fontSize: 12, color: c.text, margin: "14px 0 2px" } }, t);
+  return React.createElement(
+    SettingCard,
+    { title: "Office times & fines", icon: Clock, color: c.danger },
+    React.createElement(
+      "p",
+      { style: hint },
+      "A teacher who signs in after their start time, leaves before their exit time, or is away in between is fined for every minute at your rate. The CRM notes every 2 minutes that a teacher's CRM is open, and signs them out by itself a few minutes after their exit time. When they left comes from their sign-out, or from the last time their CRM was open. Every fine keeps its times, minutes and rule, and a lead or manager can mark a reason with Deduct or Don't deduct. Days off (Working on Saturday / Sunday in Settings → HR & Attendance, and holidays in the calendar) are never fined.",
+    ),
+    head("Office times (Pakistan time)"),
+    LLQA_OFFICE_SHIFTS.map((sh) =>
+      row(
+        sh,
+        sh === "Evening" || sh === "Night" ? "an exit at or before the start is the next day" : sh === "Weekend" ? "Saturday and Sunday" : "",
+        React.createElement(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
+          llqaTimeInput(r.times[sh].start, (v) => setTime(sh, "start", v), sh + " start", "s"),
+          React.createElement("span", { key: "to", style: { color: c.textSec, fontSize: 12 } }, "to"),
+          llqaTimeInput(r.times[sh].end, (v) => setTime(sh, "end", v), sh + " exit", "e"),
+        ),
+        "t-" + sh,
+      ),
+    ),
+    noShift.length > 0 &&
+      React.createElement(
+        "p",
+        { style: { ...hint, color: c.warn, margin: "6px 0 0" } },
+        noShift.length + " teacher" + (noShift.length === 1 ? " has" : "s have") + " no shift, so Morning times are used: " + noShift.slice(0, 5).map((t) => t.name).join(", ") + (noShift.length > 5 ? " …" : "") + ". Set their shift in Teachers, or give them their own hours below.",
+      ),
+    head("Teachers with their own hours"),
+    own.length
+      ? own.map((t) =>
+          row(
+            t.name,
+            t.shift || "",
+            React.createElement(
+              "div",
+              { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
+              llqaTimeInput(t.officeStart, (v) => setOwn(t.id, "officeStart", v), t.name + " start", "s"),
+              React.createElement("span", { key: "to", style: { color: c.textSec, fontSize: 12 } }, "to"),
+              llqaTimeInput(t.officeEnd, (v) => setOwn(t.id, "officeEnd", v), t.name + " exit", "e"),
+              React.createElement(
+                "button",
+                {
+                  key: "x",
+                  type: "button",
+                  onClick: () => typeof setTeachers === "function" && setTeachers((teachers || []).map((x) => (x.id === t.id ? { ...x, officeStart: "", officeEnd: "" } : x))),
+                  style: { padding: "4px 10px", borderRadius: 6, border: "1px solid " + c.border, background: c.bgCard, color: c.textSec, fontSize: 11, cursor: "pointer" },
+                },
+                "Use shift times",
+              ),
+            ),
+            "o-" + t.id,
+          ),
+        )
+      : React.createElement("p", { style: { ...hint, margin: "4px 0 8px" } }, "Everyone uses their shift's times."),
+    (teachers || []).length > own.length &&
+      React.createElement(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: 8, margin: "4px 0 6px", flexWrap: "wrap" } },
+        React.createElement(
+          "div",
+          { style: { minWidth: 220, flex: "0 1 280px" } },
+          React.createElement(LLQASelect, {
+            value: pick,
+            onChange: (e) => addOwn(e.target.value), // picking a teacher gives them their own hours at once (their shift's to start)
+            placeholder: "Give a teacher their own hours…",
+            title: "Give a teacher their own hours",
+            children: [React.createElement("option", { key: "", value: "" }, "Give a teacher their own hours…")].concat(
+              (teachers || []).filter((t) => !own.includes(t)).map((t) => React.createElement("option", { key: t.id, value: String(t.id) }, t.name + " (" + llqaShiftOf(t) + ")")),
+            ),
+          }),
+        ),
+        React.createElement("span", { style: { color: c.textSec, fontSize: 11 } }, "then change their times above"),
+      ),
+    head("Fines (PKR)"),
+    row(
+      "Late, early or away: every minute",
+      "Rs " + (Math.round(r.perMin * 100) / 100).toLocaleString("en-US") + " a minute",
+      React.createElement(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: 6 } },
+        llqaNumInput(settings.fineLateMinutes == null ? 10 : settings.fineLateMinutes, (v) => update("fineLateMinutes", v), "Minutes in the rate", 70, "m"),
+        React.createElement("span", { key: "a", style: { color: c.textSec, fontSize: 12 } }, "min = Rs"),
+        llqaNumInput(settings.fineLateAmount == null ? 100 : settings.fineLateAmount, (v) => update("fineLateAmount", v), "Rupees in the rate", 90, "r"),
+      ),
+      "rate",
+    ),
+    row("Free minutes before a late fine starts", "0 = every minute counts", llqaNumInput(r.grace, (v) => update("fineGraceMin", v), "Free minutes", 70), "grace"),
+    row("Absent (a day)", "", llqaNumInput(r.absent, (v) => update("absentFine", v), "Absent fine", 90), "abs"),
+    row("Half Day", "", llqaNumInput(r.halfDay, (v) => update("halfDayFine", v), "Half day fine", 90), "half"),
+    row("Missed Class", "", llqaNumInput(r.missedClass, (v) => update("missedClassFine", v), "Missed class fine", 90), "miss"),
+    head("Signing out, leaving and time away"),
+    row("Sign a teacher out after their exit time", "minutes after the exit time", llqaNumInput(r.autoOutMin, (v) => update("autoSignOutMin", v), "Minutes after exit", 70), "out"),
+    row("A teacher is gone when their CRM is closed for", "minutes (at least 5)", llqaNumInput(r.silenceMin, (v) => update("earlySilenceMin", v), "Minutes closed", 70), "sil"),
+    row(
+      "Fine time away in the middle of the day",
+      r.away ? "on: CRM closed that long during office hours is fined by the minute" : "off: time away is only recorded",
+      React.createElement(Toggle, { value: r.away, onChange: () => update("fineAway", !r.away) }),
+      "away",
+    ),
+    row(
+      "Team leads mark reasons for their own teachers",
+      "with Deduct or Don't deduct; only an admin can change it afterwards",
+      React.createElement(Toggle, { value: r.teamLeadReasons, onChange: () => update("fineTeamLeadReasons", !r.teamLeadReasons) }),
+      "tl",
+    ),
+  );
+};
+
+/* ---------- v72: Attendance → mark late: when did they sign in? ---------- */
+const LLQALateWindow = ({ teacher, rec, settings, onSave, onClose }) => {
+  const off = llqaOffice(teacher, settings);
+  const o = { start: (rec && rec.officeStart) || off.start, end: (rec && rec.officeEnd) || off.end };
+  const had = rec && llqaHm2m(rec.checkIn) != null ? rec.checkIn : "";
+  const [time, setTime] = React.useState(had || llqaNowPK().hm);
+  const lm = llqaLateMin(o, time);
+  const r = llqaFineRules(llqaRecRules(rec, settings)); // the day's own rate (kept with it)
+  const counted = Math.max(0, lm - r.grace);
+  const amount = Math.round(counted * r.perMin);
+  return React.createElement(
+    "div",
+    { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 1001, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }, onClick: onClose },
+    React.createElement(
+      "div",
+      { role: "dialog", "aria-modal": true, "aria-label": "Mark late", onClick: (e) => e.stopPropagation(), style: { background: c.bgCard, border: "1px solid " + c.border, borderRadius: 14, padding: 20, width: "min(420px, 100%)", boxShadow: c.shadow3d } },
+      React.createElement("h3", { style: { margin: "0 0 4px", fontSize: 15, color: c.text } }, "Mark late — " + ((teacher && teacher.name) || "")),
+      React.createElement("p", { style: { margin: "0 0 12px", fontSize: 12, color: c.textSec } }, "Office time " + llqaHm12(o.start) + " – " + llqaHm12(o.end) + (had ? " · signed in through the portal at " + llqaHm12(had) : "")),
+      React.createElement(
+        "label",
+        { style: { display: "block", color: c.textSec, fontSize: 10, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 } },
+        "Signed in at (Pakistan time)",
+      ),
+      React.createElement("input", {
+        type: "time",
+        value: time,
+        "aria-label": "Signed in at",
+        onChange: (e) => setTime(e.target.value),
+        style: { width: "100%", padding: "8px 10px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 13, boxSizing: "border-box", marginBottom: 10 },
+      }),
+      React.createElement(
+        "div",
+        { style: { fontSize: 13, fontWeight: 600, color: lm > 0 ? c.warn : c.success, marginBottom: 14 } },
+        lm > 0 ? lm + " min late" + (counted !== lm ? " (" + counted + " counted)" : "") + " = Rs " + amount.toLocaleString("en-US") : "On time — this is saved as Present",
+      ),
+      React.createElement(
+        "div",
+        { style: { display: "flex", justifyContent: "flex-end", gap: 8 } },
+        React.createElement(Btn, { variant: "secondary", onClick: onClose }, "Cancel"),
+        React.createElement(Btn, { disabled: llqaHm2m(time) == null, onClick: () => onSave(time, lm) }, lm > 0 ? "Save late" : "Save as Present"),
+      ),
+    ),
+  );
+};
+
+/* ---------- v72: Attendance → Fines & Deductions → every fine, its times, reason and edits ---------- */
+const LLQA_FINE_KIND = { late: "Late", early: "Early", away: "Away", day: "Day" };
+const llqaFineWhy = (rec, settings) => {
+  const d = llqaDayFine(rec, settings);
+  if (d.off) return "Day off (" + d.off + ") — not fined";
+  const bits = [];
+  const rs = (n) => "Rs " + Number(n || 0).toLocaleString("en-US");
+  if (d.day) bits.push(d.day.kind + " " + rs(d.day.full) + (d.day.waived ? " (not deducted)" : ""));
+  if (d.late) bits.push(d.late.min + " min late" + (d.late.counted !== d.late.min ? " (" + d.late.counted + " counted)" : "") + " = " + rs(d.late.full) + (d.late.waived ? " (not deducted)" : ""));
+  if (d.early) bits.push(d.early.min + " min early = " + rs(d.early.full) + (d.early.waived ? " (not deducted)" : ""));
+  if (d.away) bits.push(d.away.min + " min away" + (rec.away ? " (" + String(rec.away).split(",").map((x) => x.split("-").map(llqaHm12).join("–")).join(", ") + ")" : "") + (d.away.counted ? " = " + rs(d.away.full) + (d.away.waived ? " (not deducted)" : "") : " — recorded, not fined"));
+  if (rec && rec.unknownOut) bits.push("no record of when they left — not fined");
+  // a day keeps the rate it began with: say so when it is not today's rate
+  const then = llqaFineRules(llqaRecRules(rec, settings)), now = llqaFineRules(settings);
+  if (rec && rec.fineSet && bits.length && (then.perMin !== now.perMin || then.grace !== now.grace)) bits.push("rate that day: " + llqaRuleText(then));
+  return bits.join(" · ");
+};
+const LLQAFineRecords = ({ teachers, history, setHistory, user, settings, month }) => {
+  const [win, setWin] = React.useState(null); // { kind: "reason"|"edit"|"log", tid, date }
+  const [form, setForm] = React.useState({});
+  const T = teachers || [];
+  const rows = [];
+  T.forEach((t) =>
+    ((history || {})[t.id] || []).forEach((h) => {
+      if (!h || String(h.date || "").slice(0, 7) !== month) return;
+      const d = llqaDayFine(h, settings);
+      if (!(d.day || d.late || d.early || d.away || h.unknownOut || Number(h.fine) > 0 || (h.fineOverride != null && h.fineOverride !== ""))) return;
+      rows.push({ t, h, d });
+    }),
+  );
+  rows.sort((a, b) => String(b.h.date).localeCompare(String(a.h.date)) || String(a.t.name).localeCompare(String(b.t.name)));
+  const canEdit = llqaCanEditFines(user);
+  const who = (user && (user.name || (user.role === "superadmin" ? "Super Admin" : user.role))) || "Admin";
+  const save = (tid, date, fn, why) => {
+    if (typeof setHistory !== "function") return;
+    setHistory((prev) => {
+      const all = { ...(prev || {}) };
+      all[tid] = (all[tid] || []).map((h) => (h.date === date ? llqaWithFine(fn(h), settings, who, why) : h));
+      return all;
+    });
+  };
+  const cur = win && rows.find((x) => String(x.t.id) === String(win.tid) && x.h.date === win.date);
+  const kindsOf = (d) => [d.late && ["late", "Late " + d.late.min + " min"], d.early && ["early", "Left " + d.early.min + " min early"], d.away && d.away.counted && ["away", "Away " + d.away.min + " min"], d.day && ["day", d.day.kind]].filter(Boolean);
+  const th = { padding: "8px 10px", textAlign: "left", color: c.textSec, fontWeight: 600, fontSize: 10, textTransform: "uppercase", borderBottom: "1px solid " + c.border, background: c.bgDeep, whiteSpace: "nowrap" };
+  const td = { padding: "8px 10px", color: c.text, fontSize: 11, borderBottom: "1px solid " + c.border, verticalAlign: "top" };
+  const mini = (label, onClick, key, tone) =>
+    React.createElement(
+      "button",
+      { key, type: "button", onClick, style: { padding: "3px 9px", borderRadius: 6, border: "1px solid " + (tone || c.border), background: c.bgCard, color: tone || c.text, fontSize: 11, cursor: "pointer", marginRight: 4, marginBottom: 2 } },
+      label,
+    );
+  const reasonText = (h) =>
+    Object.entries(h.reasons || {})
+      .map(([k, r]) => (LLQA_FINE_KIND[k] || k) + ": " + r.text + " — " + (r.decision === "waive" ? "don't deduct" : "deduct") + " (" + r.by + (r.changedBy ? "; changed by " + r.changedBy : "") + ")")
+      .join(" · ");
+  const outText = (h) => {
+    if (llqaIsOpen(h)) return "still signed in";
+    if (llqaHm2m(h.checkOut) == null) return "—";
+    return llqaHm12(h.checkOut) + (h.signOut === "auto" ? " (signed out by the CRM)" : h.signOut === "silence" ? " (CRM last open)" : h.signOut === "admin" ? " (by an admin)" : "");
+  };
+  const worked = cur ? llqaDayFine({ ...cur.h, fineOverride: null }, settings).total : 0;
+  return React.createElement(
+    "div",
+    { style: { marginTop: 14 } },
+    React.createElement("h4", { style: { color: c.text, margin: "0 0 4px", fontSize: 13, fontWeight: 600 } }, "Every fine this month, and how it was worked out"),
+    React.createElement("p", { style: { color: c.textSec, fontSize: 11, margin: "0 0 8px" } }, "Rule: " + llqaRuleText(llqaFineRules(settings)) + ". A reason is marked once (with Deduct or Don't deduct); after that only an admin can change it."),
+    React.createElement(
+      "div",
+      { style: { overflowX: "auto", border: "1px solid " + c.border, borderRadius: 10 } },
+      React.createElement(
+        "table",
+        { style: { width: "100%", borderCollapse: "collapse" } },
+        React.createElement("thead", null, React.createElement("tr", null, ["Date", "Teacher", "Office time", "Signed in / out", "How it was worked out", "Fine", "Reason", ""].map((h, i) => React.createElement("th", { key: i, style: th }, h)))),
+        React.createElement(
+          "tbody",
+          null,
+          rows.length
+            ? rows.map(({ t, h, d }) => {
+                const o = { start: h.officeStart || llqaOffice(t, settings).start, end: h.officeEnd || llqaOffice(t, settings).end };
+                const may = llqaCanMarkReason(user, t, settings);
+                const open = kindsOf(d).filter(([k]) => !(h.reasons || {})[k]);
+                return React.createElement(
+                  "tr",
+                  { key: t.id + h.date },
+                  React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, h.date),
+                  React.createElement("td", { style: td }, t.name),
+                  React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, llqaHm12(o.start) + " – " + llqaHm12(o.end)),
+                  React.createElement("td", { style: { ...td, whiteSpace: "nowrap" } }, (llqaHm2m(h.checkIn) != null ? llqaHm12(h.checkIn) : "—") + " / " + outText(h)),
+                  React.createElement("td", { style: td }, llqaFineWhy(h, settings) || "—", h.fineOverride != null && h.fineOverride !== "" ? React.createElement("div", { style: { color: c.warn, fontSize: 10, marginTop: 2 } }, "Admin set Rs " + Number(h.fineOverride).toLocaleString("en-US")) : null),
+                  React.createElement("td", { style: { ...td, fontWeight: 700, whiteSpace: "nowrap" } }, "Rs " + Number(h.fine || 0).toLocaleString("en-US")),
+                  React.createElement("td", { style: { ...td, color: c.textSec, minWidth: 160 } }, reasonText(h) || "—"),
+                  React.createElement(
+                    "td",
+                    { style: { ...td, whiteSpace: "nowrap" } },
+                    may && open.length ? mini("Reason", () => { setForm({ kind: open[0][0], text: "", decision: "deduct" }); setWin({ kind: "reason", tid: t.id, date: h.date }); }, "r") : null,
+                    canEdit ? mini("Edit", () => { setForm({ amount: h.fineOverride != null && h.fineOverride !== "" ? String(h.fineOverride) : "", why: "", kinds: Object.fromEntries(Object.entries(h.reasons || {}).map(([k, r]) => [k, r.decision])) }); setWin({ kind: "edit", tid: t.id, date: h.date }); }, "e") : null,
+                    (h.fineLog || []).length ? mini("History", () => setWin({ kind: "log", tid: t.id, date: h.date }), "l") : null,
+                  ),
+                );
+              })
+            : llqaEmptyRow("No fines this month", "A late sign-in, early leaving, time away, an absence or a half day shows here with its times and rule."),
+        ),
+      ),
+    ),
+    cur &&
+      React.createElement(
+        "div",
+        { style: { position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 1001, display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }, onClick: () => setWin(null) },
+        React.createElement(
+          "div",
+          { role: "dialog", "aria-modal": true, onClick: (e) => e.stopPropagation(), style: { background: c.bgCard, border: "1px solid " + c.border, borderRadius: 14, padding: 20, width: "min(520px, 100%)", maxHeight: "90vh", overflowY: "auto", boxShadow: c.shadow3d } },
+          React.createElement("h3", { style: { margin: "0 0 4px", fontSize: 15, color: c.text } }, win.kind === "reason" ? "Mark a reason" : win.kind === "edit" ? "Edit this fine" : "What changed"),
+          React.createElement("p", { style: { margin: "0 0 12px", fontSize: 12, color: c.textSec } }, cur.t.name + " · " + cur.h.date + " · " + (llqaFineWhy(cur.h, settings) || "no fine")),
+          win.kind === "reason" &&
+            React.createElement(
+              React.Fragment,
+              null,
+              React.createElement(Inp, { label: "For", value: form.kind, onChange: (v) => setForm({ ...form, kind: v }), options: kindsOf(cur.d).filter(([k]) => !(cur.h.reasons || {})[k]).map(([k, l]) => ({ value: k, label: l })) }),
+              React.createElement(Inp, { label: "Reason", value: form.text || "", onChange: (v) => setForm({ ...form, text: v }), placeholder: "e.g. called at 4:50 — power cut at home" }),
+              React.createElement(Inp, { label: "Fine", value: form.decision, onChange: (v) => setForm({ ...form, decision: v }), options: [{ value: "deduct", label: "Deduct fine" }, { value: "waive", label: "Don't deduct" }] }),
+              React.createElement("p", { style: { fontSize: 11, color: c.textSec, margin: "4px 0 12px" } }, "This is saved once. After that only an admin can change it."),
+            ),
+          win.kind === "edit" &&
+            React.createElement(
+              React.Fragment,
+              null,
+              Object.keys(cur.h.reasons || {}).map((k) =>
+                React.createElement(Inp, { key: k, label: (LLQA_FINE_KIND[k] || k) + " — " + cur.h.reasons[k].text, value: (form.kinds || {})[k] || cur.h.reasons[k].decision, onChange: (v) => setForm({ ...form, kinds: { ...(form.kinds || {}), [k]: v } }), options: [{ value: "deduct", label: "Deduct fine" }, { value: "waive", label: "Don't deduct" }] }),
+              ),
+              React.createElement(Inp, { label: "Your own amount for this day (Rs) — leave empty to use the worked-out Rs " + worked.toLocaleString("en-US"), value: form.amount == null ? "" : form.amount, onChange: (v) => setForm({ ...form, amount: v }), type: "number", placeholder: String(worked) }),
+              React.createElement(Inp, { label: "Why (kept with the change)", value: form.why || "", onChange: (v) => setForm({ ...form, why: v }), placeholder: "e.g. teacher's PC failed — checked with the lead" }),
+            ),
+          win.kind === "log" &&
+            React.createElement(
+              "div",
+              { style: { fontSize: 12, color: c.text, marginBottom: 12 } },
+              (cur.h.fineLog || [])
+                .slice()
+                .reverse()
+                .map((l, i) => React.createElement("div", { key: i, style: { padding: "6px 0", borderBottom: "1px solid " + c.border } }, llqaPkWhen(l.at) + " · " + l.by + " · Rs " + Number(l.from).toLocaleString("en-US") + " → Rs " + Number(l.to).toLocaleString("en-US") + " · " + l.why)),
+            ),
+          React.createElement(
+            "div",
+            { style: { display: "flex", justifyContent: "flex-end", gap: 8 } },
+            React.createElement(Btn, { variant: "secondary", onClick: () => setWin(null) }, win.kind === "log" ? "Close" : "Cancel"),
+            win.kind === "reason" &&
+              React.createElement(
+                Btn,
+                {
+                  disabled: !String(form.text || "").trim() || !form.kind,
+                  onClick: () => {
+                    const k = form.kind, text = String(form.text || "").trim();
+                    if (!k || !text || ((cur.h.reasons || {})[k] && !canEdit)) return;
+                    save(cur.t.id, cur.h.date, (h) => ({ ...h, reasons: { ...(h.reasons || {}), [k]: { text, decision: form.decision === "waive" ? "waive" : "deduct", by: who, role: (user && user.role) || "", at: new Date(llqaNowMs()).toISOString() } } }), "reason by " + who + ": " + text + (form.decision === "waive" ? " — don't deduct" : " — deduct"));
+                    setWin(null);
+                  },
+                },
+                "Save reason",
+              ),
+            win.kind === "edit" &&
+              React.createElement(
+                Btn,
+                {
+                  disabled: !String(form.why || "").trim(),
+                  onClick: () => {
+                    const why = String(form.why || "").trim();
+                    if (!why) return;
+                    save(
+                      cur.t.id,
+                      cur.h.date,
+                      (h) => {
+                        const reasons = { ...(h.reasons || {}) };
+                        Object.entries(form.kinds || {}).forEach(([k, v]) => {
+                          if (reasons[k] && reasons[k].decision !== v) reasons[k] = { ...reasons[k], decision: v, changedBy: who, changedAt: new Date(llqaNowMs()).toISOString() };
+                        });
+                        const raw = String(form.amount == null ? "" : form.amount).trim();
+                        const amt = Math.max(0, Math.round(Number(raw) || 0));
+                        const workedNow = llqaDayFine({ ...h, reasons, fineOverride: null }, settings).total;
+                        return { ...h, reasons, fineOverride: raw === "" || amt === workedNow ? null : amt };
+                      },
+                      "edited by " + who + ": " + why,
+                    );
+                    setWin(null);
+                  },
+                },
+                "Save change",
+              ),
+          ),
+        ),
+      ),
+  );
+};
+
 const CC = [
   "#4a7aff",
   "#10b981",
@@ -3654,6 +4790,10 @@ const PERMISSION_TO_MODULE = {
   "View Payroll": ["payroll"],
   "Edit Settings": ["settings"],
   "Export Data": [],
+  "Mark Late / Early Reasons": ["attendance"], // v72: mark a reason once, with Deduct or Don't deduct
+  "Edit Fines": ["attendance"], // v72: change any fine or reason afterwards (always kept in the fine's history)
+  "Set Office Times & Fines": ["attendance"], // v72: office times, the per-minute rate and the other fines
+  "Mark Attendance": ["attendance"], // v72: mark days by hand, check out, correct a day (a teacher never marks their own)
 };
 
 const buildAccessFromPermissions = (permissions) => {

@@ -2524,9 +2524,10 @@ const SettingsMod = ({
               SettingRow,
               {
                 label: "Working on Saturday",
+                desc: "Off: signing in on a Saturday is never fined", // v72
               },
               React.createElement(Toggle, {
-                value: settings.workingSat,
+                value: settings.workingSat !== false, // v72
                 onChange: (v) => update("workingSat", v),
               }),
             ),
@@ -2534,9 +2535,10 @@ const SettingsMod = ({
               SettingRow,
               {
                 label: "Working on Sunday",
+                desc: "Off: signing in on a Sunday is never fined", // v72
               },
               React.createElement(Toggle, {
-                value: settings.workingSun,
+                value: settings.workingSun !== false, // v72
                 onChange: (v) => update("workingSun", v),
               }),
             ),
@@ -2544,7 +2546,7 @@ const SettingsMod = ({
               SettingRow,
               {
                 label: "Late Threshold",
-                desc: "Minutes after shift start before marked late",
+                desc: "Free minutes after the start before a late fine (0 = every minute counts)", // v72
               },
               React.createElement(
                 "div",
@@ -2557,8 +2559,8 @@ const SettingsMod = ({
                 },
                 React.createElement("input", {
                   type: "number",
-                  value: settings.lateThreshold,
-                  onChange: (e) => update("lateThreshold", e.target.value),
+                  value: llqaFineRules(settings).grace, // v72: the free minutes the fines use
+                  onChange: (e) => update("fineGraceMin", e.target.value),
                   style: {
                     width: 60,
                     padding: "6px 10px",
@@ -2583,174 +2585,7 @@ const SettingsMod = ({
               ),
             ),
           ),
-          React.createElement(
-            SettingCard,
-            {
-              title: "Fine Structure (PKR)",
-              icon: DollarSign,
-              color: c.danger,
-            },
-            React.createElement(
-              SettingRow,
-              {
-                label: "Late 10-29 minutes",
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    gap: 5,
-                    alignItems: "center",
-                  },
-                },
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textSec,
-                    },
-                  },
-                  "Rs",
-                ),
-                React.createElement("input", {
-                  type: "number",
-                  value: settings.lateFine10,
-                  onChange: (e) => update("lateFine10", e.target.value),
-                  style: {
-                    width: 80,
-                    padding: "6px 10px",
-                    background: c.bgInput,
-                    border: "1px solid " + c.border,
-                    borderRadius: 5,
-                    color: c.text,
-                    fontSize: 12,
-                    textAlign: "center",
-                  },
-                }),
-              ),
-            ),
-            React.createElement(
-              SettingRow,
-              {
-                label: "Late 30+ minutes",
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    gap: 5,
-                    alignItems: "center",
-                  },
-                },
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textSec,
-                    },
-                  },
-                  "Rs",
-                ),
-                React.createElement("input", {
-                  type: "number",
-                  value: settings.lateFine30,
-                  onChange: (e) => update("lateFine30", e.target.value),
-                  style: {
-                    width: 80,
-                    padding: "6px 10px",
-                    background: c.bgInput,
-                    border: "1px solid " + c.border,
-                    borderRadius: 5,
-                    color: c.text,
-                    fontSize: 12,
-                    textAlign: "center",
-                  },
-                }),
-              ),
-            ),
-            React.createElement(
-              SettingRow,
-              {
-                label: "Absent (1 day salary)",
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    gap: 5,
-                    alignItems: "center",
-                  },
-                },
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textSec,
-                    },
-                  },
-                  "Rs",
-                ),
-                React.createElement("input", {
-                  type: "number",
-                  value: settings.absentFine,
-                  onChange: (e) => update("absentFine", e.target.value),
-                  style: {
-                    width: 80,
-                    padding: "6px 10px",
-                    background: c.bgInput,
-                    border: "1px solid " + c.border,
-                    borderRadius: 5,
-                    color: c.text,
-                    fontSize: 12,
-                    textAlign: "center",
-                  },
-                }),
-              ),
-            ),
-            React.createElement(
-              SettingRow,
-              {
-                label: "Half Day",
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    gap: 5,
-                    alignItems: "center",
-                  },
-                },
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textSec,
-                    },
-                  },
-                  "Rs",
-                ),
-                React.createElement("input", {
-                  type: "number",
-                  value: settings.halfDayFine,
-                  onChange: (e) => update("halfDayFine", e.target.value),
-                  style: {
-                    width: 80,
-                    padding: "6px 10px",
-                    background: c.bgInput,
-                    border: "1px solid " + c.border,
-                    borderRadius: 5,
-                    color: c.text,
-                    fontSize: 12,
-                    textAlign: "center",
-                  },
-                }),
-              ),
-            ),
-          ),
+          React.createElement(LLQAOfficeCard, { settings, update, teachers, setTeachers }), // v72: office times and fines that are really used
           React.createElement(
             SettingCard,
             {
@@ -6366,6 +6201,10 @@ const SettingsMod = ({
             "View Payroll",
             "Edit Settings",
             "Export Data",
+            "Mark Late / Early Reasons", // v72
+            "Edit Fines",
+            "Set Office Times & Fines",
+            "Mark Attendance",
           ].map((perm) =>
             React.createElement(
               "div",

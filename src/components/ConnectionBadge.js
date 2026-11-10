@@ -117,7 +117,11 @@ const LLQA_LIST_NAMES = {
   makeups: "Make-up classes", leads: "Leads", rewards: "Referral rewards", // v67
   "settings/runner": "24/7 runner status", // v67.3
 };
-const llqaListName = (k) => LLQA_LIST_NAMES[k] || k;
+const llqaListName = (k) => {
+  if (LLQA_LIST_NAMES[k]) return LLQA_LIST_NAMES[k];
+  const m = /^(?:doc:)?attendance\/(\d{4}-\d{2})_/.exec(String(k || "")); // v72: attendance by month
+  return m ? "Attendance " + m[1] : k;
+};
 
 // Admin only: records a computer saved while the cloud refused them, grouped
 // by computer. Nothing goes into the real lists until the admin restores it.
