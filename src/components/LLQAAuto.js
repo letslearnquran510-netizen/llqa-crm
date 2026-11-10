@@ -2502,7 +2502,7 @@ const LLQAContactsTab = (props) => {
     React.createElement("div", { style: { marginBottom: 12 } }, llqaChips(FILTERS.map(([k, l, t]) => [k, l, rows.filter(t).length]), f, setF)),
     llqaCard(
       shown.length === 0
-        ? React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "Nobody here.")
+        ? React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, rows.length ? "No family in this filter." : "No families to contact yet. Students' families show here with the right message for each.") // v70
         : React.createElement(
             "div",
             { style: { overflowX: "auto" } },
@@ -2968,7 +2968,7 @@ const LLQATodayClasses = (props) => {
   const coverSelect = (it) => {
     const opts = llqaCoverOptions(it, date, raw);
     return React.createElement(
-      "select",
+      LLQASelect, // v70: the CRM's own list
       {
         key: "cs",
         value: "",
@@ -3043,7 +3043,7 @@ const LLQATodayClasses = (props) => {
       llqaChips(FILTERS.filter((x) => x[0] !== "cover" || needCover.length).map(([k, l, t]) => [k, l, byT.filter(t).length]), f, setF),
       teachersList.length > 1
         ? React.createElement(
-            "select",
+            LLQASelect, // v70: the CRM's own list
             {
               value: tf,
               onChange: (e) => setTf(e.target.value),
@@ -3253,7 +3253,7 @@ const LLQADashCards = (props) => {
       () => llqaGo("sales", "clock"),
     ),
     // v66
-    sales && card("pilot", "🤖", "Autopilot", pilot.length, pilot.length ? "follow-up messages due today" : "nothing due — all sent", pilot.length ? c.accent : null, () => llqaGo("sales", "autopilot")),
+    sales && card("pilot", "🤖", "Autopilot", pilot.length, pilot.length ? "follow-up messages due today" : "nothing due — all sent", pilot.length ? c.booked : null, () => llqaGo("sales", "autopilot")),
     sales && card("risk", "⚠", "At-risk students", highRisk, risky.length - highRisk + " more to watch", highRisk ? c.danger : null, () => llqaGo("sales", "autopilot")),
     sales && card("fees", "💰", "Fee cycle", feeOver, feeOver + " overdue · " + feeDueNow + " due now" + ((ctx.automation || {}).feeAuto !== false ? " · auto ✓" : " · auto off"), feeOver ? c.danger : feeDueNow ? c.warn : null, () => llqaGo("sales", "fees")),
     tt && card("cover", "🔁", "Leave cover", needCover, needCover ? "classes need a substitute (today/tomorrow)" : "no teacher away without cover", needCover ? c.danger : null, () => llqaGo("timetable", "leavecover")),
@@ -4560,7 +4560,7 @@ const llqaSmall = (text, col, key) => React.createElement("div", { key, style: {
 const llqaSelectStyle = { padding: "5px 8px", background: c.bgDeep, border: "1px solid " + c.border, borderRadius: 7, color: c.text, fontSize: 11 };
 const llqaSel = (value, onChange, options, opt) =>
   React.createElement(
-    "select",
+    LLQASelect, // v70: the CRM's own list
     { key: (opt && opt.key) || "sel", value, onChange: (e) => onChange(e.target.value), onClick: (e) => e.stopPropagation(), title: (opt && opt.title) || "", style: { ...llqaSelectStyle, ...((opt && opt.style) || {}) } },
     options.map((o) => (Array.isArray(o) ? React.createElement("option", { key: o[0], value: o[0] }, o[1]) : React.createElement("option", { key: o, value: o }, o))),
   );
@@ -4850,7 +4850,7 @@ const LLQALeaveCoverTab = (props) => {
   const coverSelect = (r) => {
     const opts = llqaCoverOptions(r.it, r.d, itemsOn(r.d));
     return React.createElement(
-      "select",
+      LLQASelect, // v70: the CRM's own list
       {
         key: "cs",
         value: "",
@@ -5381,7 +5381,7 @@ const LLQAFeeCycleTab = (props) => {
     React.createElement("div", { style: { marginBottom: 10 } }, llqaChips(FILT.map(([k, l, t]) => [k, l, rows.filter(t).length]), f, setF)),
     llqaCard(
       shown.length === 0
-        ? React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, rows.length ? "Nobody here." : "No paying students with a fee amount yet. Trials join the cycle when they're enrolled as paid.")
+        ? React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, rows.length ? "No student in this filter." : "No paying students with a fee amount yet. Trials join the cycle when they're enrolled as paid.")
         : llqaTable(
             ["Student", "Fee", "Due day", "Latest bill", "Owed", "Status", ""],
             shown.map((x) => {
@@ -5568,7 +5568,7 @@ const LLQARequestsTab = (props) => {
       React.createElement("div", { style: { color: c.textMuted, fontSize: 11 } }, "Parents can also send requests themselves in the Parent Portal → Requests."),
     ),
     React.createElement("div", { style: { marginBottom: 10 } }, llqaChips(FILT.map(([k, l, t]) => [k, l, list.filter(t).length]), f, setF)),
-    shown.length === 0 ? llqaCard(React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "Nothing here.")) : null,
+    shown.length === 0 ? llqaCard(React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, list.length ? "No request in this filter." : "No requests yet. Requests that parents send from the Parent Portal, and the ones you log, show here.")) : null, // v70
     ...shown.map(card),
   );
 };
@@ -7372,7 +7372,7 @@ const LLQACapacityTab = (props) => {
       llqaStat("Free teacher-slots", cap.free, "a week, to sell", cap.free ? c.success : c.danger),
       llqaStat("Waiting families", Object.values(cap.demand).reduce((a, n) => a + n, 0), "want a time in this shift", Object.keys(cap.demand).length ? c.warn : c.text),
     ),
-    llqaCard([
+    !cap.teachers ? llqaNoTeachers(sh) : llqaCard([ // v70: no red wall of zeros for a shift with no teachers
       llqaH("🌡 Free teachers at each time", "Number = teachers free then (Pakistan time, every week). Red = full · amber = nearly full · green = room. The hourglass shows families on the waitlist for that time. Click a time to see who is free."),
       React.createElement(
         "div",
@@ -7440,7 +7440,7 @@ const LLQACapacityTab = (props) => {
         : null,
       React.createElement("div", { key: "b", style: { color: c.textSec, fontSize: 11, marginTop: 8 } }, "Fullest hours: " + busiest.map((x) => B.fmt12(x.s) + " (" + x.n + " free)").join(", ")),
     ]),
-    llqaCard([
+    !cap.teachers ? null : llqaCard([
       llqaH("🎯 Best times to offer new families", "Family-friendly hours (3–9 PM on weekdays, 9 AM–8 PM at weekends, their own clock) with the most free teachers in this shift."),
       React.createElement(
         "div",
@@ -7519,7 +7519,7 @@ const LLQALeadsTab = (props) => {
     React.createElement("div", { style: { marginBottom: 10 } }, llqaChips(FILT.map(([k, l, t]) => [k, l, leads.filter(t).length]), f, setF)),
     llqaCard(
       shown.length === 0
-        ? React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, leads.length ? "Nobody here." : "No leads yet. Add every inquiry here (website, WhatsApp, calls): the CRM reminds you to follow up until it becomes a trial — or you mark it lost.")
+        ? React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, leads.length ? "No lead in this filter." : "No leads yet. Add every inquiry here (website, WhatsApp, calls): the CRM reminds you to follow up until it becomes a trial — or you mark it lost.")
         : llqaTable(
             ["Lead", "Source", "Status", "Next follow-up", "Last note", ""],
             shown.map((l) => {
@@ -7670,7 +7670,7 @@ const llqaBars = (data, w, h) => {
       return React.createElement(
         "g",
         { key: i },
-        React.createElement("rect", { x, y: h - ha, width: bw, height: ha, rx: 2, fill: "var(--accent)", opacity: 0.55 }),
+        React.createElement("rect", { x, y: h - ha, width: bw, height: ha, rx: 2, fill: "var(--booked)", opacity: 0.55 }), // v70: never a status colour
         React.createElement("rect", { x: x + bw + 2, y: h - hb, width: bw, height: hb, rx: 2, fill: "var(--success)" }),
         React.createElement("text", { x: x + bw, y: h + 14, textAnchor: "middle", fontSize: 10, fill: "var(--textSec)" }, d.label),
       );
@@ -7716,8 +7716,10 @@ const LLQARevenueTab = () => {
     ),
     llqaCard([
       llqaH("📈 Billed and collected, month by month", "Billed = fee bills due that month (the fee cycle). Collected = payments received that month (Fee Cycle and Accounts Receivable). " + (curs.length ? "Other currencies count in USD with your rates." : "")),
-      chartOk
-        ? React.createElement("div", { key: "ch" }, llqaBars(chart, 560, 120), React.createElement("div", { style: { fontSize: 10, color: c.textSec, marginTop: 2 } }, "■ billed (blue) · ■ collected (green), in USD"))
+      chartOk && !chart.some((d) => d.a || d.b)
+        ? React.createElement("div", { key: "ch0", style: { fontSize: 12, color: c.textSec, padding: "10px 0" } }, "No bills or payments in the last 6 months yet.") // v70
+        : chartOk
+        ? React.createElement("div", { key: "ch" }, llqaBars(chart, 560, 120), React.createElement("div", { style: { marginTop: 6, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" } }, llqaLegend([["Billed", "color-mix(in srgb, var(--booked) 55%, transparent)"], ["Collected", c.success]]), React.createElement("span", { style: { fontSize: 10.5, color: c.textSec } }, "Amounts in USD")))
         : React.createElement("div", { key: "nc", style: { fontSize: 11, color: c.warn } }, "Set a rate to USD for " + curs.filter((k) => !(Number(fx[k]) > 0)).join(", ") + " to see one chart (amounts per currency are below)."),
       React.createElement(
         "div",
@@ -7947,7 +7949,7 @@ const llqaDashCards3Items = () => {
   return [
     llqaCanOpen("sales") && llqaDashCard("leads", "🎯", "Leads", ls.due, ls.due ? "follow-ups due today" : ls.open + " open leads", ls.due ? c.warn : null, () => llqaGo("sales", "leads")),
     llqaCanOpen("timetable") && llqaDashCard("makeups", "🧩", "Make-ups", owed, owed ? "missed classes to make up" : "nothing owed", owed ? c.warn : null, () => llqaGo("timetable", "makeup")),
-    llqaCanOpen("timetable") && llqaDashCard("tday", "🧑‍🏫", "Teachers' day", tday, tday ? "schedules not sent — next 24 hours" : "all sent (or no classes)", tday ? c.accent : null, () => llqaGo("timetable", "teacherday")),
+    llqaCanOpen("timetable") && llqaDashCard("tday", "🧑‍🏫", "Teachers' day", tday, tday ? "schedules not sent — next 24 hours" : "all sent (or no classes)", tday ? c.booked : null, () => llqaGo("timetable", "teacherday")),
   ].filter(Boolean);
 };
 
@@ -8270,7 +8272,7 @@ const LLQADashBody = () => {
                 ),
                 llqaColumns({
                   height: 92,
-                  tone: c.accent,
+                  tone: c.booked, // v70: money received never in a warning colour
                   fmt: (v) => llqaNum(v),
                   aria: "Fees received in " + k + " per month",
                   data: rev.months.map((m) => ({ key: m.ym, label: llqaShortMonth(m.ym), value: m.collected[k] || 0, title: llqaShortMonth(m.ym) + " " + m.ym.slice(0, 4) + ": " + llqaNum(m.collected[k] || 0) + " " + k })),
@@ -8309,8 +8311,8 @@ const LLQADashBody = () => {
       "flow",
       "Students joined and left",
       "Last 6 months · joined = started paying · " + (joined - left >= 0 ? "+" : "−") + Math.abs(joined - left) + " overall",
-      joined + left ? llqaUpDown(rows, c.accent, c.danger) : llqaEmpty("📈", "No students joined or left in the last 6 months."),
-      llqaLegend([["Joined", c.accent], ["Left", c.danger]]),
+      joined + left ? llqaUpDown(rows, c.booked, c.danger) : llqaEmpty("📈", "No students joined or left in the last 6 months."), // v70: joined never looks like "left"
+      llqaLegend([["Joined", c.booked], ["Left", c.danger]]),
     );
   }
 
@@ -8320,8 +8322,8 @@ const LLQADashBody = () => {
     const parts = [
       ["Male · IBA", activeT.filter((t) => t.gender === "Male" && t.location === "IBA").length, c.accentFill],
       ["Male · WFH", activeT.filter((t) => t.gender === "Male" && t.location === "WFH").length, llqaAlpha(c.accentFill, "8c")],
-      ["Female · IBA", activeT.filter((t) => t.gender === "Female" && t.location === "IBA").length, c.purpleFill],
-      ["Female · WFH", activeT.filter((t) => t.gender === "Female" && t.location === "WFH").length, llqaAlpha(c.purpleFill, "8c")],
+      ["Female · IBA", activeT.filter((t) => t.gender === "Female" && t.location === "IBA").length, c.seriesBFill], // v70: never the same colour as Male
+      ["Female · WFH", activeT.filter((t) => t.gender === "Female" && t.location === "WFH").length, llqaAlpha(c.seriesBFill, "8c")],
     ];
     const other = activeT.length - parts.reduce((a, p) => a + p[1], 0);
     if (other > 0) parts.push(["Other", other, c.textMuted]);
