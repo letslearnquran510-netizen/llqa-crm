@@ -1,4 +1,4 @@
-const AccountsPMod = ({ apLiabilities, setApLiabilities }) => {
+const AccountsPMod = ({ apLiabilities, setApLiabilities, appSettings }) => {
   const [tab, setTab] = useState("ledger");
   const [search, setSearch] = useState("");
   const [fStatus, setFStatus] = useState("all");
@@ -102,8 +102,13 @@ const AccountsPMod = ({ apLiabilities, setApLiabilities }) => {
     setApLiabilities(liabs.filter((l) => l.id !== modal.data.id));
     setModal(null);
   };
-  const totalOwed = liabs.reduce((a, l) => a + owedOf(l), 0);
-  const totalPaid = liabs.reduce((a, l) => a + paidOf(l), 0);
+  // v71: totals in PKR (a bill in USD at your rate); a currency without a rate is listed, never added
+  const RATES = llqaRates(appSettings);
+  const pk = (l, n) => llqaToPKR(n, l.currency || "PKR", RATES).pkr;
+  const owedSum = llqaSumPKR(liabs, RATES, (l) => ({ amount: owedOf(l), currency: l.currency, fallback: "PKR" }));
+  const paidSum = llqaSumPKR(liabs, RATES, (l) => ({ amount: paidOf(l), currency: l.currency, fallback: "PKR" }));
+  const totalOwed = owedSum.pkr;
+  const totalPaid = paidSum.pkr;
   const overdueList = liabs.filter(isOverdue);
   const outstanding = liabs.filter((l) => l.status !== "paid");
   const matchS = (vals) => {
@@ -402,13 +407,13 @@ const AccountsPMod = ({ apLiabilities, setApLiabilities }) => {
         React.createElement(SC, {
           icon: AlertTriangle,
           label: "Outstanding (owed)",
-          value: fmt(totalOwed),
+          value: llqaPKR(totalOwed), sub: llqaSumSub(owedSum), // v71
           color: c.danger,
         }),
         React.createElement(SC, {
           icon: CheckCircle,
           label: "Total Paid",
-          value: fmt(totalPaid),
+          value: llqaPKR(totalPaid), sub: llqaSumSub(paidSum), // v71
           color: c.success,
         }),
         React.createElement(SC, {
@@ -590,7 +595,7 @@ const AccountsPMod = ({ apLiabilities, setApLiabilities }) => {
         React.createElement(SC, {
           icon: DollarSign,
           label: "Total Owed",
-          value: fmt(totalOwed),
+          value: llqaPKR(totalOwed), sub: llqaSumSub(owedSum), // v71
           color: c.danger,
         }),
         React.createElement(SC, {
@@ -755,13 +760,13 @@ const AccountsPMod = ({ apLiabilities, setApLiabilities }) => {
         React.createElement(SC, {
           icon: AlertTriangle,
           label: "Total Owed",
-          value: fmt(totalOwed),
+          value: llqaPKR(totalOwed), sub: llqaSumSub(owedSum), // v71
           color: c.danger,
         }),
         React.createElement(SC, {
           icon: CheckCircle,
           label: "Total Paid",
-          value: fmt(totalPaid),
+          value: llqaPKR(totalPaid), sub: llqaSumSub(paidSum), // v71
           color: c.success,
         }),
       ),
@@ -830,9 +835,9 @@ const AccountsPMod = ({ apLiabilities, setApLiabilities }) => {
           paid: 0,
         };
       g[k].n++;
-      g[k].t += num(l.amount);
-      g[k].owed += owedOf(l);
-      g[k].paid += paidOf(l);
+      g[k].t += pk(l, num(l.amount)); // v71: in PKR
+      g[k].owed += pk(l, owedOf(l));
+      g[k].paid += pk(l, paidOf(l));
     });
     const grand = Object.values(g).reduce((a, x) => a + x.t, 0);
     const rows = Object.values(g).sort((a, b) => b.t - a.t);
@@ -858,13 +863,13 @@ const AccountsPMod = ({ apLiabilities, setApLiabilities }) => {
         React.createElement(SC, {
           icon: DollarSign,
           label: "Total Committed",
-          value: fmt(grand),
+          value: llqaPKR(grand), // v71
           color: c.cyan,
         }),
         React.createElement(SC, {
           icon: AlertTriangle,
           label: "Still Owed",
-          value: fmt(totalOwed),
+          value: llqaPKR(totalOwed), sub: llqaSumSub(owedSum), // v71
           color: c.danger,
         }),
       ),
@@ -985,7 +990,7 @@ const AccountsPMod = ({ apLiabilities, setApLiabilities }) => {
         React.createElement(SC, {
           icon: DollarSign,
           label: "Total Scheduled",
-          value: fmt(totalOwed),
+          value: llqaPKR(totalOwed), sub: llqaSumSub(owedSum), // v71
           color: c.warn,
         }),
         React.createElement(SC, {
@@ -1275,6 +1280,7 @@ const AccountsPMod = ({ apLiabilities, setApLiabilities }) => {
           ),
         ),
     ),
+    llqaRatesNote([owedSum, paidSum], RATES), // v71
     content,
     modal &&
       (modal.type === "add" || modal.type === "edit") &&

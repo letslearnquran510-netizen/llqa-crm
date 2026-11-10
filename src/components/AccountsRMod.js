@@ -1,4 +1,4 @@
-const AccountsRMod = ({ students, arPayments, setArPayments }) => {
+const AccountsRMod = ({ students, arPayments, setArPayments, appSettings }) => {
   const [tab, setTab] = useState("paying");
   const [month, setMonth] = useState(todayPK().slice(0, 7));
   const [search, setSearch] = useState("");
@@ -19,6 +19,11 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
   const pays = arPayments || [];
   const roster = (students || []).filter((s) => s.status !== "quit");
   const monthPays = pays.filter((p) => llqaPayMonth(p) === month); // v66: month paid for (else month paid in)
+  // v71: totals are in PKR — each payment at the PKR that reached you, else your rate (Settings → Payment Gateways);
+  // a currency without a rate is listed under the total, never added to rupees
+  const RATES = llqaRates(appSettings);
+  const pkrOf = (p) => llqaToPKR(p.amount, p.currency || "USD", RATES, p.pkrReceived).pkr;
+  const paySum = (list) => llqaSumPKR(list, RATES, (p) => ({ amount: p.amount, currency: p.currency, fallback: "USD", received: p.pkrReceived }));
   const num = (n) => Number(n || 0);
   const fmt = (n) =>
     num(n).toLocaleString(void 0, {
@@ -96,6 +101,8 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
     const rec = {
       ...form,
       amount: num(form.amount),
+      // v71: kept only for a foreign payment and only when given
+      pkrReceived: llqaCurOf(form.currency || "USD") !== "PKR" && num(form.pkrReceived) > 0 ? num(form.pkrReceived) : "",
     };
     if (modal.type === "edit")
       setArPayments(pays.map((p) => (p.id === form.id ? rec : p)));
@@ -134,9 +141,12 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
     });
   const defaulters = feeRows.filter((r) => r.st !== "Paid");
   const recoveryPays = monthPays.filter((p) => p.type === "recovery");
-  const totalCollected = monthPays.reduce((a, p) => a + num(p.amount), 0);
-  const expectedTotal = feeRows.reduce((a, r) => a + r.exp, 0);
-  const outstanding = feeRows.reduce((a, r) => a + r.bal, 0);
+  const collSum = paySum(monthPays); // v71: in PKR
+  const expSum = llqaSumPKR(feeRows, RATES, (r) => ({ amount: r.exp, currency: r.cur, fallback: "USD" }));
+  const outSum = llqaSumPKR(feeRows, RATES, (r) => ({ amount: r.bal, currency: r.cur, fallback: "USD" }));
+  const totalCollected = collSum.pkr;
+  const expectedTotal = expSum.pkr;
+  const outstanding = outSum.pkr;
   const collRate =
     expectedTotal > 0
       ? Math.round(
@@ -146,7 +156,7 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
   const gatewayTally = (() => {
     const t = {};
     monthPays.forEach((p) => {
-      t[p.gateway || "Other"] = (t[p.gateway || "Other"] || 0) + num(p.amount);
+      t[p.gateway || "Other"] = (t[p.gateway || "Other"] || 0) + pkrOf(p); // v71: in PKR
     });
     const top = Object.keys(t).sort((a, b) => t[b] - t[a])[0];
     return {
@@ -165,7 +175,7 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
           sum: 0,
         };
       g[d].n++;
-      g[d].sum += num(p.amount);
+      g[d].sum += pkrOf(p); // v71: in PKR
     });
     return Object.values(g).sort((a, b) => (a.date < b.date ? 1 : -1));
   })();
@@ -520,7 +530,8 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
         React.createElement(SC, {
           icon: DollarSign,
           label: "Collected (" + monthLabel + ")",
-          value: fmt(totalCollected),
+          value: llqaPKR(totalCollected), // v71
+          sub: llqaSumSub(collSum),
           color: c.success,
         }),
         React.createElement(SC, {
@@ -618,19 +629,22 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
         React.createElement(SC, {
           icon: TrendingUp,
           label: "Expected (" + monthLabel + ")",
-          value: fmt(expectedTotal),
+          value: llqaPKR(expectedTotal), // v71
+          sub: llqaSumSub(expSum),
           color: c.accent,
         }),
         React.createElement(SC, {
           icon: CheckCircle,
           label: "Collected",
-          value: fmt(totalCollected),
+          value: llqaPKR(totalCollected), // v71
+          sub: llqaSumSub(collSum),
           color: c.success,
         }),
         React.createElement(SC, {
           icon: AlertTriangle,
           label: "Outstanding",
-          value: fmt(outstanding),
+          value: llqaPKR(outstanding), // v71
+          sub: llqaSumSub(outSum),
           color: c.danger,
         }),
         React.createElement(SC, {
@@ -722,7 +736,8 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
     const rows = recoveryPays.filter((p) =>
       matchS([p.studentName, p.parent, p.gateway]),
     );
-    const recTotal = recoveryPays.reduce((a, p) => a + num(p.amount), 0);
+    const recSum = paySum(recoveryPays); // v71: in PKR
+    const recTotal = recSum.pkr;
     content = React.createElement(
       "div",
       null,
@@ -739,7 +754,8 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
         React.createElement(SC, {
           icon: TrendingUp,
           label: "Recovered (" + monthLabel + ")",
-          value: fmt(recTotal),
+          value: llqaPKR(recTotal), // v71
+          sub: llqaSumSub(recSum),
           color: c.success,
         }),
         React.createElement(SC, {
@@ -859,20 +875,21 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
         React.createElement(SC, {
           icon: DollarSign,
           label: "Month Total",
-          value: fmt(totalCollected),
+          value: llqaPKR(totalCollected), // v71
+          sub: llqaSumSub(collSum),
           color: c.success,
         }),
         React.createElement(SC, {
           icon: TrendingUp,
           label: "Best Day",
-          value: bestDay ? fmt(bestDay.sum) : "\u2014",
+          value: bestDay ? llqaPKR(bestDay.sum) : "\u2014", // v71
           sub: bestDay ? bestDay.date : "",
           color: c.purple,
         }),
         React.createElement(SC, {
           icon: BarChart3,
           label: "Daily Avg",
-          value: dayRows.length ? fmt(totalCollected / dayRows.length) : "0",
+          value: dayRows.length ? llqaPKR(totalCollected / dayRows.length) : "Rs 0", // v71
           color: c.cyan,
         }),
       ),
@@ -935,7 +952,8 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
     const rows = defaulters.filter((r) =>
       matchS([r.s.name, r.s.parent, r.s.course]),
     );
-    const defOut = defaulters.reduce((a, r) => a + r.bal, 0);
+    const defSum = llqaSumPKR(defaulters, RATES, (r) => ({ amount: r.bal, currency: r.cur, fallback: "USD" })); // v71: in PKR
+    const defOut = defSum.pkr;
     content = React.createElement(
       "div",
       null,
@@ -958,7 +976,8 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
         React.createElement(SC, {
           icon: DollarSign,
           label: "Total Outstanding",
-          value: fmt(defOut),
+          value: llqaPKR(defOut), // v71
+          sub: llqaSumSub(defSum),
           color: c.warn,
         }),
         React.createElement(SC, {
@@ -970,7 +989,7 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
         React.createElement(SC, {
           icon: BarChart3,
           label: "Avg Outstanding",
-          value: defaulters.length ? fmt(defOut / defaulters.length) : "0",
+          value: defaulters.length ? llqaPKR(defOut / defaulters.length) : "Rs 0", // v71
           color: c.cyan,
         }),
       ),
@@ -1101,7 +1120,8 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
         React.createElement(SC, {
           icon: DollarSign,
           label: "Month Value",
-          value: fmt(totalCollected),
+          value: llqaPKR(totalCollected), // v71
+          sub: llqaSumSub(collSum),
           color: c.success,
         }),
       ),
@@ -1412,6 +1432,7 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
         },
       }),
     ),
+    llqaRatesNote([collSum, expSum, outSum], RATES), // v71
     content,
     modal &&
       (modal.type === "post" || modal.type === "edit") &&
@@ -1643,6 +1664,21 @@ const AccountsRMod = ({ students, arPayments, setArPayments }) => {
                 }),
               placeholder: "Transaction / receipt no.",
             }),
+            llqaCurOf(form.currency || "USD") !== "PKR" && // v71: what actually reached your account
+              React.createElement(Inp, {
+                label: "PKR received (optional)",
+                value: form.pkrReceived || "",
+                onChange: (v) =>
+                  setForm({
+                    ...form,
+                    pkrReceived: v,
+                  }),
+                type: "number",
+                placeholder: (() => {
+                  const r = RATES[llqaCurOf(form.currency || "USD")];
+                  return r && num(form.amount) > 0 ? "at your rate: " + llqaPKR(num(form.amount) * r) : r ? "1 " + llqaCurOf(form.currency || "USD") + " = " + r + " PKR" : "no rate set";
+                })(),
+              }),
           ),
           React.createElement(
             "label",

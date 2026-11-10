@@ -1,4 +1,5 @@
 const ReportsMod = ({
+  appSettings, // v71: exchange rates
   students,
   teachers,
   arPayments,
@@ -10,10 +11,13 @@ const ReportsMod = ({
 }) => {
   const [tab, setTab] = useState("overview");
   const [month, setMonth] = useState(todayPK().slice(0, 7));
+  // v71: fees (USD, GBP …) and bills turned into PKR before anything is added up — at the PKR received with a
+  // payment, else your rate (Settings → Payment Gateways); with neither the amount is left out and listed above the report
+  const RATES = llqaRates(appSettings);
   const S = students || [],
     T = teachers || [],
-    PAY = arPayments || [],
-    LIA = apLiabilities || [],
+    PAY = llqaPaysInPKR(arPayments, RATES),
+    LIA = llqaLiasInPKR(apLiabilities, RATES),
     REF = salesReferrals || [],
     LV = leaves || [],
     QC = qcViolations || [],
@@ -33,6 +37,8 @@ const ReportsMod = ({
         });
   };
   const inMonth = (d) => String(d || "").slice(0, 7) === month;
+  // v71: this month's fees, for the line under each revenue total (what it is made of / what it leaves out)
+  const revSum = llqaSumPKR((arPayments || []).filter((p) => inMonth(p.paidDate)), RATES, (p) => ({ amount: p.amount, currency: p.currency, fallback: "USD", received: p.pkrReceived }));
   const activeT = T.filter(
     (t) => t.status !== "resigned" && t.status !== "terminated",
   );
@@ -322,6 +328,7 @@ const ReportsMod = ({
           "Revenue Collected",
           "Rs " + fmt(monthRevenue),
           c.success,
+          llqaSumSub(revSum), // v71
         ),
         card(Receipt, "Expenses", "Rs " + fmt(monthExpenses), c.warn),
         card(
@@ -506,6 +513,7 @@ const ReportsMod = ({
           icon: DollarSign,
           label: "Revenue (" + mLabel(month) + ")",
           value: "Rs " + fmt(monthRevenue),
+          sub: llqaSumSub(revSum), // v71
           color: c.cyan,
         }),
       ),
@@ -591,6 +599,7 @@ const ReportsMod = ({
           icon: DollarSign,
           label: "Revenue (" + mLabel(month) + ")",
           value: "Rs " + fmt(monthRevenue),
+          sub: llqaSumSub(revSum), // v71
           color: c.success,
         }),
         React.createElement(SC, {
@@ -640,7 +649,7 @@ const ReportsMod = ({
           null,
           "Revenue from fee collections, expenses = staff salaries (Rs ",
           fmt(monthlySalaries),
-          "/mo) + paid liabilities. Auto-built from live data.",
+          "/mo) + paid liabilities. Fees in other currencies are counted in PKR: the PKR received for that payment, else your rate in Settings → Payment Gateways.", // v71
         ),
       ),
       Table(
@@ -746,6 +755,7 @@ const ReportsMod = ({
           icon: DollarSign,
           label: "Collected (" + mLabel(month) + ")",
           value: "Rs " + fmt(monthRevenue),
+          sub: llqaSumSub(revSum), // v71
           color: c.success,
         }),
         React.createElement(SC, {
@@ -1113,6 +1123,10 @@ const ReportsMod = ({
         ),
       ),
     ),
+    llqaRatesNote([ // v71: everything the reports could not put into PKR
+      llqaSumPKR(arPayments, RATES, (p) => ({ amount: p.amount, currency: p.currency, fallback: "USD", received: p.pkrReceived })),
+      llqaSumPKR(apLiabilities, RATES, (l) => ({ amount: l.amount, currency: l.currency, fallback: "PKR" })),
+    ], RATES),
     content,
   );
 };

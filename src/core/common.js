@@ -2345,6 +2345,244 @@ const llqaEmptyRow = (title, text) =>
     ),
   );
 
+/* ============================================================
+   v71: money in several currencies, added up in PKR
+   Fees arrive in USD, GBP, CAD …; salaries and expenses are in PKR. A total in PKR counts a foreign
+   amount only through:
+     1. the PKR that actually reached the academy for that payment (entered with the payment), or
+     2. the academy's own rate for that currency (Settings → Payment Gateways → Exchange rates: 1 USD = 280 PKR).
+   With neither, the amount is NOT added to the PKR total; the total says what is missing instead of
+   quietly adding dollars to rupees (which gave "Margin −111258%").
+   One set of rates for the whole CRM: appSettings.fxRates = { USD: 280, GBP: 355, …, updated, by }.
+   ============================================================ */
+const LLQA_FX_CURRENCIES = ["USD", "GBP", "CAD", "AUD", "EUR", "AED", "SAR"];
+const llqaCurOf = (cur, fallback) => {
+  const s = String(cur == null ? "" : cur).trim().toUpperCase();
+  if (!s) return fallback || "PKR";
+  return s === "RS" || s === "RS." || s === "RUPEES" ? "PKR" : s;
+};
+// the academy's rates, only the ones that are set (a number above 0)
+const llqaRates = (settings) => {
+  const r = (settings && settings.fxRates) || {};
+  const out = {};
+  Object.keys(r).forEach((k) => {
+    const v = Number(r[k]);
+    if (/^[A-Z]{3}$/.test(k) && k !== "PKR" && v > 0) out[k] = v;
+  });
+  return out;
+};
+// one amount → PKR. how: "pkr" (already rupees), "received" (the PKR that reached you), "rate" (your rate), "missing" (no rate)
+const llqaToPKR = (amount, cur, rates, received) => {
+  const a = Number(amount) || 0;
+  const cu = llqaCurOf(cur);
+  if (cu === "PKR") return { pkr: a, how: "pkr", cur: cu };
+  const got = Number(received);
+  if (got > 0) return { pkr: got, how: "received", cur: cu };
+  const r = Number((rates || {})[cu]);
+  return r > 0 ? { pkr: a * r, how: "rate", rate: r, cur: cu } : { pkr: 0, how: "missing", cur: cu };
+};
+// a list → one PKR total, plus the totals per currency and what could not be converted
+//   pick(item) → { amount, currency, received }
+const llqaSumPKR = (items, rates, pick) => {
+  const out = { pkr: 0, byCur: {}, missing: {}, received: 0, rated: 0, n: 0 };
+  (items || []).forEach((it) => {
+    const p = pick(it) || {};
+    const a = Number(p.amount) || 0;
+    if (!a) return;
+    const cu = llqaCurOf(p.currency, p.fallback);
+    out.byCur[cu] = (out.byCur[cu] || 0) + a;
+    out.n++;
+    const x = llqaToPKR(a, cu, rates, p.received);
+    if (x.how === "missing") out.missing[cu] = (out.missing[cu] || 0) + a;
+    else {
+      out.pkr += x.pkr;
+      if (x.how === "received") out.received++;
+      if (x.how === "rate") out.rated++;
+    }
+  });
+  return out;
+};
+const llqaList = (xs) => (xs.length < 2 ? xs.join("") : xs.slice(0, -1).join(", ") + " and " + xs[xs.length - 1]);
+const llqaAmt = (n, cur) => {
+  const v = Math.round((Number(n) || 0) * 100) / 100;
+  const s = v.toLocaleString("en-US", { maximumFractionDigits: Math.abs(v) >= 100 ? 0 : 2 });
+  return llqaCurOf(cur) === "PKR" ? "Rs " + s : llqaCurOf(cur) + " " + s;
+};
+const llqaPKR = (n) => "Rs " + Math.round(Number(n) || 0).toLocaleString("en-US");
+// "USD 3,200 · GBP 450" (largest first)
+const llqaByCurText = (byCur) =>
+  Object.entries(byCur || {})
+    .filter(([, v]) => v)
+    .sort((a, b) => b[1] - a[1])
+    .map(([k, v]) => llqaAmt(v, k))
+    .join(" · ");
+const llqaMissingText = (sum) => {
+  const m = Object.entries((sum && sum.missing) || {}).filter(([, v]) => v);
+  return m.length ? m.map(([k, v]) => llqaAmt(v, k)).join(" · ") + " not counted (no " + m.map(([k]) => k).join(" / ") + " rate)" : "";
+};
+// the line under a PKR total: what it is made of, and what is missing
+const llqaSumSub = (sum) => {
+  if (!sum) return "";
+  const foreign = Object.keys(sum.byCur || {}).filter((k) => k !== "PKR");
+  const miss = llqaMissingText(sum);
+  if (miss) return miss;
+  if (!foreign.length) return "";
+  return llqaByCurText(sum.byCur) + (sum.received ? " · " + sum.received + " at the PKR received" : "") + " · in PKR at your rates";
+};
+// open Settings at a section (Settings reads this once when it opens)
+const llqaOpenSettings = (section) => {
+  try {
+    window.__llqaSettingsSection = section || "payments";
+    window.__llqaFocusFx = true; // the rates card scrolls itself into view
+    const app = typeof LLQAApp !== "undefined" ? LLQAApp.ctx : null; // LLQAAuto.js; loaded before any click
+    if (app && typeof app.setPage === "function") app.setPage("settings");
+  } catch (e) {}
+};
+// the note shown above money totals when some amounts could not be converted (or no rates are set yet)
+const llqaRatesNote = (sums, rates, key) => {
+  const miss = {};
+  (sums || []).forEach((s) => Object.entries((s && s.missing) || {}).forEach(([k, v]) => (miss[k] = (miss[k] || 0) + v)));
+  const cur = Object.keys(miss).filter((k) => miss[k]);
+  if (!cur.length) return null;
+  // only someone who can open Settings gets the button; anyone else is told who can fix it
+  const canSet = typeof LLQAApp !== "undefined" && LLQAApp.ctx && (LLQAApp.ctx.pages || []).includes("settings");
+  return React.createElement(
+    "div",
+    {
+      key: key || "fx-note",
+      role: "status",
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        flexWrap: "wrap",
+        padding: "10px 12px",
+        marginBottom: 12,
+        borderRadius: 8,
+        background: c.warnBg,
+        border: "1px solid " + c.warn,
+        color: c.text,
+        fontSize: 12,
+        lineHeight: 1.45,
+      },
+    },
+    React.createElement(
+      "span",
+      { style: { flex: "1 1 260px" } },
+      // the currencies only: the same money can sit in several totals on a page, so their amounts are not added up
+      // here — each total lists what it leaves out
+      React.createElement("b", null, llqaList(cur) + (cur.length > 1 ? " have" : " has") + " no exchange rate yet, "),
+      "so " + (cur.length > 1 ? "those amounts are" : "that amount is") + " left out of the PKR totals (each total shows what it leaves out). " + (canSet ? "Set a rate in Settings → Payment Gateways → Exchange rates (for example 1 " + cur[0] + " = … PKR), or enter the PKR received with each payment." : "An admin can set a rate in Settings → Payment Gateways → Exchange rates; or enter the PKR received with each payment."),
+    ),
+    canSet && React.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: () => llqaOpenSettings("payments"),
+        style: {
+          padding: "6px 12px",
+          borderRadius: 6,
+          border: "1px solid " + c.warn,
+          background: c.bgCard,
+          color: c.text,
+          fontSize: 12,
+          fontWeight: 600,
+          cursor: "pointer",
+        },
+      },
+      "Set rates",
+    ),
+  );
+};
+// copies with every amount in PKR — for totals only (each payment at the PKR received, else your rate, else 0)
+const llqaPaysInPKR = (pays, rates) =>
+  (pays || []).map((p) => ({ ...p, amount: llqaToPKR(p.amount, p.currency || "USD", rates, p.pkrReceived).pkr, currency: "PKR" }));
+const llqaLiasInPKR = (lias, rates) =>
+  (lias || []).map((l) => {
+    const f = (n) => llqaToPKR(n, l.currency || "PKR", rates).pkr;
+    return { ...l, amount: f(l.amount), paidAmount: f(l.paidAmount), currency: "PKR" };
+  });
+// the Autopilot's "≈ … USD" total uses the same rates (USD per unit, worked out from the PKR rates)
+const llqaUsdRates = (settings) => {
+  const pk = llqaRates(settings);
+  if (!(pk.USD > 0)) return null;
+  const out = { PKR: 1 / pk.USD };
+  Object.keys(pk).forEach((k) => {
+    if (k !== "USD") out[k] = pk[k] / pk.USD;
+  });
+  return out;
+};
+// Settings → Payment Gateways → Exchange rates (one set for the whole CRM; saved as you type, like every setting)
+const LLQAFxCard = ({ settings, update }) => {
+  const fx = (settings && settings.fxRates) || {};
+  const who = (typeof LLQAApp !== "undefined" && LLQAApp.ctx && LLQAApp.ctx.user && (LLQAApp.ctx.user.name || LLQAApp.ctx.user.role)) || "";
+  const set = (k, v) => {
+    const n = v === "" ? "" : Number(v);
+    update("fxRates", { ...fx, [k]: n === "" || !(n >= 0) ? "" : n, updated: todayPK(), by: who });
+  };
+  const nSet = LLQA_FX_CURRENCIES.filter((k) => Number(fx[k]) > 0).length;
+  const box = React.useRef(null);
+  React.useEffect(() => {
+    // opened from a "Set rates" button: bring the card into view (it sits below the payment methods)
+    if (typeof window !== "undefined" && window.__llqaFocusFx) {
+      window.__llqaFocusFx = false;
+      const el = box.current;
+      if (el && el.scrollIntoView) setTimeout(() => el.scrollIntoView({ block: "start", behavior: "smooth" }), 60);
+    }
+  }, []);
+  return React.createElement(
+    "div",
+    { ref: box, id: "llqa-fx-rates", style: { scrollMarginTop: 16 } },
+    React.createElement(
+    SettingCard,
+    { title: "Exchange rates", icon: DollarSign, color: c.cyan },
+    React.createElement(
+      "p",
+      { style: { color: c.textSec, fontSize: 12, lineHeight: 1.5, margin: "0 0 6px" } },
+      "Fees come in USD, GBP, CAD …; salaries and expenses are in PKR. Monthly Reports and Accounts add everything up in PKR with these rates. When you record a payment you can also enter the PKR that actually reached you — that amount is used instead of the rate. A currency without a rate is shown separately, never added.",
+    ),
+    LLQA_FX_CURRENCIES.map((k) =>
+      React.createElement(
+        SettingRow,
+        { key: k, label: "1 " + k + " =" },
+        React.createElement(
+          "div",
+          { style: { display: "flex", alignItems: "center", gap: 6 } },
+          React.createElement("input", {
+            type: "number",
+            min: 0,
+            step: "0.01",
+            inputMode: "decimal",
+            value: fx[k] == null ? "" : fx[k],
+            placeholder: "not set",
+            "aria-label": "PKR for 1 " + k,
+            onChange: (e) => set(k, e.target.value),
+            style: {
+              width: 110,
+              padding: "6px 10px",
+              background: c.bgInput,
+              border: "1px solid " + c.border,
+              borderRadius: 5,
+              color: c.text,
+              fontSize: 12,
+              textAlign: "right",
+            },
+          }),
+          React.createElement("span", { style: { color: c.textSec, fontSize: 12, minWidth: 28 } }, "PKR"),
+        ),
+      ),
+    ),
+    React.createElement(
+      "div",
+      { style: { color: c.textMuted, fontSize: 11, marginTop: 10 } },
+      nSet
+        ? nSet + " of " + LLQA_FX_CURRENCIES.length + " rates set" + (fx.updated ? " · last changed " + fx.updated + (fx.by ? " by " + fx.by : "") : "")
+        : "No rates set yet — totals in PKR leave out foreign amounts until a rate is set.",
+    ),
+    ),
+  );
+};
+
 const CC = [
   "#4a7aff",
   "#10b981",

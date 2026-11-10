@@ -84,6 +84,8 @@ function App() {
     "data/attendanceHistory",
     initAttHist,
   );
+  // v71: payroll approvals, payments, advances and bonuses are kept in the cloud (they were lost on every reload)
+  const [payrollHistory, setPayrollHistory] = useFirestoreDoc("data/payrollHistory", {});
   const [leaves, setLeaves] = useFirestoreCollection("leaves", []);
   const [teamLeads, setTeamLeads] = useFirestoreCollection(
     "teamLeads",
@@ -642,7 +644,7 @@ function App() {
         setStudents(_mb(students, typeof a === "function" ? a(scStudents) : a))
     : setStudents;
   // v65: what the automation screens and pop-ups read
-  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory }); // v68: Dashboard "Teachers in today"
+  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory, appSettings }); // v71: appSettings (exchange rates for the Autopilot) // v68: Dashboard "Teachers in today"
   const render = () => {
     switch (page) {
       case "dashboard":
@@ -708,6 +710,8 @@ function App() {
       case "payroll":
         return React.createElement(PayrollMod, {
           appSettings: appSettings,
+          payHistory: payrollHistory, // v71
+          setPayHistory: setPayrollHistory, // v71
           user: user,
           teachers: teachers,
           qcViolations: qcViolations,
@@ -759,6 +763,7 @@ function App() {
         });
       case "ar":
         return React.createElement(AccountsRMod, {
+          appSettings: appSettings, // v71: exchange rates
           students: students,
           arPayments: arPayments,
           teacherFeedback: teacherFeedback,
@@ -767,6 +772,7 @@ function App() {
         });
       case "ap":
         return React.createElement(AccountsPMod, {
+          appSettings: appSettings, // v71: exchange rates
           apLiabilities: apLiabilities,
           setApLiabilities: setApLiabilities,
         });
@@ -790,6 +796,7 @@ function App() {
         });
       case "reports":
         return React.createElement(ReportsMod, {
+          appSettings: appSettings, // v71: exchange rates
           students: students,
           teachers: teachers,
           arPayments: arPayments,
