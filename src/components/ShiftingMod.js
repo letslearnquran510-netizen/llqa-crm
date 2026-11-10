@@ -176,7 +176,7 @@ const ShiftingMod = ({
         const fromT = teachers.find((t) => t.name === f.fromT);
         const toT = teachers.find((t) => t.name === f.toT);
         if (fromT && toT) {
-          const shiftDate = f.date ? new Date(f.date) : new Date();
+          const shiftDate = f.date ? llqaLocalDay(f.date) : new Date(); // v70: the class day is that date's weekday on every computer
           const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
           const defaultDay = dayNames[shiftDate.getDay()];
           const stuRec = (students || []).find(
@@ -399,7 +399,7 @@ const ShiftingMod = ({
               .toLowerCase(),
         );
         const stuState = (stuRec && stuRec.state) || "";
-        const shiftDate = old.date ? new Date(old.date) : new Date();
+        const shiftDate = old.date ? llqaLocalDay(old.date) : new Date(); // v70
         const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
         const defaultDay = dayNames[shiftDate.getDay()];
         const usaToPktSlot = (usaStr) => {
@@ -468,7 +468,7 @@ const ShiftingMod = ({
               .toLowerCase(),
         );
         const newStuState = (newStuRec && newStuRec.state) || "";
-        const newShiftDate = f.date ? new Date(f.date) : new Date();
+        const newShiftDate = f.date ? llqaLocalDay(f.date) : new Date(); // v70
         const newDefaultDay = dayNames[newShiftDate.getDay()];
         const newParsePair = (tm) => {
           if (!tm)
@@ -612,7 +612,7 @@ const ShiftingMod = ({
               .toLowerCase(),
         );
         const stuState = (stuRec && stuRec.state) || "";
-        const shiftDate = rec.date ? new Date(rec.date) : new Date();
+        const shiftDate = rec.date ? llqaLocalDay(rec.date) : new Date(); // v70
         const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
         const defaultDay = dayNames[shiftDate.getDay()];
         const usaToPktSlot = (usaStr) => {
@@ -1170,6 +1170,7 @@ const ShiftingMod = ({
             React.createElement(
               "tbody",
               null,
+              !filtered.length && llqaEmptyRow(shifts.length ? "No class shift matches this search or filter" : "No class shifts yet", shifts.length ? "Clear the search or pick other filters." : "When a student moves to another teacher or time (\u201cNew Shift\u201d), it is recorded here with the reason."), // v70
               filtered.map((s, i) =>
                 React.createElement(
                   "tr",
@@ -1443,7 +1444,8 @@ const ShiftingMod = ({
           " shifts",
         ),
       ),
-    tab === "analytics" &&
+    tab === "analytics" && !shifts.length && llqaEmptyState({ key: "shifts-none", icon: "arrow-right-left", title: "No class shifts yet", text: "When a student moves to another teacher or time (\u201cNew Shift\u201d), it is recorded here with the reason. The analytics, SPS and feedback lists and the timeline are built from those records." }), // v70
+    tab === "analytics" && shifts.length > 0 &&
       React.createElement(
         React.Fragment,
         null,
@@ -1783,7 +1785,8 @@ const ShiftingMod = ({
           ),
         ),
       ),
-    tab === "pending" &&
+    tab === "pending" && !shifts.length && llqaEmptyState({ key: "shifts-none", icon: "arrow-right-left", title: "No class shifts yet", text: "When a student moves to another teacher or time (\u201cNew Shift\u201d), it is recorded here with the reason. The analytics, SPS and feedback lists and the timeline are built from those records." }), // v70
+    tab === "pending" && shifts.length > 0 &&
       React.createElement(
         React.Fragment,
         null,
@@ -1992,6 +1995,7 @@ const ShiftingMod = ({
               React.createElement(
                 "tbody",
                 null,
+                llqaEmptyRow("No feedback waiting", "Class shifts still waiting for the parent\u2019s feedback show here."), // v70: shows only when the table is empty
                 shifts
                   .filter((s) => !s.feedback || s.feedback === "Pending")
                   .slice(0, 15)
@@ -2074,7 +2078,7 @@ const ShiftingMod = ({
                                 cursor: "pointer",
                                 padding: "3px 6px",
                                 color: c.success,
-                                fontSize: 8,
+                                fontSize: 9,
                                 fontWeight: 600,
                               },
                             },
@@ -2091,7 +2095,7 @@ const ShiftingMod = ({
                                 cursor: "pointer",
                                 padding: "3px 6px",
                                 color: c.danger,
-                                fontSize: 8,
+                                fontSize: 9,
                                 fontWeight: 600,
                               },
                             },
@@ -2108,7 +2112,7 @@ const ShiftingMod = ({
                                 cursor: "pointer",
                                 padding: "3px 6px",
                                 color: c.warn,
-                                fontSize: 8,
+                                fontSize: 9,
                                 fontWeight: 600,
                               },
                             },
@@ -2123,7 +2127,8 @@ const ShiftingMod = ({
           ),
         ),
       ),
-    tab === "timeline" &&
+    tab === "timeline" && !shifts.length && llqaEmptyState({ key: "shifts-none", icon: "arrow-right-left", title: "No class shifts yet", text: "When a student moves to another teacher or time (\u201cNew Shift\u201d), it is recorded here with the reason. The analytics, SPS and feedback lists and the timeline are built from those records." }), // v70
+    tab === "timeline" && shifts.length > 0 &&
       React.createElement(
         React.Fragment,
         null,

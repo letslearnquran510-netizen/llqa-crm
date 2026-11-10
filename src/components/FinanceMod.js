@@ -83,9 +83,7 @@ const FinanceMod = () => {
         expense: 0,
       };
     }
-    Object.keys(months).forEach((m) => {
-      months[m].income = feeStats.monthlyRev * (0.85 + Math.random() * 0.15);
-    });
+    // v70: no made-up numbers — this page has no month-by-month income, so it shows none
     expenses.forEach((e) => {
       const m = e.date.substring(0, 7);
       if (months[m])
@@ -93,8 +91,6 @@ const FinanceMod = () => {
           (e.amount * EXCHANGE_RATE[e.currency]) / EXCHANGE_RATE.USD;
     });
     Object.keys(months).forEach((m, i) => {
-      if (months[m].expense === 0)
-        months[m].expense = 5500 + Math.random() * 500;
       months[m].profit = Math.round(months[m].income - months[m].expense);
       months[m].income = Math.round(months[m].income);
       months[m].expense = Math.round(months[m].expense);
@@ -306,7 +302,7 @@ const FinanceMod = () => {
             },
           },
           "Finance & Accounting \u2014 ",
-          new Date(selectedMonth + "-01").toLocaleDateString("en-US", {
+          llqaLocalDay(selectedMonth + "-01").toLocaleDateString("en-US", { // v70
             month: "long",
             year: "numeric",
           }),
@@ -339,7 +335,7 @@ const FinanceMod = () => {
           },
         },
         React.createElement(
-          "select",
+          LLQASelect, // v70: the CRM's own list
           {
             value: displayCur,
             onChange: (e) => setDisplayCur(e.target.value),
@@ -951,7 +947,7 @@ const FinanceMod = () => {
             }),
           ),
           React.createElement(
-            "select",
+            LLQASelect, // v70: the CRM's own list
             {
               value: fStatus,
               onChange: (e) => setFStatus(e.target.value),
@@ -994,7 +990,7 @@ const FinanceMod = () => {
             ),
           ),
           React.createElement(
-            "select",
+            LLQASelect, // v70: the CRM's own list
             {
               value: fCourse,
               onChange: (e) => setFCourse(e.target.value),
@@ -1138,7 +1134,7 @@ const FinanceMod = () => {
                           {
                             style: {
                               display: "inline-block",
-                              fontSize: 8,
+                              fontSize: 9,
                               padding: "1px 6px",
                               borderRadius: 8,
                               background: c.accentBg,
@@ -1774,7 +1770,7 @@ const FinanceMod = () => {
                             {
                               style: {
                                 display: "inline-block",
-                                fontSize: 8,
+                                fontSize: 9,
                                 padding: "1px 6px",
                                 borderRadius: 8,
                                 background: c.accentBg,
@@ -1911,7 +1907,7 @@ const FinanceMod = () => {
             }),
           ),
           React.createElement(
-            "select",
+            LLQASelect, // v70: the CRM's own list
             {
               value: fCat,
               onChange: (e) => setFCat(e.target.value),
@@ -2258,7 +2254,7 @@ const FinanceMod = () => {
               },
             },
             "LLQA Academy \xB7 For the month of ",
-            new Date(selectedMonth + "-01").toLocaleDateString("en-US", {
+            llqaLocalDay(selectedMonth + "-01").toLocaleDateString("en-US", { // v70
               month: "long",
               year: "numeric",
             }),
@@ -3824,7 +3820,7 @@ const FinanceMod = () => {
                 icon: AlertTriangle,
                 variant: "outline",
                 onClick: () => {
-                  const studentName = (s && s.name) || "this student";
+                  const studentName = (modal.data && modal.data.name) || "this student"; // v70: was "s" (not defined)
                   alert(
                     "\u2713 Reminder sent to " +
                       studentName +

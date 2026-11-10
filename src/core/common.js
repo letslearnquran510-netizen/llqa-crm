@@ -1,9 +1,9 @@
 const { useState, useMemo, useEffect } = React;
 
 const {
-  BarChart,
+  BarChart: RcBarChart,
   Bar,
-  PieChart,
+  PieChart: RcPieChart,
   Pie,
   Cell,
   XAxis,
@@ -11,9 +11,41 @@ const {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  AreaChart,
+  AreaChart: RcAreaChart,
   Area,
 } = Recharts;
+// v70: a chart with nothing to draw says so, instead of an empty grid or a blank circle.
+// BarChart / AreaChart / PieChart below wrap Recharts' own; every chart in the CRM goes through them.
+const llqaChartState = (data, skip) => {
+  if (!Array.isArray(data) || !data.length) return "empty";
+  // labels (text, or the x-axis key even when it is a number such as a day of the month) are not values;
+  // when every value in every row is 0 there is nothing to draw either
+  const sk = skip || [];
+  return data.every((row) => !row || Object.entries(row).every(([k, v]) => sk.includes(k) || typeof v !== "number" || v === 0)) ? "zero" : "ok";
+};
+const llqaSafeChart = (Comp, pie) => {
+  const W = (props) => {
+    const kids = [].concat(props.children == null ? [] : props.children).flat(Infinity);
+    const data = pie ? [].concat(...kids.filter((ch) => ch && ch.props && Array.isArray(ch.props.data)).map((ch) => ch.props.data)) : props.data;
+    const xKeys = kids.filter((ch) => ch && ch.type === XAxis && ch.props && typeof ch.props.dataKey === "string").map((ch) => ch.props.dataKey);
+    const st = llqaChartState(data, xKeys);
+    if (st === "ok") return React.createElement(Comp, props);
+    return React.createElement(
+      "div",
+      {
+        role: "note",
+        style: { width: props.width || "100%", height: props.height || 200, display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center", color: c.textSec, fontSize: 12, padding: "0 16px", boxSizing: "border-box", border: "1px dashed " + c.border, borderRadius: 10 },
+      },
+      st === "zero" ? "No data to show yet — every value is 0." : "No data to show yet.",
+    );
+  };
+  W.displayName = "LLQASafe" + (Comp.displayName || "Chart");
+  return W;
+};
+const BarChart = llqaSafeChart(RcBarChart);
+const AreaChart = llqaSafeChart(RcAreaChart);
+const PieChart = llqaSafeChart(RcPieChart, true);
+
 
 const STATE_TZ = {
   florida: "America/New_York",
@@ -1490,6 +1522,9 @@ const c = {
   textMuted: "var(--textMuted)",
   accent: "var(--accent)",
   accentBg: "var(--accentBg)",
+  booked: "var(--booked)", // v70: booked / paid data (never a status colour)
+  bookedBg: "var(--bookedBg)",
+  seriesBFill: "var(--seriesBFill)", // v70: a second chart colour, never the accent
   accentText: "var(--accentText)",
   accentBorder: "var(--accentBorder)",
   purpleText: "var(--purpleText)",
@@ -1575,7 +1610,7 @@ const llqaColor = (() => {
   };
   const shift = (c, dL) => { const [L, C, H] = toLch(c); return fromLch(Math.max(0, Math.min(1, L + dL)), C, H); };
   const rgba = (c, a) => "rgba(" + c.map(Math.round).join(", ") + ", " + a + ")";
-  return { hex, toHex, contrast, over, fit, shift, rgba };
+  return { hex, toHex, contrast, over, fit, shift, rgba, toLch };
 })();
 
 // colour + transparency that also works when the colour is a CSS variable
@@ -1696,8 +1731,31 @@ function llqaThemeVars(mode, accent, tone, backdrop, keep) {
     vars[k + "Text"] = v.text;
   });
   vars.glowB = K.rgba(K.hex(pick.purple.ink), dark ? 0.09 : 0.06);
+  // v70: booked (paid) classes and other everyday data shown next to the status colours use the accent — unless
+  // the accent looks like a status colour (a red, amber or green accent would read as "trial", "awaiting" or
+  // "free"); then a calm blue that can't be mistaken for any of them
+  const bk = llqaBookedInk(a.accentRaw, mode, backdrop);
+  vars.booked = bk;
+  vars.bookedBg = K.rgba(K.hex(bk), tint);
+  // a second chart colour that never equals the accent (Balanced turns purple into the accent): purple, or a calm slate
+  vars.seriesBFill = tm === "compact" ? T.fill.neutral[0] : vars.purpleFill;
   if (keep !== false) LLQA_THEME.used = { mode: dark ? "dark" : "light", accent: a.accentRaw, tone: tm, backdrop: llqaBackdrop(backdrop), vars };
   return vars;
+}
+// is this accent too close to a status colour to mark ordinary booked / paid data?
+function llqaAccentClash(accent) {
+  const K = llqaColor;
+  const raw = K.hex(accent);
+  if (!raw) return false;
+  const [, C, H] = K.toLch(raw);
+  if (C < 0.07) return false; // greys and near-black are never confused with a status colour
+  const deg = (h) => ((h * 180) / Math.PI + 360) % 360;
+  const near = (x) => { const [, cx, hx] = K.toLch(K.hex(x)); if (cx < 0.07) return false; const d = Math.abs(deg(H) - deg(hx)) % 360; return Math.min(d, 360 - d) < 34; };
+  return ["#da2c32", "#f59e0b", "#04835a"].some(near); // danger, warn, success
+}
+function llqaBookedInk(accent, mode, backdrop) {
+  const a = llqaAccentSet(accent, mode, backdrop);
+  return llqaAccentClash(a.accentRaw) ? llqaAccentSet("#4a7aff", mode, backdrop).accent : a.accent;
 }
 function llqaPaintTheme(mode, vars, backdrop) {
   const root = document.documentElement;
@@ -2165,6 +2223,127 @@ const LLQAThemePreview = () => {
     ),
   );
 };
+
+/* ---------- v70: a calendar day is the same day on every computer ---------- */
+// new Date("2026-11-01") is midnight in London, which is still 31 October on a computer in the Americas
+// ("Payroll — October 2026" under a November month picker, a parent's date of birth one day early).
+// A day written as "YYYY-MM-DD" is read as that day where the computer is; anything else is read as before.
+const llqaLocalDay = (s) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(s == null ? "" : s).trim());
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(s);
+};
+
+// a short "nothing here" line for a list of cards; like llqaEmptyRow it hides itself once the list has an item (theme.css)
+const llqaEmptyNote = (text) =>
+  React.createElement("div", { key: "empty-note", className: "llqa-empty-note", style: { color: c.textSec, fontSize: 12, padding: "6px 2px", lineHeight: 1.5 } }, text);
+
+/* ---------- v70: a teacher's students, counted from the timetable ---------- */
+// The stored "students" number was never filled in (no field sets it), so the Teachers list showed nothing or 0
+// and removing a teacher never warned about their students. Different students booked in the teacher's week:
+// the built-in schedule (as computeFree finds it) with the teacher's saved changes on top.
+const llqaTeacherStudents = (tx) => {
+  if (!tx) return 0;
+  let base = {};
+  for (const sh of ["Morning", "Evening", "Night", "Weekend"]) {
+    const found = ((TT_DATA[sh] || {}).teachers || []).find((x) => x.name === tx.name || x.code === tx.code);
+    if (found) { base = found.schedule || {}; break; }
+  }
+  const ov = tx._ttSchedule || {};
+  const seen = new Set();
+  new Set([...Object.keys(base), ...Object.keys(ov)]).forEach((d) => {
+    const b = base[d] || {}, o = ov[d] || {};
+    new Set([...Object.keys(b), ...Object.keys(o)]).forEach((s) => {
+      const v = o[s] !== undefined ? o[s] : b[s];
+      if (!v || typeof v !== "object") return;
+      const k = v.sid != null && v.sid !== "" ? "id:" + v.sid : "n:" + String(v.s || "").trim().toLowerCase();
+      if (k !== "n:") seen.add(k);
+    });
+  });
+  return seen.size;
+};
+
+/* ---------- v70: empty places say what to do next (one look, no guessing) ---------- */
+// a card for a place with nothing in it yet: icon, one clear line, a short how-to, and the button that fixes it
+const llqaEmptyState = (o) =>
+  React.createElement(
+    "div",
+    {
+      key: o.key || "empty",
+      role: "status",
+      style: { background: c.bgCard, border: "1px dashed " + c.border, borderRadius: 12, padding: o.compact ? "20px 16px" : "36px 20px", textAlign: "center", ...(o.style || {}) },
+    },
+    React.createElement(
+      "div",
+      { style: { width: 44, height: 44, borderRadius: 12, margin: "0 auto 12px", background: c.accentBg, color: c.accent, display: "flex", alignItems: "center", justifyContent: "center" } },
+      React.createElement(llqaIcon(o.icon || "inbox"), { size: 20, "aria-hidden": true }),
+    ),
+    React.createElement("div", { style: { color: c.text, fontSize: 14, fontWeight: 700, lineHeight: 1.35 } }, o.title),
+    o.text
+      ? React.createElement("div", { style: { color: c.textSec, fontSize: 12, marginTop: 5, maxWidth: 520, marginLeft: "auto", marginRight: "auto", lineHeight: 1.55 } }, o.text)
+      : null,
+    o.action
+      ? React.createElement(
+          "button",
+          {
+            type: "button",
+            onClick: o.action[1],
+            style: { marginTop: 16, display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 8, border: "none", background: c.accentFill, color: c.accentText, fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit" },
+          },
+          o.action[2] ? React.createElement(llqaIcon(o.action[2]), { size: 14, "aria-hidden": true }) : null,
+          o.action[0],
+        )
+      : null,
+  );
+// a shift with no teachers yet (Timetable, Book Slot, Overview, Analytics, Capacity)
+const llqaNoTeachers = (shift, small) => {
+  const ctx = LLQAApp.ctx || {};
+  const u = ctx.user || {};
+  const own = u.role === "teacher";
+  if (own) {
+    // a teacher looking at a shift they don't teach in is told where their classes are (not "not set up")
+    const nm = String(u.name || "").trim().toLowerCase();
+    const me = (ctx.teachers || []).find((t) => t && ((u.teacherId != null && String(t.id) === String(u.teacherId)) || (nm && String(t.name || "").trim().toLowerCase() === nm)));
+    const mine = me && me.shift && me.shift !== shift && typeof TT_DATA === "object" && TT_DATA[me.shift] ? me.shift : "";
+    return llqaEmptyState({
+      key: "noteach",
+      icon: "calendar",
+      compact: !!small,
+      title: mine ? "You have no classes in the " + shift + " shift" : "Your timetable is not set up yet",
+      text: mine ? "Your classes are in the " + mine + " shift — choose “" + mine + "” above." : "Ask the admin to add you to a shift. Your classes will show here.",
+    });
+  }
+  const canAdd = !small && typeof llqaCanOpen === "function" && llqaCanOpen("teachers");
+  return llqaEmptyState({
+    key: "noteach",
+    icon: "users",
+    compact: !!small,
+    title: "No teachers in the " + shift + " shift yet",
+    text: "Add a teacher in HR → Teachers and choose the " + shift + " shift. Their weekly timetable shows here, ready to book.",
+    action: canAdd ? ["Add a teacher", () => llqaGo("teachers"), "user-plus"] : null,
+  });
+};
+// an empty table says so: one row across every column (the number of columns is read from the table itself).
+// It can sit in a table that has rows too: it only shows while it is the table's only row (theme.css).
+const llqaEmptyRow = (title, text) =>
+  React.createElement(
+    "tr",
+    { key: "empty-row", className: "llqa-empty-row" },
+    React.createElement(
+      "td",
+      {
+        colSpan: 1,
+        ref: (el) => {
+          if (!el) return;
+          const t = el.closest("table");
+          const n = t ? t.querySelectorAll("thead tr:first-child > *").length : 0;
+          if (n > 1 && el.colSpan !== n) el.colSpan = n;
+        },
+        style: { padding: "34px 16px", textAlign: "center", borderBottom: "none", background: "transparent" },
+      },
+      React.createElement("div", { style: { color: c.text, fontSize: 13, fontWeight: 600 } }, title),
+      text ? React.createElement("div", { style: { color: c.textSec, fontSize: 12, marginTop: 4, lineHeight: 1.5 } }, text) : null,
+    ),
+  );
 
 const CC = [
   "#4a7aff",
@@ -3515,170 +3694,330 @@ const DEFAULT_SETTINGS = {
   fontSize: "Medium",
 };
 
-const SearchableSelect = ({
-  options,
-  value,
-  onChange,
-  style,
-  placeholder = "Select...",
-}) => {
-  const [open, setOpen] = useState(false);
-  const [q, setQ] = useState("");
-  const ref = React.useRef();
-
-  React.useEffect(() => {
-    const clickOutside = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
+/* ---------- v70: pop-out lists float above everything ---------- */
+// A dropdown list used to be drawn inside its own card, so the next card (or the edge of a pop-up window)
+// covered or cut it — in Settings → System Prefs only "Select..." showed. Lists now open in a top layer of
+// their own, right next to their field: below it, or above it when there is more room there; never taller or
+// wider than the window; and they follow the field when the page scrolls. Keyboard: ↑ ↓ Home End to move,
+// Enter / Space to pick, Esc to close; screen readers hear a combobox and its options.
+const llqaFloatRoot = () => {
+  let el = document.getElementById("llqa-float-root");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "llqa-float-root";
+    document.body.appendChild(el);
+  }
+  return el;
+};
+// screen pixels per CSS pixel inside the top layer (the Density setting zooms the whole page)
+const llqaFloatScale = () => {
+  const root = llqaFloatRoot();
+  const p = document.createElement("div");
+  p.style.cssText = "position:fixed;left:0;top:0;width:100px;height:1px;visibility:hidden;pointer-events:none";
+  root.appendChild(p);
+  const w = p.getBoundingClientRect().width;
+  root.removeChild(p);
+  return w > 0 ? w / 100 : 1;
+};
+let llqaFloatSeq = 0;
+const LLQAFloat = ({ anchor, open, onClose, maxHeight = 260, panelRef, style, children, ...rest }) => {
+  const own = React.useRef(null);
+  const ref = panelRef || own;
+  const [pos, setPos] = useState(null);
+  const closeRef = React.useRef(onClose);
+  closeRef.current = onClose;
+  React.useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return undefined;
+    }
+    const place = () => {
+      const a = anchor && anchor.current;
+      const p = ref.current;
+      if (!a || !p) return;
+      const r = a.getBoundingClientRect();
+      // the field left the screen (page scrolled, tab changed): close, like a native list
+      if (!r.width || r.bottom < 0 || r.top > window.innerHeight) {
+        if (closeRef.current) closeRef.current();
+        return;
+      }
+      const k = llqaFloatScale();
+      const vw = window.innerWidth / k, vh = window.innerHeight / k;
+      const L = r.left / k, T = r.top / k, B = r.bottom / k, W = r.width / k;
+      const gap = 4, edge = 8;
+      const need = Math.min(maxHeight, p.scrollHeight);
+      const below = vh - B - gap - edge, above = T - gap - edge;
+      const up = below < need && above > below;
+      const h = Math.max(48, Math.min(maxHeight, up ? above : below));
+      const maxW = vw - 2 * edge;
+      const w = Math.min(Math.max(p.offsetWidth, W), maxW);
+      const left = Math.max(edge, Math.min(L, vw - edge - w));
+      const n = { left, minWidth: Math.min(W, maxW), maxWidth: Math.min(380, maxW), maxHeight: h, up };
+      if (up) n.bottom = vh - T + gap;
+      else n.top = B + gap;
+      setPos((o) => (o && JSON.stringify(o) === JSON.stringify(n) ? o : n));
     };
-    document.addEventListener("mousedown", clickOutside);
-    return () => document.removeEventListener("mousedown", clickOutside);
-  }, []);
-
-  const filtered = options.filter((o) =>
-    o.label.toLowerCase().includes(q.toLowerCase()),
-  );
-  const selectedOpt = options.find((o) => String(o.value) === String(value));
-
-  return React.createElement(
-    "div",
-    { ref, style: { position: "relative", ...style } },
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => {
+      window.removeEventListener("scroll", place, true);
+      window.removeEventListener("resize", place);
+    };
+  }, [open]);
+  if (!open) return null;
+  const at = pos
+    ? { left: pos.left, top: pos.up ? "auto" : pos.top, bottom: pos.up ? pos.bottom : "auto", minWidth: pos.minWidth, maxWidth: pos.maxWidth, maxHeight: pos.maxHeight, visibility: "visible" }
+    : { left: 0, top: 0, visibility: "hidden" };
+  return ReactDOM.createPortal(
     React.createElement(
       "div",
       {
-        onClick: () => {
-          setOpen(!open);
-          setQ("");
+        ref,
+        ...rest,
+        "data-llqa-float": pos && pos.up ? "up" : "down",
+        style: {
+          position: "fixed",
+          zIndex: 2147483000,
+          boxSizing: "border-box",
+          overflowY: "auto",
+          overscrollBehavior: "contain",
+          width: "max-content",
+          background: "linear-gradient(" + c.bgDeep + ", " + c.bgDeep + "), " + c.bg,
+          border: "1px solid " + c.border,
+          borderRadius: 8,
+          boxShadow: "0 12px 32px -8px rgba(15, 23, 42, 0.28), 0 2px 6px rgba(15, 23, 42, 0.08)",
+          padding: "4px 0",
+          ...style,
+          ...at,
+        },
+      },
+      children,
+    ),
+    llqaFloatRoot(),
+  );
+};
+// closes a pop-out on a click outside it (its field and its list count as inside) or on Esc
+const llqaUseDismiss = (open, setOpen, refs) => {
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const down = (e) => {
+      if (refs.some((r) => r.current && r.current.contains(e.target))) return;
+      setOpen(false);
+    };
+    const key = (e) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation(); // Esc closes the list, not the pop-up window behind it
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", down);
+    document.addEventListener("keydown", key, true);
+    return () => {
+      document.removeEventListener("mousedown", down);
+      document.removeEventListener("keydown", key, true);
+    };
+  }, [open]);
+};
+// keeps option i of a list in view while moving with the keyboard
+const llqaKeepInView = (panel, i) => {
+  const p = panel.current;
+  if (!p) return;
+  const el = p.querySelector('[data-i="' + i + '"]');
+  if (!el) return;
+  if (el.offsetTop < p.scrollTop) p.scrollTop = el.offsetTop;
+  else if (el.offsetTop + el.offsetHeight > p.scrollTop + p.clientHeight) p.scrollTop = el.offsetTop + el.offsetHeight - p.clientHeight;
+};
+// one row of a list: the option under the mouse / keyboard is shaded, the chosen one is in the accent with a tick
+const llqaOptionRow = (o, i, { listId, active, chosen, muted, onPick, onHover, multi }) =>
+  React.createElement(
+    "div",
+    {
+      key: (o.clear ? "__clear" : String(o.value)) + "|" + i,
+      id: listId + "-" + i,
+      "data-i": i,
+      role: "option",
+      "aria-selected": !!chosen,
+      "aria-disabled": o.disabled ? true : undefined,
+      onMouseDown: (e) => e.preventDefault(), // keep the focus on the field
+      onClick: () => onPick(o),
+      onMouseEnter: () => onHover(i),
+      style: {
+        padding: "8px 12px",
+        cursor: o.disabled ? "not-allowed" : "pointer",
+        opacity: o.disabled ? 0.45 : 1,
+        fontSize: 12,
+        lineHeight: 1.35,
+        color: chosen ? c.accent : muted ? c.textSec : c.text,
+        fontWeight: chosen ? 600 : 400,
+        background: active ? c.bgHover : "transparent",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        whiteSpace: "nowrap",
+      },
+    },
+    React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis" } }, o.label),
+    chosen || multi ? React.createElement(Check, { size: 14, color: chosen ? c.accent : "transparent", "aria-hidden": true, style: { flexShrink: 0 } }) : null,
+  );
+
+const SearchableSelect = ({ options, value, onChange, style, placeholder = "Select..." }) => {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const [active, setActive] = useState(0);
+  const ref = React.useRef(null);
+  const panel = React.useRef(null);
+  const listId = React.useRef("llqa-list-" + ++llqaFloatSeq).current;
+  llqaUseDismiss(open, setOpen, [ref, panel]);
+  const all = options || [];
+  const filtered = all.filter((o) => String(o.label).toLowerCase().includes(q.toLowerCase()));
+  const selectedOpt = all.find((o) => String(o.value) === String(value));
+  const show = () => {
+    setQ("");
+    const i = all.findIndex((o) => String(o.value) === String(value));
+    setActive(i >= 0 ? i : 0);
+    setOpen(true);
+  };
+  const pick = (o) => {
+    if (!o || o.disabled) return;
+    onChange(o.value);
+    setOpen(false);
+  };
+  React.useEffect(() => {
+    if (open) llqaKeepInView(panel, active);
+  }, [open, active, q]);
+  const keys = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(filtered.length - 1, a + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(0, a - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); pick(filtered[active]); }
+    else if (e.key === "Tab") setOpen(false);
+  };
+  return React.createElement(
+    "div",
+    { ref, onClick: (e) => e.stopPropagation(), style: { position: "relative", ...style } },
+    React.createElement(
+      "div",
+      {
+        role: "combobox",
+        tabIndex: 0,
+        "aria-haspopup": "listbox",
+        "aria-expanded": open,
+        "aria-controls": open ? listId : undefined,
+        onClick: () => (open ? setOpen(false) : show()),
+        onKeyDown: (e) => {
+          if (!open && ["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) {
+            e.preventDefault();
+            show();
+          }
         },
         style: {
           padding: "8px 12px",
           background: c.bgInput,
-          border: "1px solid " + c.border,
+          border: "1px solid " + (open ? c.accent : c.border),
+          boxShadow: open ? "0 0 0 3px " + c.accentRing : "none",
           borderRadius: 7,
-          color: c.text,
+          color: selectedOpt ? c.text : c.textSec,
           fontSize: 12,
           cursor: "pointer",
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          gap: 8,
+          minHeight: 34,
+          boxSizing: "border-box",
+          outline: "none",
         },
       },
-      selectedOpt ? selectedOpt.label : placeholder,
-      React.createElement(ChevronDown, { size: 14 }),
+      React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, selectedOpt ? selectedOpt.label : placeholder),
+      React.createElement(ChevronDown, { size: 14, color: c.textSec, style: { flexShrink: 0, transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" } }),
     ),
-    open &&
-      React.createElement(
-        "div",
-        {
-          style: {
-            position: "absolute",
-            top: "100%",
-            left: 0,
-            right: 0,
-            background: c.bg,
-            border: "1px solid " + c.border,
-            borderRadius: 7,
-            marginTop: 4,
-            zIndex: 99999,
-            boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
-            maxHeight: 350,
-            overflowY: "auto",
-            display: "flex",
-            flexDirection: "column",
-          },
+    React.createElement(
+      LLQAFloat,
+      { anchor: ref, open, onClose: () => setOpen(false), panelRef: panel, maxHeight: 350, id: listId, role: "listbox", style: { padding: 0 }, onClick: (e) => e.stopPropagation() },
+      React.createElement("input", {
+        autoFocus: true,
+        value: q,
+        onChange: (e) => {
+          setQ(e.target.value);
+          setActive(0);
         },
-        React.createElement("input", {
-          autoFocus: true,
-          value: q,
-          onChange: (e) => setQ(e.target.value),
-          placeholder: "Search...",
-          style: {
-            padding: "10px 12px",
-            border: "none",
-            borderBottom: "1px solid " + c.border,
-            background: c.bgInput,
-            color: c.text,
-            outline: "none",
-            position: "sticky",
-            top: 0,
-          },
-          onClick: (e) => e.stopPropagation(),
-        }),
-        filtered.length === 0
-          ? React.createElement(
-              "div",
-              {
-                style: {
-                  padding: 12,
-                  color: c.textMuted,
-                  fontSize: 12,
-                  textAlign: "center",
-                },
-              },
-              "No results",
-            )
-          : filtered.map((o) =>
-              React.createElement(
-                "div",
-                {
-                  key: o.value,
-                  onClick: () => {
-                    onChange(o.value);
-                    setOpen(false);
-                  },
-                  style: {
-                    padding: "10px 12px",
-                    cursor: "pointer",
-                    fontSize: 12,
-                    color:
-                      String(o.value) === String(value) ? c.accent : c.text,
-                    background:
-                      String(o.value) === String(value)
-                        ? c.bgInput
-                        : "transparent",
-                    borderBottom: "1px solid " + llqaAlpha(c.border, "22"),
-                  },
-                  onMouseEnter: (e) => {
-                    if (String(o.value) !== String(value))
-                      e.currentTarget.style.background = c.bgInput;
-                  },
-                  onMouseLeave: (e) => {
-                    if (String(o.value) !== String(value))
-                      e.currentTarget.style.background = "transparent";
-                  },
-                },
-                o.label,
-              ),
-            ),
-      ),
+        onKeyDown: keys,
+        placeholder: "Search...",
+        "aria-label": "Search the list",
+        style: {
+          width: "100%",
+          boxSizing: "border-box",
+          padding: "10px 12px",
+          border: "none",
+          borderBottom: "1px solid " + c.border,
+          background: c.bgInput,
+          color: c.text,
+          fontSize: 12,
+          outline: "none",
+          position: "sticky",
+          top: 0,
+          zIndex: 1,
+        },
+      }),
+      filtered.length === 0
+        ? React.createElement("div", { style: { padding: 12, color: c.textSec, fontSize: 12, textAlign: "center" } }, "No match for “" + q + "”")
+        : filtered.map((o, i) =>
+            llqaOptionRow(o, i, { listId, active: i === active, chosen: String(o.value) === String(value), onPick: pick, onHover: setActive }),
+          ),
+    ),
   );
 };
 
-const CustomSelect = ({
-  options,
-  value,
-  onChange,
-  style,
-  placeholder = "Select...",
-}) => {
+const CustomSelect = ({ options, value, onChange, style, placeholder = "Select...", clearable = true, title }) => {
   const [open, setOpen] = useState(false);
-  const ref = React.useRef();
-
+  const [active, setActive] = useState(0);
+  const ref = React.useRef(null);
+  const field = React.useRef(null);
+  const panel = React.useRef(null);
+  const listId = React.useRef("llqa-list-" + ++llqaFloatSeq).current;
+  llqaUseDismiss(open, setOpen, [ref, panel]);
+  const normalizedOptions = (options || []).map((o) => (typeof o === "object" ? o : { label: String(o), value: String(o) }));
+  const selectedOpt = normalizedOptions.find((o) => String(o.value) === String(value));
+  // the list: the placeholder first (it clears the choice, as before) — unless the field has its own options only
+  const items = (clearable ? [{ label: placeholder, value: "", clear: true }] : []).concat(normalizedOptions);
+  const chosenAt = Math.max(0, items.findIndex((o) => !o.clear && String(o.value) === String(value)));
+  const show = () => {
+    setActive(chosenAt >= 0 ? chosenAt : 0);
+    setOpen(true);
+  };
+  const pick = (o) => {
+    if (!o || o.disabled) return;
+    onChange(o.clear ? "" : o.value);
+    setOpen(false);
+    if (field.current) field.current.focus();
+  };
+  const move = (d) =>
+    setActive((a) => {
+      let i = a;
+      for (let n = 0; n < items.length; n++) {
+        i = (i + d + items.length) % items.length;
+        if (!items[i].disabled) break;
+      }
+      return i;
+    });
   React.useEffect(() => {
-    const clickOutside = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener("mousedown", clickOutside);
-    return () => document.removeEventListener("mousedown", clickOutside);
-  }, []);
-
-  const normalizedOptions = (options || []).map((o) => {
-    return typeof o === "object" ? o : { label: String(o), value: String(o) };
-  });
-
-  const selectedOpt = normalizedOptions.find(
-    (o) => String(o.value) === String(value),
-  );
-
+    if (open) llqaKeepInView(panel, active);
+  }, [open, active]);
+  const keys = (e) => {
+    if (!open) {
+      if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) {
+        e.preventDefault();
+        show();
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+    else if (e.key === "Home") { e.preventDefault(); setActive(0); }
+    else if (e.key === "End") { e.preventDefault(); setActive(items.length - 1); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(items[active]); }
+    else if (e.key === "Tab") setOpen(false);
+  };
   // v68: layout props size the box, look props style the control (was: a box inside a box)
   const _lay = {}, _look = {};
   Object.keys(style || {}).forEach((k) => {
@@ -3689,17 +4028,22 @@ const CustomSelect = ({
     "div",
     {
       ref,
-      style: {
-        position: "relative",
-        width: "auto",
-        minWidth: 140,
-        ..._lay,
-      },
+      title: title || undefined,
+      onClick: (e) => e.stopPropagation(), // a list inside a clickable card or row opens the list, not the card
+      style: { position: "relative", width: "auto", minWidth: 140, ..._lay },
     },
     React.createElement(
       "div",
       {
-        onClick: () => setOpen(!open),
+        ref: field,
+        role: "combobox",
+        tabIndex: 0,
+        "aria-haspopup": "listbox",
+        "aria-expanded": open,
+        "aria-controls": open ? listId : undefined,
+        "aria-activedescendant": open ? listId + "-" + active : undefined,
+        onClick: () => (open ? setOpen(false) : show()),
+        onKeyDown: keys,
         style: {
           padding: "8px 10px",
           background: c.bgInput,
@@ -3713,104 +4057,29 @@ const CustomSelect = ({
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          gap: 8,
           minHeight: 34,
           boxSizing: "border-box",
+          outline: "none",
         },
       },
-      selectedOpt ? selectedOpt.label : placeholder,
-      React.createElement(ChevronDown, {
-        size: 14,
-        color: c.textSec,
-      }),
+      React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, selectedOpt ? selectedOpt.label : placeholder),
+      React.createElement(ChevronDown, { size: 14, color: c.textSec, style: { flexShrink: 0, transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" } }),
     ),
-    open &&
-      React.createElement(
-        "div",
-        {
-          style: {
-            position: "absolute",
-            top: "100%",
-            left: 0,
-            minWidth: "100%",
-            width: "max-content",
-            maxWidth: 380,
-            background: "linear-gradient(" + c.bgDeep + ", " + c.bgDeep + "), " + c.bg, // v68: solid list (was see-through)
-            backdropFilter: "blur(16px)",
-            border: "1px solid " + c.border,
-            borderRadius: 6,
-            marginTop: 4,
-            zIndex: 999999,
-            boxShadow: c.shadow3d,
-            maxHeight: 250,
-            overflowY: "auto",
-            display: "flex",
-            flexDirection: "column",
-            padding: "4px 0",
-          },
-        },
-        React.createElement(
-          "div",
-          {
-            onClick: () => {
-              onChange("");
-              setOpen(false);
-            },
-            style: {
-              padding: "8px 12px",
-              cursor: "pointer",
-              fontSize: 12,
-              color: !value ? c.accent : c.textSec,
-              background: !value ? c.bgHover : "transparent",
-              display: "flex",
-              alignItems: "center",
-            },
-            onMouseEnter: (e) => {
-              if (value) e.currentTarget.style.background = c.bgHover;
-            },
-            onMouseLeave: (e) => {
-              if (value) e.currentTarget.style.background = "transparent";
-            },
-          },
-          placeholder,
-        ),
-        normalizedOptions.map((o) =>
-          React.createElement(
-            "div",
-            {
-              key: o.value,
-              onClick: () => {
-                if (o.disabled) return;
-                onChange(o.value);
-                setOpen(false);
-              },
-              style: {
-                padding: "8px 12px",
-                cursor: o.disabled ? "not-allowed" : "pointer",
-                opacity: o.disabled ? 0.45 : 1,
-                fontSize: 12,
-                color: String(o.value) === String(value) ? c.accent : c.text,
-                background:
-                  String(o.value) === String(value) ? c.bgHover : "transparent",
-                display: "flex",
-                alignItems: "center",
-              },
-              onMouseEnter: (e) => {
-                if (!o.disabled && String(o.value) !== String(value))
-                  e.currentTarget.style.background = c.bgHover;
-              },
-              onMouseLeave: (e) => {
-                if (String(o.value) !== String(value))
-                  e.currentTarget.style.background = "transparent";
-              },
-            },
-            o.label,
-          ),
-        ),
+    React.createElement(
+      LLQAFloat,
+      { anchor: ref, open, onClose: () => setOpen(false), panelRef: panel, maxHeight: 280, id: listId, role: "listbox", onClick: (e) => e.stopPropagation() },
+      items.map((o, i) =>
+        llqaOptionRow(o, i, { listId, active: i === active, chosen: !o.clear && String(o.value) === String(value), muted: o.clear, onPick: pick, onHover: setActive }),
       ),
+    ),
   );
 };
 
-const NativeSelectWrapper = ({ children, onChange, ...props }) => {
+// A list written like a browser <select> (with <option> children), drawn as the CRM's own list.
+// v70: exactly the options it was given (no extra "Select..." row that blanked a setting or a filter),
+// disabled options stay disabled, and asString gives the value back as text, like a <select> does.
+const NativeSelectWrapper = ({ children, onChange, asString, ...props }) => {
   let finalOptions = [];
   if (children) {
     const childArray = Array.isArray(children) ? children : [children];
@@ -3823,57 +4092,56 @@ const NativeSelectWrapper = ({ children, onChange, ...props }) => {
           return {
             value: child.props.value !== undefined ? child.props.value : typeof label === "string" ? label : "", // v68
             label: label || child.props.value || "",
+            disabled: !!child.props.disabled,
           };
         }
         return null;
       })
       .filter(Boolean);
   }
-
   const handleChange = (val) => {
-    if (onChange) {
-      // Simulate native event
-      onChange({ target: { value: val } });
-    }
+    if (onChange) onChange({ target: { value: asString ? String(val == null ? "" : val) : val } }); // like a <select> change event
   };
-
-  return React.createElement(CustomSelect, {
-    ...props,
-    options: finalOptions,
-    onChange: handleChange,
-  });
+  return React.createElement(CustomSelect, { ...props, clearable: false, options: finalOptions, onChange: handleChange });
 };
+// v70: every browser <select> in the CRM now uses this (one look, one behaviour, never cut off)
+const LLQASelect = (props) => React.createElement(NativeSelectWrapper, { ...props, asString: true });
 
-const CustomMultiSelect = ({
-  options,
-  value,
-  onChange,
-  label,
-  placeholder = "Select...",
-}) => {
+// v70: the multi-choice list opens in the same top layer as every other list (it was cut by its pop-up window)
+const CustomMultiSelect = ({ options, value, onChange, label, placeholder = "Select..." }) => {
   const [open, setOpen] = React.useState(false);
-  const ref = React.useRef();
+  const [active, setActive] = React.useState(0);
+  const ref = React.useRef(null);
+  const field = React.useRef(null);
+  const panel = React.useRef(null);
+  const listId = React.useRef("llqa-list-" + ++llqaFloatSeq).current;
+  llqaUseDismiss(open, setOpen, [ref, panel]);
   const selectedVals = Array.isArray(value) ? value : [];
-
-  React.useEffect(() => {
-    const clickOutside = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) setOpen(false);
-    };
-    document.addEventListener("mousedown", clickOutside);
-    return () => document.removeEventListener("mousedown", clickOutside);
-  }, []);
-
+  const list = (options || []).map((o) => (typeof o === "object" ? o : { label: String(o), value: o }));
   const toggleVal = (v) => {
     if (selectedVals.includes(v)) onChange(selectedVals.filter((x) => x !== v));
     else onChange([...selectedVals, v]);
   };
-
+  React.useEffect(() => {
+    if (open) llqaKeepInView(panel, active);
+  }, [open, active]);
+  const keys = (e) => {
+    if (!open) {
+      if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) {
+        e.preventDefault();
+        setActive(0);
+        setOpen(true);
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => Math.min(list.length - 1, a + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => Math.max(0, a - 1)); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (list[active]) toggleVal(list[active].value); }
+    else if (e.key === "Tab") setOpen(false);
+  };
   return React.createElement(
     "div",
-    {
-      style: { marginBottom: 12, position: "relative" },
-      ref: ref,
-    },
+    { style: { marginBottom: 12, position: "relative" }, ref },
     label &&
       React.createElement(
         "label",
@@ -3893,11 +4161,23 @@ const CustomMultiSelect = ({
     React.createElement(
       "div",
       {
-        onClick: () => setOpen(!open),
+        ref: field,
+        role: "combobox",
+        tabIndex: 0,
+        "aria-haspopup": "listbox",
+        "aria-expanded": open,
+        "aria-controls": open ? listId : undefined,
+        "aria-label": typeof label === "string" ? label : undefined,
+        onClick: () => {
+          if (!open) setActive(0);
+          setOpen(!open);
+        },
+        onKeyDown: keys,
         style: {
           padding: "8px 10px",
           background: c.bgInput,
           border: "1px solid " + (open ? c.accent : c.border),
+          boxShadow: open ? "0 0 0 3px " + c.accentRing : "none",
           borderRadius: 6,
           color: selectedVals.length > 0 ? c.text : c.textSec,
           fontSize: 12,
@@ -3905,61 +4185,22 @@ const CustomMultiSelect = ({
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
+          gap: 8,
           minHeight: 34,
           boxSizing: "border-box",
+          outline: "none",
         },
       },
-      selectedVals.length > 0 ? selectedVals.join(", ") : placeholder,
-      React.createElement(ChevronDown, { size: 14, color: c.textSec }),
+      React.createElement("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, selectedVals.length > 0 ? selectedVals.join(", ") : placeholder),
+      React.createElement(ChevronDown, { size: 14, color: c.textSec, style: { flexShrink: 0, transform: open ? "rotate(180deg)" : "none", transition: "transform .15s" } }),
     ),
-    open &&
-      React.createElement(
-        "div",
-        {
-          style: {
-            position: "absolute",
-            top: "100%",
-            left: 0,
-            right: 0,
-            background: c.bgDeep,
-            backdropFilter: "blur(16px)",
-            border: "1px solid " + c.border,
-            borderRadius: 6,
-            marginTop: 4,
-            zIndex: 999999,
-            boxShadow: c.shadow3d,
-            maxHeight: 200,
-            overflowY: "auto",
-            display: "flex",
-            flexDirection: "column",
-            padding: "4px 0",
-          },
-        },
-        options.map((opt) =>
-          React.createElement(
-            "div",
-            {
-              key: opt,
-              onClick: () => toggleVal(opt),
-              style: {
-                padding: "8px 12px",
-                cursor: "pointer",
-                fontSize: 12,
-                color: selectedVals.includes(opt) ? c.accent : c.textSec,
-                background: selectedVals.includes(opt)
-                  ? c.bgHover
-                  : "transparent",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-              },
-            },
-            opt,
-            selectedVals.includes(opt) &&
-              React.createElement(Check, { size: 14, color: c.accent }),
-          ),
-        ),
+    React.createElement(
+      LLQAFloat,
+      { anchor: field, open, onClose: () => setOpen(false), panelRef: panel, maxHeight: 240, id: listId, role: "listbox", "aria-multiselectable": true },
+      list.map((o, i) =>
+        llqaOptionRow(o, i, { listId, active: i === active, chosen: selectedVals.includes(o.value), multi: true, onPick: (x) => toggleVal(x.value), onHover: setActive }),
       ),
+    ),
   );
 };
 

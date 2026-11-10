@@ -98,12 +98,7 @@ const StudentDetailC = ({ s, onClose, onP, pp, bc, teacherFeedback }) =>
         React.createElement(
           "button",
           {
-            onClick: () => {
-              if (t.phone)
-                window.location.href = "tel:" + t.phone.replace(/[^0-9+]/g, "");
-              else alert("Phone number not available for this teacher.");
-            },
-            onClick: onClose,
+            onClick: onClose, // v70: a dead duplicate onClick (undefined "t") removed
             style: {
               background: "none",
               border: "none",
@@ -209,7 +204,7 @@ const StudentDetailC = ({ s, onClose, onP, pp, bc, teacherFeedback }) =>
                 {
                   style: {
                     color: c.textSec,
-                    fontSize: 8,
+                    fontSize: 9,
                     textTransform: "uppercase",
                     fontWeight: 600,
                   },
@@ -422,7 +417,7 @@ const StudentDetailC = ({ s, onClose, onP, pp, bc, teacherFeedback }) =>
                   {
                     style: {
                       color: c.textSec,
-                      fontSize: 8,
+                      fontSize: 9,
                       textTransform: "uppercase",
                       marginBottom: 2,
                     },

@@ -619,7 +619,7 @@ const MonthlyAttendanceGrid = ({ students, setStudents }) => {
                         "div",
                         {
                           style: {
-                            fontSize: 8,
+                            fontSize: 9,
                             fontWeight: 500,
                             color: isToday ? c.accent : c.textMuted,
                             marginTop: 1,
