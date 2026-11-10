@@ -1,4 +1,7 @@
 const AttendanceMod = ({
+  appSettings, // v72: office times and fines
+  setAppSettings,
+  setTeachers,
   user,
   autoAttendance,
   setAutoAttendance,
@@ -22,10 +25,38 @@ const AttendanceMod = ({
   const [modal, setModal] = useState(null);
   const [regForm, setRegForm] = useState({});
   const today = todayPK();
+  // v72: the settings the fines use, who is acting, each teacher's office day (a night shift's starts before midnight)
+  const fineSet = () => (LLQAApp.ctx && LLQAApp.ctx.appSettings) || appSettings;
+  const who = (user && (user.name || (user.role === "superadmin" ? "Super Admin" : user.role))) || "Admin";
+  const dayOf = (t) => {
+    const od = t ? llqaOfficeDay(llqaOffice(t, fineSet()), llqaNowMs()) : null;
+    return od ? od.date : today;
+  };
+  // older months come from the cloud when they are looked at; whether each teacher's CRM is open now is followed
+  // while this screen is open
+  React.useEffect(() => {
+    const need = LLQAApp.ctx && LLQAApp.ctx.attNeed;
+    if (typeof need === "function") {
+      need(String(selectedMonth || "").slice(0, 7));
+      need(String(selectedDate || "").slice(0, 7));
+    }
+  }, [selectedMonth, selectedDate]);
+  React.useEffect(() => {
+    const days = () => {
+      const ms = llqaNowMs();
+      return [llqaPkDate(ms - 864e5), llqaPkDate(ms), llqaPkDate(ms + 864e5)];
+    };
+    LLQAPresence.watch(days());
+    const id = setInterval(() => LLQAPresence.watch(days()), 600000);
+    return () => {
+      clearInterval(id);
+      LLQAPresence.watch([]);
+    };
+  }, []);
   const todayRecords = useMemo(() => {
     const r = {};
     teachers.forEach((t) => {
-      const rec = history[t.id]?.find((h) => h.date === today);
+      const rec = history[t.id]?.find((h) => h.date === dayOf(t)); // v72: the teacher's office day
       r[t.id] = rec || {
         status: "Not Marked",
         checkIn: "—",
@@ -35,7 +66,7 @@ const AttendanceMod = ({
       };
     });
     return r;
-  }, [teachers, history]);
+  }, [teachers, history, Math.floor(Date.now() / 600000)]); // v72: office days move on with the clock
   const liveStats = useMemo(() => {
     const stats = {
       total: teachers.length,
@@ -120,84 +151,71 @@ const AttendanceMod = ({
       .filter((t) => t.lateCount >= 3)
       .sort((a, b) => b.lateCount - a.lateCount);
   }, [teachers, history]);
-  const markAttendance = (teacherId, status) => {
+  // v72: marking by hand — Pakistan time (it used this computer's own clock), the teacher's office day, the time
+  // they signed in (asked for Late; a portal sign-in time is kept), every late minute at the academy's rate, and the
+  // fine kept with its times, rule and who marked it. A day the teacher is signed in on stays followed by the CRM.
+  const markAttendance = (teacherId, status, hm) => {
     const t = teachers.find((x) => x.id === teacherId);
-    const sm = (t.shift || "").includes("Morning")
-      ? 8
-      : (t.shift || "").includes("Evening")
-        ? 16
-        : (t.shift || "").includes("Night")
-          ? 0
-          : 10;
-    const now = new Date();
-    const checkIn =
-      now.getHours().toString().padStart(2, "0") +
-      ":" +
-      now.getMinutes().toString().padStart(2, "0");
-    const lateMin =
-      status === "Late"
-        ? Math.max(0, now.getHours() * 60 + now.getMinutes() - sm * 60)
-        : 0;
-    const fine =
-      status === "Late"
-        ? lateMin > 30
-          ? FINE_RULES.late30
-          : lateMin > 10
-            ? FINE_RULES.late10
-            : 0
-        : status === "Absent"
-          ? FINE_RULES.absent
-          : status === "Half Day"
-            ? FINE_RULES.halfDay
-            : 0;
-    setHistory({
-      ...history,
-      [teacherId]: history[teacherId]
-        ?.filter((h) => h.date !== today)
-        .concat([
-          {
-            date: today,
-            status,
-            checkIn:
-              status === "Absent" || status === "On Leave" ? "—" : checkIn,
-            checkOut: "—",
-            lateMin,
-            fine,
-            device: "Admin Panel",
-            ip: "182.178.0.1",
-            approved: true,
-          },
-        ]) || [
+    if (!t) return;
+    const set = fineSet();
+    const off = llqaOffice(t, set);
+    const day = dayOf(t);
+    if (!llqaCanMarkDay(user, t, (history[teacherId] || []).find((x) => x.date === day))) {
+      llqaToast({ text: "Only an admin can change a day that is already marked or signed in." });
+      return;
+    }
+    setHistory((prev) => {
+      const list = (prev || {})[teacherId] || [];
+      const h = list.find((x) => x.date === day);
+      const o = { start: (h && h.officeStart) || off.start, end: (h && h.officeEnd) || off.end };
+      const gone = status === "Absent" || status === "On Leave";
+      const keepIn = h && llqaHm2m(h.checkIn) != null ? h.checkIn : "";
+      const inHm = gone ? "—" : hm || keepIn || "—";
+      const lateMin = status === "Late" ? llqaLateMin(o, inHm) : 0;
+      const working = status === "Present" || status === "Late";
+      const wd = llqaWorkDay(t, day, set);
+      const rec = llqaWithFine(
         {
-          date: today,
+          ...(h || {}),
+          date: day,
           status,
-          checkIn,
-          checkOut: "—",
+          checkIn: inHm,
+          checkOut: h && !gone && (llqaIsOpen(h) || llqaHm2m(h.checkOut) != null) ? h.checkOut : "—",
           lateMin,
-          fine,
-          device: "Admin Panel",
-          ip: "182.178.0.1",
+          earlyMin: working && h ? Number(h.earlyMin) || 0 : 0,
+          awayMin: working && h ? Number(h.awayMin) || 0 : 0,
+          officeStart: o.start,
+          officeEnd: o.end,
+          offDay: wd.ok ? "" : wd.why,
+          fineOverride: null,
+          device: (h && h.device) || "Admin Panel",
+          markedBy: who,
           approved: true,
         },
-      ],
+        set,
+        who,
+        "marked " + status + " by " + who + (lateMin ? " (signed in " + llqaHm12(inHm) + ", " + lateMin + " min after " + llqaHm12(o.start) + ")" : ""),
+      );
+      return { ...(prev || {}), [teacherId]: list.filter((x) => x.date !== day).concat([rec]) };
     });
   };
+  // checked out by an admin now: leaving before the exit is fined by the minute
   const checkOut = (teacherId) => {
-    const now = new Date();
-    const co =
-      now.getHours().toString().padStart(2, "0") +
-      ":" +
-      now.getMinutes().toString().padStart(2, "0");
-    setHistory({
-      ...history,
-      [teacherId]: history[teacherId].map((h) =>
-        h.date === today
-          ? {
-              ...h,
-              checkOut: co,
-            }
-          : h,
-      ),
+    const t = teachers.find((x) => x.id === teacherId);
+    if (!t || !llqaCanMarkAll(user)) return;
+    const set = fineSet();
+    const day = dayOf(t);
+    const nowMs = llqaNowMs();
+    setHistory((prev) => {
+      const list = (prev || {})[teacherId] || [];
+      return {
+        ...(prev || {}),
+        [teacherId]: list.map((h) => {
+          if (h.date !== day) return h;
+          const closed = llqaCloseDay(h, t, set, LLQAPresence.spans(day, teacherId, llqaFineRules(set).silenceMin), nowMs, "admin");
+          return llqaWithFine(closed, set, who, "checked out by " + who + (closed.earlyMin ? " — " + closed.earlyMin + " min before " + llqaHm12(closed.officeEnd) : ""));
+        }),
+      };
     });
   };
   const openCalendar = (teacherId) => {
@@ -205,11 +223,21 @@ const AttendanceMod = ({
     setTab("calendar");
   };
   const openRegularize = (teacherId, date) => {
+    // v72: correcting a day is for an admin (or a role given "Mark Attendance")
+    if (!llqaCanMarkAll(user)) {
+      llqaToast({ text: "Only an admin can correct a day." });
+      return;
+    }
     setRegForm({
       teacherId,
       date,
       reason: "",
       newStatus: "",
+      inTime: (() => {
+        // v72: a correction to Late asks when they signed in (starts from the time on the day)
+        const h = (history[teacherId] || []).find((x) => x.date === date);
+        return h && llqaHm2m(h.checkIn) != null ? h.checkIn : "";
+      })(),
     });
     setModal({
       type: "regularize",
@@ -702,39 +730,35 @@ const AttendanceMod = ({
               ),
             ),
           ),
+          llqaCanMarkAll(user) && // v72: marking by hand is for an admin (or a role given "Mark Attendance")
           React.createElement(
             "button",
             {
               onClick: () => {
-                if (
-                  confirm(
-                    "Mark ALL teachers as Present for today? This will overwrite any existing attendance entries.",
-                  )
-                ) {
-                  const now = new Date();
-                  const checkIn =
-                    now.getHours().toString().padStart(2, "0") +
-                    ":" +
-                    now.getMinutes().toString().padStart(2, "0");
-                  const newHist = { ...history };
-                  teachers.forEach((t) => {
-                    newHist[t.id] = (newHist[t.id] || [])
-                      .filter((h) => h.date !== today)
-                      .concat([
-                        {
-                          date: today,
-                          status: "Present",
-                          checkIn: checkIn,
-                          checkOut: "?",
-                          lateMin: 0,
-                          fine: 0,
-                          approved: true,
-                        },
-                      ]);
-                  });
-                  setHistory(newHist);
+                // v72: only teachers with nothing marked yet today; nobody's day is overwritten
+                const set = fineSet();
+                const todo = teachers.filter((t) => !(history[t.id] || []).some((h) => h.date === dayOf(t)));
+                if (!todo.length) {
+                  llqaToast({ text: "Every teacher already has attendance for today — nothing changed." });
+                  return;
                 }
+                if (!confirm("Mark " + todo.length + " teacher" + (todo.length === 1 ? "" : "s") + " with nothing marked yet today as Present (on time)? Teachers already marked or signed in keep what they have.")) return;
+                setHistory((prev) => {
+                  const next = { ...(prev || {}) };
+                  todo.forEach((t) => {
+                    const day = dayOf(t);
+                    if ((next[t.id] || []).some((h) => h.date === day)) return;
+                    const off = llqaOffice(t, set);
+                    const wd = llqaWorkDay(t, day, set);
+                    next[t.id] = (next[t.id] || []).concat([
+                      llqaWithFine({ date: day, status: "Present", checkIn: "—", checkOut: "—", lateMin: 0, earlyMin: 0, officeStart: off.start, officeEnd: off.end, offDay: wd.ok ? "" : wd.why, device: "Admin Panel", markedBy: who, approved: true }, set, who, "marked Present by " + who),
+                    ]);
+                  });
+                  return next;
+                });
+                llqaToast({ text: todo.length + " teacher" + (todo.length === 1 ? "" : "s") + " marked Present." });
               },
+              title: "Mark everyone with nothing marked yet today as Present", // v72
               style: {
                 padding: "8px 12px",
                 background: c.successBg,
@@ -748,66 +772,18 @@ const AttendanceMod = ({
             },
             "Mark All Present",
           ),
+          llqaCanMarkAll(user) && // v72
           React.createElement(
             "button",
             {
               onClick: () => {
-                if (
-                  confirm(
-                    "Auto-fill missing checkouts for today? Teachers who closed their browser will be checked out at their last active (Heartbeat) time. Others will be assigned an automatic checkout time (8 hours after check-in).",
-                  )
-                ) {
-                  const today = todayPK();
-                  const newHist = { ...history };
-                  let count = 0;
-                  teachers.forEach((t) => {
-                    const todayRecs = newHist[t.id] || [];
-                    const recIdx = todayRecs.findIndex((h) => h.date === today);
-                    if (
-                      recIdx > -1 &&
-                      todayRecs[recIdx].status === "Present" &&
-                      (todayRecs[recIdx].checkOut === "?" ||
-                        todayRecs[recIdx].checkOut === "-" ||
-                        !todayRecs[recIdx].checkOut)
-                    ) {
-                      let endStr = "";
-                      if (todayRecs[recIdx].lastActive) {
-                        endStr = todayRecs[recIdx].lastActive;
-                      } else {
-                        let startH = 8,
-                          startM = 0;
-                        if (
-                          todayRecs[recIdx].checkIn &&
-                          todayRecs[recIdx].checkIn !== "?" &&
-                          todayRecs[recIdx].checkIn !== "-"
-                        ) {
-                          const parts = todayRecs[recIdx].checkIn.split(":");
-                          startH = parseInt(parts[0], 10) || 8;
-                          startM = parseInt(parts[1], 10) || 0;
-                        }
-                        let endH = startH + 8;
-                        if (endH >= 24) endH -= 24;
-                        endStr =
-                          String(endH).padStart(2, "0") +
-                          ":" +
-                          String(startM).padStart(2, "0");
-                      }
-                      todayRecs[recIdx] = {
-                        ...todayRecs[recIdx],
-                        checkOut: endStr,
-                      };
-                      newHist[t.id] = [...todayRecs];
-                      count++;
-                    }
-                  });
-                  if (count > 0) {
-                    setHistory(newHist);
-                    alert(count + " missing checkouts were auto-filled!");
-                  } else {
-                    alert("No missing checkouts found for today.");
-                  }
-                }
+                // v72: days whose exit time has passed are closed now, from when each teacher's CRM was last open
+                // (the CRM also does this by itself every 5 minutes on an admin's screen)
+                llqaCloseFinished(teachers, fineSet(), who, true)
+                  .then((n) => llqaToast({ text: n ? n + " day" + (n === 1 ? "" : "s") + " closed from when each teacher's CRM was last open." : "No open day whose exit time has passed." }))
+                  .catch(() => llqaToast({ text: "Could not close the days — try again in a minute." }));
               },
+              title: "Close the days whose exit time has passed, from when each teacher's CRM was last open", // v72
               style: {
                 padding: "8px 12px",
                 background: c.accentBg,
@@ -820,7 +796,7 @@ const AttendanceMod = ({
                 marginLeft: 10,
               },
             },
-            "Auto-Fill Checkouts",
+            "Close finished days", // v72: it guessed 8 hours after sign-in
           ),
         ),
         React.createElement(
@@ -969,7 +945,7 @@ const AttendanceMod = ({
                         fontSize: 10,
                       },
                     },
-                    rec.checkIn || "—",
+                    llqaHm2m(rec.checkIn) != null ? llqaHm12(rec.checkIn) : rec.checkIn || "—", // v72
                   ),
                   React.createElement(
                     "td",
@@ -981,7 +957,15 @@ const AttendanceMod = ({
                         fontSize: 10,
                       },
                     },
-                    rec.checkOut || "—",
+                    // v72: an open day shows whether the teacher's CRM is open right now, or when it was last open
+                    llqaIsOpen(rec)
+                      ? (() => {
+                          const s = llqaSeen(t.id, rec.date, fineSet(), llqaNowMs());
+                          return s ? (s.here ? "here now" : "last open " + llqaHm12(s.at)) : "signed in";
+                        })()
+                      : llqaHm2m(rec.checkOut) != null
+                        ? llqaHm12(rec.checkOut)
+                        : rec.checkOut || "—",
                   ),
                   React.createElement(
                     "td",
@@ -1081,7 +1065,13 @@ const AttendanceMod = ({
                         padding: "8px",
                       },
                     },
-                    React.createElement(
+                    !llqaCanMarkDay(user, t, rec && rec.date ? rec : null) // v72: who may mark this day
+                      ? React.createElement(
+                          "span",
+                          { style: { color: c.textMuted, fontSize: 10 }, title: rec && rec.date ? "A day already marked or signed in is changed by an admin" : "Marked by an admin, or this teacher's team lead" },
+                          rec && rec.date ? "admin only" : "—",
+                        )
+                      : React.createElement(
                       "div",
                       {
                         style: {
@@ -1110,7 +1100,7 @@ const AttendanceMod = ({
                       React.createElement(
                         "button",
                         {
-                          onClick: () => markAttendance(t.id, "Late"),
+                          onClick: () => setModal({ type: "late", teacherId: t.id }), // v72: asks when they signed in
                           title: "Late",
                           style: {
                             background: c.warnBg,
@@ -1554,7 +1544,7 @@ const AttendanceMod = ({
                         " \xB7 ",
                         t.shift,
                         " Shift \xB7 Rs ",
-                        t.salary.toLocaleString(),
+                        Number(t.salary || 0).toLocaleString("en-US"), // v72
                         "/mo",
                       ),
                     ),
@@ -2175,13 +2165,20 @@ const AttendanceMod = ({
               },
             },
             [
-              ["Late 10-29 min", "Rs " + FINE_RULES.late10, c.warn],
-              ["Late 30-59 min", "Rs " + FINE_RULES.late30, c.warn],
-              ["Late 60+ min", "Rs " + FINE_RULES.late60, c.danger],
-              ["Absent (1 day)", "Rs " + FINE_RULES.absent, c.danger],
-              ["Half Day", "Rs " + FINE_RULES.halfDay, c.purple],
-              ["Early Leave", "Rs " + FINE_RULES.earlyLeave, c.warn],
-              ["Missed Class", "Rs " + FINE_RULES.missedClass, c.danger],
+              // v72: the rules really used (Settings → HR & Attendance → Office times & fines)
+              ...(() => {
+                const r = llqaFineRules(fineSet());
+                const pm = "Rs " + (Math.round(r.perMin * 100) / 100).toLocaleString("en-US") + " a minute";
+                return [
+                  ["Late (every minute)", pm, c.warn],
+                  ["Early leaving (every minute)", pm, c.warn],
+                  ["Time away (every minute)", r.away ? pm : "recorded, not fined", c.warn],
+                  ["Free minutes", r.grace ? r.grace + " min" : "none", c.cyan],
+                  ["Absent (1 day)", "Rs " + r.absent.toLocaleString("en-US"), c.danger],
+                  ["Half Day", "Rs " + r.halfDay.toLocaleString("en-US"), c.purple],
+                  ["Missed Class", "Rs " + r.missedClass.toLocaleString("en-US"), c.danger],
+                ];
+              })(),
             ].map(([l, v, col]) =>
               React.createElement(
                 "div",
@@ -2402,7 +2399,7 @@ const AttendanceMod = ({
                         },
                       },
                       "Rs ",
-                      t.salary.toLocaleString(),
+                      Number(t.salary || 0).toLocaleString("en-US"), // v72
                     ),
                     React.createElement(
                       "td",
@@ -2421,6 +2418,18 @@ const AttendanceMod = ({
             ),
           ),
         ),
+        React.createElement(LLQAFineRecords, { teachers, history, setHistory, user, settings: fineSet(), month: selectedMonth }), // v72: every fine, how, why and who
+        llqaCanSetOffice(user) && typeof setAppSettings === "function" && // v72: whoever may set them can do it here too
+          React.createElement(
+            "div",
+            { style: { marginTop: 14 } },
+            React.createElement(LLQAOfficeCard, {
+              settings: fineSet() || DEFAULT_SETTINGS,
+              update: (k, v) => setAppSettings({ ...(fineSet() || DEFAULT_SETTINGS), [k]: v }),
+              teachers,
+              setTeachers,
+            }),
+          ),
       ),
     tab === "patterns" &&
       React.createElement(
@@ -3373,6 +3382,18 @@ const AttendanceMod = ({
         ),
       ),
     modal &&
+      modal.type === "late" && // v72
+      React.createElement(LLQALateWindow, {
+        teacher: teachers.find((t) => t.id === modal.teacherId),
+        rec: (history[modal.teacherId] || []).find((h) => h.date === dayOf(teachers.find((t) => t.id === modal.teacherId))),
+        settings: fineSet(),
+        onClose: () => setModal(null),
+        onSave: (time, lm) => {
+          markAttendance(modal.teacherId, lm > 0 ? "Late" : "Present", time);
+          setModal(null);
+        },
+      }),
+    modal &&
       modal.type === "regularize" &&
       React.createElement(
         "div",
@@ -3465,6 +3486,13 @@ const AttendanceMod = ({
               }),
             options: ATT_STATUS,
           }),
+          regForm.newStatus === "Late" && // v72: late by the minute from this time
+            React.createElement(Inp, {
+              label: "Signed in at (Pakistan time)",
+              type: "time",
+              value: regForm.inTime || "",
+              onChange: (v) => setRegForm({ ...regForm, inTime: v }),
+            }),
           React.createElement(Inp, {
             label: "Reason for Change *",
             value: regForm.reason || "",
@@ -3511,26 +3539,39 @@ const AttendanceMod = ({
               {
                 onClick: () => {
                   if (!regForm.newStatus || !regForm.reason) return;
-                  const fine =
-                    regForm.newStatus === "Absent"
-                      ? FINE_RULES.absent
-                      : regForm.newStatus === "Half Day"
-                        ? FINE_RULES.halfDay
-                        : 0;
-                  setHistory({
-                    ...history,
-                    [regForm.teacherId]: history[regForm.teacherId].map((h) =>
-                      h.date === regForm.date
-                        ? {
-                            ...h,
-                            status: regForm.newStatus,
-                            fine,
-                            regularized: true,
-                            regReason: regForm.reason,
-                          }
-                        : h,
-                    ),
-                  });
+                  // v72: the fine is worked out again from the corrected day (Present / On Leave / Absent clear the
+                  // minutes; Late counts from the time given); the correction and its reason are kept in its history
+                  const set = fineSet();
+                  const st = regForm.newStatus;
+                  const t = teachers.find((x) => x.id === regForm.teacherId);
+                  setHistory((prev) => ({
+                    ...(prev || {}),
+                    [regForm.teacherId]: ((prev || {})[regForm.teacherId] || []).map((h) => {
+                      if (h.date !== regForm.date) return h;
+                      const off = llqaOffice(t, set);
+                      const o = { start: h.officeStart || off.start, end: h.officeEnd || off.end };
+                      const inHm = st === "Late" && llqaHm2m(regForm.inTime) != null ? regForm.inTime : h.checkIn;
+                      const clear = st === "Present" || st === "On Leave" || st === "Absent";
+                      return llqaWithFine(
+                        {
+                          ...h,
+                          status: st,
+                          checkIn: st === "Absent" || st === "On Leave" ? "—" : inHm,
+                          lateMin: st === "Late" ? llqaLateMin(o, inHm) : 0,
+                          earlyMin: clear ? 0 : Number(h.earlyMin) || 0,
+                          awayMin: clear ? 0 : Number(h.awayMin) || 0,
+                          officeStart: o.start,
+                          officeEnd: o.end,
+                          fineOverride: null,
+                          regularized: true,
+                          regReason: regForm.reason,
+                        },
+                        set,
+                        who,
+                        "corrected to " + st + " by " + who + ": " + regForm.reason,
+                      );
+                    }),
+                  }));
                   setModal(null);
                 },
                 icon: Check,

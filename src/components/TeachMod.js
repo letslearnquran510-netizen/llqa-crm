@@ -209,7 +209,7 @@ const TeachMod = ({
       students: form.students || 0,
       freeSlots: form.freeSlots || 16,
       totalSlots: 16,
-      leaveBalance: form.leaveBalance || 14,
+      leaveBalance: form.leaveBalance || Number(((LLQAApp.ctx && LLQAApp.ctx.appSettings) || {}).annualLeave) || 14, // v72: Settings → Leave Allocation
       leaveTaken: form.leaveTaken || 0,
       perfRating: form.perfRating || 0,
       classCompletion: form.classCompletion || 0,

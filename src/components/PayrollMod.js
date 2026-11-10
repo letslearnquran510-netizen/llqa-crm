@@ -5,6 +5,7 @@ const PayrollMod = ({
   appSettings,
   payHistory: savedPay, // v71: data/payrollHistory (cloud)
   setPayHistory: setSavedPay,
+  attendanceHistory, // v72: attendance fines are deducted (only Quality Control fines were)
 }) => {
   // v68: salaries typed in forms are text; as numbers the pay and totals add up (was "36000" + 0 = "360000")
   const teachers = useMemo(() => (propTeachers || initPayrollTeachers).map((t) => ({ ...t, salary: Number(t.salary) || 0 })), [propTeachers]);
@@ -21,6 +22,11 @@ const PayrollMod = ({
     new Date().toISOString().substring(0, 7),
   );
   const [selected, setSelected] = useState([]);
+  // v72: a month's attendance comes from the cloud when its payroll is looked at
+  React.useEffect(() => {
+    const need = LLQAApp.ctx && LLQAApp.ctx.attNeed;
+    if (typeof need === "function") need(String(selectedMonth || "").slice(0, 7));
+  }, [selectedMonth]);
   const [modal, setModal] = useState(null);
   const [payForm, setPayForm] = useState({});
   const currentRecs = useMemo(() => {
@@ -35,10 +41,14 @@ const PayrollMod = ({
           v.status !== "Waived" &&
           v.status !== "Resolved",
       );
-      const autoFine = tViols.reduce(
+      const qcFine = tViols.reduce(
         (sum, v) => sum + (Number(v.fine) || 0),
         0,
       );
+      // v72: this month's attendance fines (late / early / away by the minute, absent, half day) as worked out in Attendance
+      const attDays = ((attendanceHistory || {})[t.id] || []).filter((h) => h && String(h.date || "").startsWith(selectedMonth) && Number(h.fine) > 0);
+      const attFine = attDays.reduce((s, h) => s + (Number(h.fine) || 0), 0);
+      const autoFine = qcFine + attFine;
 
       if (!rec) {
         const b =
@@ -51,6 +61,9 @@ const PayrollMod = ({
           gross: (t.salary || 0) + (b.total || 0),
           net: (t.salary || 0) + (b.total || 0) - autoFine,
           fine: autoFine,
+          qcFine, // v72
+          attFine,
+          attDays: attDays.length,
           bonuses: b.total || 0,
           advance: 0,
           tax: 0,
@@ -58,11 +71,14 @@ const PayrollMod = ({
           status: "pending",
         };
       } else if (rec.status === "pending") {
-        if (rec.fine !== autoFine) {
+        if (rec.fine !== autoFine || rec.attFine !== attFine) {
           const diff = autoFine - (rec.fine || 0);
           rec = {
             ...rec,
             fine: autoFine,
+            qcFine, // v72
+            attFine,
+            attDays: attDays.length,
             deductions: (rec.deductions || 0) + diff,
             net: (rec.net || 0) - diff,
           };
@@ -73,7 +89,7 @@ const PayrollMod = ({
         pay: rec,
       };
     });
-  }, [teachers, payHistory, selectedMonth, qcViolations]);
+  }, [teachers, payHistory, selectedMonth, qcViolations, attendanceHistory]); // v72
   const stats = useMemo(() => {
     const recs = currentRecs.filter((t) => t.pay);
     const totalGross = recs.reduce((s, t) => s + t.pay.gross, 0);
@@ -948,7 +964,7 @@ const PayrollMod = ({
                       },
                     },
                     "-Rs ",
-                    t.pay.fine,
+                    Number(t.pay.fine || 0).toLocaleString("en-US"), // v72
                   ),
                   React.createElement(
                     "td",
@@ -959,7 +975,7 @@ const PayrollMod = ({
                       },
                     },
                     "-Rs ",
-                    t.pay.advance,
+                    Number(t.pay.advance || 0).toLocaleString("en-US"), // v72
                   ),
                   React.createElement(
                     "td",
@@ -970,7 +986,7 @@ const PayrollMod = ({
                       },
                     },
                     "-Rs ",
-                    t.pay.tax,
+                    Number(t.pay.tax || 0).toLocaleString("en-US"), // v72
                   ),
                   React.createElement(
                     "td",

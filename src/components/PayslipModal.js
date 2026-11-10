@@ -95,7 +95,7 @@ const PayslipModal = ({ t, onClose, selectedMonth, appSettings }) => {
     
     <div>
       <div class="section-title ded-title">Deductions</div>
-      ${t.pay.fine > 0 ? `<div class="row"><span class="row-label">Attendance / QC Fines</span><span class="row-val ded-val">-Rs ${t.pay.fine.toLocaleString()}</span></div>` : ""}
+      ${t.pay.fine > 0 && t.pay.attFine == null ? `<div class="row"><span class="row-label">Attendance / QC Fines</span><span class="row-val ded-val">-Rs ${t.pay.fine.toLocaleString()}</span></div>` : ""}${t.pay.attFine > 0 ? `<div class="row"><span class="row-label">Attendance fines (${t.pay.attDays || 0} day${t.pay.attDays === 1 ? "" : "s"})</span><span class="row-val ded-val">-Rs ${t.pay.attFine.toLocaleString()}</span></div>` : ""}${t.pay.qcFine > 0 ? `<div class="row"><span class="row-label">Quality Control fines</span><span class="row-val ded-val">-Rs ${t.pay.qcFine.toLocaleString()}</span></div>` : ""}
       ${t.pay.advance > 0 ? `<div class="row"><span class="row-label">Advance Deductions</span><span class="row-val ded-val">-Rs ${t.pay.advance.toLocaleString()}</span></div>` : ""}
       ${t.pay.tax > 0 ? `<div class="row"><span class="row-label">Income Tax</span><span class="row-val ded-val">-Rs ${t.pay.tax.toLocaleString()}</span></div>` : ""}
       ${t.pay.deductions === 0 ? `<div style="font-size:13px; color:#999; font-style:italic;">No deductions this month.</div>` : ""}
@@ -612,10 +612,22 @@ const PayslipModal = ({ t, onClose, selectedMonth, appSettings }) => {
             React.createElement(
               "div",
               { style: { padding: "0 8px" } },
-              t.pay.fine > 0 &&
+              t.pay.fine > 0 && t.pay.attFine == null &&
                 React.createElement(Row, {
                   label: "Attendance / QC Fines",
                   value: "-Rs " + t.pay.fine.toLocaleString(),
+                  color: c.danger,
+                }),
+              t.pay.attFine > 0 && // v72: attendance fines on their own line
+                React.createElement(Row, {
+                  label: "Attendance fines (" + (t.pay.attDays || 0) + " day" + (t.pay.attDays === 1 ? "" : "s") + ")",
+                  value: "-Rs " + t.pay.attFine.toLocaleString(),
+                  color: c.danger,
+                }),
+              t.pay.qcFine > 0 &&
+                React.createElement(Row, {
+                  label: "Quality Control fines",
+                  value: "-Rs " + t.pay.qcFine.toLocaleString(),
                   color: c.danger,
                 }),
               t.pay.advance > 0 &&
