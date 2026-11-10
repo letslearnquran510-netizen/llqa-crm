@@ -111,7 +111,7 @@ const LLQA_LIST_NAMES = {
   teamLeads: "Team leads", autoAttendance: "Auto attendance", arPayments: "Invoices & payments", apLiabilities: "Payables",
   qcViolations: "QC violations", trainingPrograms: "Training", procInventory: "Inventory", procPurchases: "Purchases",
   hrInterviews: "HR interviews", hrHiring: "HR hiring", shifts: "Shifts", customRoles: "Custom roles", loginAudit: "Login log",
-  "data/attendanceHistory": "Attendance history", "settings/portalAccess": "Portal access settings", "settings/preferences": "App settings",
+  "data/attendanceHistory": "Attendance history", "data/payrollHistory": "Payroll history", "settings/portalAccess": "Portal access settings", "settings/preferences": "App settings",
   waitlist: "Waitlist", messageLog: "Message log", "settings/messaging": "Message templates", "settings/automation": "Automation settings",
   covers: "Leave cover", parentRequests: "Parent requests", "settings/calendar": "Holidays calendar",
   makeups: "Make-up classes", leads: "Leads", rewards: "Referral rewards", // v67

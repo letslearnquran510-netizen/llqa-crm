@@ -3,10 +3,16 @@ const PayrollMod = ({
   teachers: propTeachers,
   qcViolations,
   appSettings,
+  payHistory: savedPay, // v71: data/payrollHistory (cloud)
+  setPayHistory: setSavedPay,
 }) => {
   // v68: salaries typed in forms are text; as numbers the pay and totals add up (was "36000" + 0 = "360000")
   const teachers = useMemo(() => (propTeachers || initPayrollTeachers).map((t) => ({ ...t, salary: Number(t.salary) || 0 })), [propTeachers]);
-  const [payHistory, setPayHistory] = useState(initPayHistory);
+  // v71: the history lives in the cloud (approvals, payments, advances, bonuses); it was a local list lost on reload
+  const [localPay, setLocalPay] = useState({});
+  const payHistory = savedPay && typeof savedPay === "object" && !Array.isArray(savedPay) ? savedPay : localPay;
+  const setPayHistory = typeof setSavedPay === "function" ? setSavedPay : setLocalPay;
+  const actor = (user && (user.name || user.username || (user.role === "superadmin" ? "Super Admin" : user.role))) || "Admin";
   const [tab, setTab] = useState("current");
   const [search, setSearch] = useState("");
   const [fStatus, setFStatus] = useState("all");
@@ -190,7 +196,7 @@ const PayrollMod = ({
     updateRec(id, (r) => ({
       ...r,
       status: "approved",
-      approvedBy: "Super Admin",
+      approvedBy: actor, approvedAt: new Date().toISOString() /* v71: who approved, and when */,
     }));
 
   const markAsPaid = (id) =>
@@ -198,14 +204,16 @@ const PayrollMod = ({
       ...r,
       status: "paid",
       paidDate: todayPK(),
-      paymentMethod: teachers.find((t) => t.id === id)?.bank.split(" - ")[0],
+      paymentMethod: String((teachers.find((t) => t.id === id) || {}).bank || "").split(" - ")[0] || "Not set", // v71: a teacher with no bank set made this throw
+      paidBy: actor, // v71
+      paidAt: new Date().toISOString(),
     }));
 
   const bulkApprove = () => {
     selected.forEach((id) =>
       updateRec(id, (r) =>
         r.status === "pending"
-          ? { ...r, status: "approved", approvedBy: "Super Admin" }
+          ? { ...r, status: "approved", approvedBy: actor, approvedAt: new Date().toISOString() /* v71: who approved, and when */ }
           : r,
       ),
     );
@@ -221,7 +229,9 @@ const PayrollMod = ({
               ...r,
               status: "paid",
               paidDate: todayPK(),
-              paymentMethod: t?.bank.split(" - ")[0],
+              paymentMethod: String((t && t.bank) || "").split(" - ")[0] || "Not set", // v71
+              paidBy: actor,
+              paidAt: new Date().toISOString(),
             }
           : r,
       );
@@ -1325,7 +1335,7 @@ const PayrollMod = ({
                           fontSize: 10,
                         },
                       },
-                      r.approvedBy || "—",
+                      r.approvedBy ? r.approvedBy + (r.approvedAt ? " · " + llqaLocalDay(String(r.approvedAt).slice(0, 10)).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) : "") : "—", // v71: and when
                     ),
                   ),
                 ),

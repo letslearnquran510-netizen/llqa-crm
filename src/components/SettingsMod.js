@@ -15,7 +15,12 @@ const SettingsMod = ({
   setCustomRoles,
 }) => {
   const rolesList = customRoles || [];
-  const [section, setSection] = useState("profile");
+  const [section, setSection] = useState(() => {
+    // v71: "Set rates" elsewhere opens Settings at Payment Gateways → Exchange rates
+    const s = typeof window !== "undefined" ? window.__llqaSettingsSection : null;
+    if (typeof window !== "undefined") window.__llqaSettingsSection = null;
+    return s || "profile";
+  });
   const [liveAudit] = useFirestoreCollection("loginAudit", LOGIN_AUDIT);
   const auditLog =
     liveAudit && liveAudit.length > 0
@@ -2189,87 +2194,7 @@ const SettingsMod = ({
               ),
             ),
           ),
-          React.createElement(
-            SettingCard,
-            {
-              title: "Exchange Rates",
-              icon: TrendingUp,
-              color: c.warn,
-            },
-            React.createElement(
-              "p",
-              {
-                style: {
-                  color: c.textSec,
-                  fontSize: 11,
-                  margin: "0 0 10px",
-                },
-              },
-              "Auto-updated daily. Override manually if needed.",
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  display: "grid",
-                  gridTemplateColumns: "1fr 1fr 1fr",
-                  gap: 10,
-                },
-              },
-              [
-                ["USD to PKR", 280, c.accent],
-                ["CAD to PKR", 205, c.cyan],
-                ["GBP to PKR", 355, c.purple],
-              ].map(([l, v, col]) =>
-                React.createElement(
-                  "div",
-                  {
-                    key: l,
-                    style: {
-                      background: c.bgDeep,
-                      borderRadius: 8,
-                      padding: "10px 14px",
-                    },
-                  },
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        color: c.textSec,
-                        fontSize: 10,
-                        textTransform: "uppercase",
-                        marginBottom: 3,
-                      },
-                    },
-                    l,
-                  ),
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        color: col,
-                        fontSize: 18,
-                        fontWeight: 700,
-                      },
-                    },
-                    "Rs ",
-                    v,
-                  ),
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        color: c.textMuted,
-                        fontSize: 9,
-                        marginTop: 2,
-                      },
-                    },
-                    "Updated today",
-                  ),
-                ),
-              ),
-            ),
-          ),
+          React.createElement(LLQAFxCard, { settings, update }), // v71: your real rates (this card showed fixed sample rates "updated today")
         ),
       section === "pricing" &&
         React.createElement(

@@ -7681,7 +7681,7 @@ const LLQARevenueTab = () => {
   const ctx = LLQAApp.ctx;
   const manage = llqaCanManage();
   const rev = llqaRevenue(6);
-  const fx = llqaOpt("fx") || {};
+  const fx = llqaUsdRates(ctx.appSettings) || llqaOpt("fx") || {}; // v71: one set of rates (Settings → Payment Gateways), older Autopilot rates only until that has a USD rate
   const [edit, setEdit] = useState(false);
   const [rates, setRates] = useState(() => ({ ...fx }));
   const cur = rev.months[rev.months.length - 1];
@@ -7748,23 +7748,14 @@ const LLQARevenueTab = () => {
         ? React.createElement(
             "div",
             { key: "fx", style: { marginTop: 10, fontSize: 11, color: c.textSec } },
-            edit
-              ? llqaRow([
-                  "1 unit = ? USD:",
-                  ...["CAD", "GBP", "AUD", "AED", "EUR", "PKR"].map((k) => React.createElement("span", { key: k }, k + " ", llqaInput(rates[k] || "", (v) => setRates({ ...rates, [k]: v }), { key: k, width: 70 }))),
-                  llqaMini("✓ Save rates", () => {
-                    const clean = {};
-                    Object.entries(rates).forEach(([k, v]) => {
-                      if (Number(v) > 0) clean[k] = Number(v);
-                    });
-                    llqaSetOpt({ fx: clean });
-                    setEdit(false);
-                  }, { key: "s", tone: "success" }),
-                ], "r")
-              : llqaRow([
-                  "Rates to USD: " + (Object.keys(fx).length ? Object.entries(fx).map(([k, v]) => k + " " + v).join(" · ") : "not set"),
-                  llqaMini("Edit rates", () => setEdit(true), { key: "e" }),
-                ], "r"),
+            llqaRow([ // v71: the rates live in one place for the whole CRM
+              (() => {
+                const pk = llqaRates(ctx.appSettings);
+                const ks = Object.keys(pk);
+                return ks.length ? "Rates (Settings → Payment Gateways): " + ks.map((k) => "1 " + k + " = " + pk[k] + " PKR").join(" · ") : "No exchange rates set yet (Settings → Payment Gateways).";
+              })(),
+              llqaMini("Change rates", () => llqaOpenSettings("payments"), { key: "e" }),
+            ], "r"),
           )
         : null,
     ]),
