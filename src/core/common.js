@@ -3719,6 +3719,1799 @@ const LLQAFineRecords = ({ teachers, history, setHistory, user, settings, month 
   );
 };
 
+/* ============================================================
+   v73: class records — one record per class, kept by month in 64 parts
+   Before v73 every logged class was its own document in "dailyProgress", one per student per day: a student with
+   two classes on a day had one record (the second class overwrote the first), every computer — teachers' and
+   parents' too — loaded every record ever made (about 13,000 more every month), and the counts on the student
+   ("attended 12 of 14") were running totals that a second computer or a correction could put out of step.
+   Now:
+   - classes/2026-11_07 … one document per month per part; a student always falls in the same part, so all of a
+     student's classes of a month are together whoever taught them. Each class is one field of that document
+     (key: student, day, Pakistan time), written on its own — two people logging different classes never touch
+     each other's.
+   - Staff load this month and last (older months when a screen asks). A teacher loads only the parts of their own
+     students and of the classes they cover; a parent only their child's. One listener per month, not per part.
+   - The counts, the attendance %, the progress and the Monthly Sheet are worked out from the records.
+   - The old "dailyProgress" list is still read, for days that have no record of their own.
+   ============================================================ */
+const LLQA_CLS_PARTS = 64;
+const LLQA_CLS_COLL = "classes";
+// FNV-1a with a final mix: student ids (13-digit times) spread over all 64 parts (the attendance hash uses only 32 of 64)
+const llqaClsPart = (sid) => {
+  let h = 0x811c9dc5;
+  const s = String(sid);
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return (h >>> 0) % LLQA_CLS_PARTS;
+};
+const llqaClsDocId = (ym, part) => ym + "_" + String(part).padStart(2, "0");
+const llqaClsSan = (v) => String(v == null ? "" : v).replace(/[^A-Za-z0-9]/g, "-");
+// one class: the student, the Pakistan day and the Pakistan start time ("x": a class not booked in the Timetable)
+const llqaClsKey = (sid, date, slot) =>
+  "c" + llqaClsSan(sid) + "_" + String(date || "").replace(/-/g, "") + "_" + (slot ? llqaClsSan(String(slot).replace(/:/g, "")) : "x");
+const llqaIsClsKey = (k) => /^c[A-Za-z0-9-]*_\d{8}_[A-Za-z0-9-]+$/.test(String(k || ""));
+const llqaClsPack = (r) => {
+  const o = {};
+  Object.keys(r || {}).forEach((k) => {
+    if (k === "id" || k === "key") return;
+    const v = r[k];
+    if (v === undefined || v === null || v === "" || typeof v === "function") return;
+    o[k] = v;
+  });
+  return JSON.stringify(o);
+};
+const llqaClsUnpack = (key, json) => {
+  try {
+    const o = JSON.parse(json);
+    if (!o || typeof o !== "object" || o.studentId == null || !o.date) return null;
+    return { ...o, id: key, key, slot: o.slot || "", attended: String(o.attended || "").toLowerCase() };
+  } catch (e) {
+    return null;
+  }
+};
+// this month and last (by the Pakistan calendar)
+const llqaClsBaseMonths = () => {
+  const ym = llqaPkDate(llqaNowMs()).slice(0, 7);
+  return [llqaPrevYm(ym), ym];
+};
+
+const LLQACls = (() => {
+  const docs = new Map(); // document id → { raw: {key: text}, recs: Map(key → record) }
+  const queries = new Map(); // query key → { ym, ids, server, tries, timer, unsub, got: Set(document ids) }
+  const subs = new Set();
+  const sending = new Set();
+  const pendIds = new Set(); // documents with changes this computer has not had confirmed yet
+  const pendCache = new Map(); // key → { json, rec }
+  let ver = 0;
+  let months = [];
+  let parts = []; // null: every part
+  let beat = null;
+  let scoped = false;
+  let localData = null; // without a cloud (demo): {document id: {key: text}} kept on this computer
+  const LOCAL_KEY = "llqa_cls_local_v1";
+  const PEND = (id) => "cls:" + id;
+  const emit = () => {
+    ver++;
+    subs.forEach((f) => {
+      try {
+        f();
+      } catch (e) {}
+    });
+  };
+  const isLocal = () => !initFirebase();
+  const loadLocal = () => {
+    if (localData) return localData;
+    try {
+      localData = JSON.parse(localStorage.getItem(LOCAL_KEY) || "{}") || {};
+    } catch (e) {
+      localData = {};
+    }
+    return localData;
+  };
+  const saveLocal = () => {
+    if (llqaFrozen) return;
+    try {
+      localStorage.setItem(LOCAL_KEY, JSON.stringify(localData || {}));
+    } catch (e) {
+      console.warn("Class records not kept on this computer:", e.message);
+    }
+  };
+  // unsent changes from an earlier visit (they are sent again)
+  let pendLoaded = false;
+  const loadPendIds = () => {
+    if (pendLoaded) return;
+    pendLoaded = true;
+    try {
+      const all = JSON.parse(localStorage.getItem("llqa_crm_pending_v1") || "{}") || {};
+      Object.keys(all).forEach((n) => {
+        if (n.indexOf("cls:") === 0 && LLQAPending.get(n)) pendIds.add(n.slice(4));
+      });
+    } catch (e) {}
+  };
+  const parseDoc = (old, data) => {
+    const raw = {};
+    const recs = new Map();
+    Object.keys(data || {}).forEach((k) => {
+      const json = data[k];
+      if (k[0] !== "c" || typeof json !== "string") return;
+      raw[k] = json;
+      const r = old && old.raw[k] === json ? old.recs.get(k) : llqaClsUnpack(k, json);
+      if (r) recs.set(k, r);
+    });
+    return { raw, recs };
+  };
+  const inScope = (id) => {
+    const ym = id.slice(0, 7);
+    if (!months.includes(ym)) return false;
+    return parts === null || parts.includes(Number(id.slice(8)));
+  };
+  const setLive = (ok, err) =>
+    LLQASync.set((st) => {
+      const errors = { ...st.errors };
+      if (ok) delete errors[LLQA_CLS_COLL];
+      else errors[LLQA_CLS_COLL] = err;
+      return ok ? { errors, live: { ...st.live, [LLQA_CLS_COLL]: true } } : { errors };
+    });
+  const onSnap = (q, snap) => {
+    if (q.dead) return;
+    const fromCache = !!(snap.metadata && snap.metadata.fromCache);
+    if (fromCache && !q.server) return; // never show an offline cache as the cloud's answer
+    if (!fromCache) q.server = true;
+    q.tries = 0;
+    const seen = new Set();
+    (snap.docs || []).forEach((d) => {
+      seen.add(d.id);
+      docs.set(d.id, parseDoc(docs.get(d.id), d.data() || {}));
+    });
+    // a document that is no longer in the answer was deleted in the cloud
+    q.got.forEach((id) => {
+      if (seen.has(id)) return;
+      let other = false;
+      queries.forEach((o) => {
+        if (o !== q && o.got.has(id)) other = true;
+      });
+      if (!other) docs.delete(id);
+    });
+    q.got = seen;
+    setLive(true);
+    emit();
+  };
+  const onErr = (q, err) => {
+    if (q.dead) return;
+    console.error("Firestore error (" + LLQA_CLS_COLL + " " + q.ym + "):", err);
+    const code = (err && err.code) || "";
+    if (code === "permission-denied") LLQASync.set((st) => ({ denied: { ...st.denied, [LLQA_CLS_COLL]: true } }));
+    else setLive(false, code || String((err && err.message) || err));
+    emit();
+    // 15 s, 30 s, 1 min, 2 min, 4 min, then every 5 min (a refused try can count as a read)
+    const wait = Math.min(300000, 15000 * Math.pow(2, q.tries++));
+    q.timer = setTimeout(() => listen(q), wait);
+  };
+  const listen = async (q) => {
+    q.timer = null;
+    if (q.dead) return;
+    await fbSignIn();
+    await LLQACloud.epochReady();
+    if (q.dead) return;
+    try {
+      const ref = fb.db.collection(LLQA_CLS_COLL);
+      const query = q.ids ? ref.where(firebase.firestore.FieldPath.documentId(), "in", q.ids) : ref.where("ym", "==", q.ym);
+      q.unsub = query.onSnapshot(
+        (snap) => onSnap(q, snap),
+        (err) => onErr(q, err),
+      );
+    } catch (e) {
+      onErr(q, e);
+    }
+  };
+  const stop = (q) => {
+    q.dead = true;
+    if (q.timer) clearTimeout(q.timer);
+    try {
+      if (q.unsub) q.unsub();
+    } catch (e) {}
+  };
+  // which months and parts this computer listens to (parts null: all of them)
+  const setScope = (ms, ps) => {
+    scoped = true;
+    months = [...new Set(ms || [])].sort();
+    parts = ps === null ? null : [...new Set((ps || []).map(Number))].sort((a, b) => a - b);
+    if (isLocal()) {
+      emit();
+      return;
+    }
+    loadPendIds();
+    const want = new Map();
+    months.forEach((ym) => {
+      if (parts === null) want.set(ym + "|*", { ym, ids: null });
+      else
+        for (let i = 0; i < parts.length; i += 30) {
+          const ids = parts.slice(i, i + 30).map((p) => llqaClsDocId(ym, p));
+          want.set(ym + "|" + ids.join(","), { ym, ids });
+        }
+    });
+    queries.forEach((q, k) => {
+      if (!want.has(k)) {
+        stop(q);
+        queries.delete(k);
+      }
+    });
+    // records of months or students no longer asked for are let go of
+    Array.from(docs.keys()).forEach((id) => {
+      if (!inScope(id)) docs.delete(id);
+    });
+    want.forEach((spec, k) => {
+      if (queries.has(k)) return;
+      const q = { ...spec, key: k, server: false, tries: 0, timer: null, unsub: null, got: new Set(), dead: false };
+      queries.set(k, q);
+      listen(q);
+    });
+    startBeat();
+    pendIds.forEach((id) => send(id));
+    emit();
+  };
+  // every query has had the cloud's answer (or there is no cloud)
+  const ready = (ym) => {
+    if (isLocal()) return true;
+    if (!scoped) return false; // the App has not said yet what this computer needs
+    let ok = true;
+    queries.forEach((q) => {
+      if ((!ym || q.ym === ym) && !q.server) ok = false;
+    });
+    if (ym && !months.includes(ym)) return false;
+    return ok;
+  };
+  const send = async (id) => {
+    const pend = LLQAPending.get(PEND(id));
+    if (!pend) {
+      pendIds.delete(id);
+      return;
+    }
+    if (sending.has(id) || isLocal()) return;
+    sending.add(id);
+    const ops = Object.keys(pend).map((k) => ({ id: k, doc: pend[k] }));
+    let ok = false;
+    LLQASync.set((st) => ({ sending: st.sending + 1 }));
+    try {
+      await fbSignIn();
+      await LLQACloud.epochReady();
+      if (llqaFrozen) return;
+      const patch = { ym: id.slice(0, 7), part: Number(id.slice(8)) };
+      ops.forEach((o) => {
+        patch[o.id] = o.doc === null ? firebase.firestore.FieldValue.delete() : o.doc;
+      });
+      await fb.db.collection(LLQA_CLS_COLL).doc(id).set(patch, { merge: true });
+      LLQAPending.done(PEND(id), ops);
+      LLQASync.set({ writeError: "" });
+      ok = true;
+    } catch (e) {
+      console.error("Cloud save failed (" + LLQA_CLS_COLL + "/" + id + "):", e);
+      LLQASync.set({ writeError: (e && (e.code || e.message)) || "save failed" });
+    } finally {
+      sending.delete(id);
+      LLQASync.set((st) => ({ sending: Math.max(0, st.sending - 1) }));
+      const left = LLQAPending.get(PEND(id));
+      if (!left) pendIds.delete(id);
+      emit();
+      // a change made while this one was on its way goes at once; after a failure, with the next round
+      if (ok && left) setTimeout(() => send(id), 0);
+    }
+  };
+  const startBeat = () => {
+    if (beat) return;
+    beat = setInterval(() => pendIds.forEach((id) => send(id)), 60000);
+    try {
+      window.addEventListener("online", () => setTimeout(() => pendIds.forEach((id) => send(id)), 1500));
+    } catch (e) {}
+  };
+  const where = (rec) => {
+    const date = String(rec.date || "");
+    const ym = date.slice(0, 7);
+    return { id: llqaClsDocId(ym, llqaClsPart(rec.studentId)), key: llqaClsKey(rec.studentId, date, rec.slot) };
+  };
+  const put = (rec, del) => {
+    if (!rec || rec.studentId == null || !/^\d{4}-\d{2}-\d{2}$/.test(String(rec.date || ""))) return "";
+    const w = where(rec);
+    // a class saved for a month or a student this computer does not load yet: load it too (else the class would
+    // vanish from the screen once the cloud has it)
+    const ym = String(rec.date).slice(0, 7), part = llqaClsPart(rec.studentId);
+    if (scoped && !months.includes(ym) && typeof api.need === "function") api.need(ym);
+    if (scoped && parts !== null && !parts.includes(part) && typeof api.needPart === "function") api.needPart(part);
+    const json = del ? null : llqaClsPack({ ...rec, slot: rec.slot || "" });
+    if (isLocal()) {
+      const all = loadLocal();
+      const d = (all[w.id] = all[w.id] || {});
+      if (del) delete d[w.key];
+      else d[w.key] = json;
+      if (!Object.keys(d).length) delete all[w.id];
+      saveLocal();
+      emit();
+      return w.key;
+    }
+    if (llqaFrozen) return "";
+    LLQAPending.add(PEND(w.id), [{ id: w.key, doc: json }]);
+    pendIds.add(w.id);
+    emit();
+    send(w.id);
+    return w.key;
+  };
+  // everything this computer has: the cloud's records, its own unsent changes on top, the records from before v73
+  // for days with no record of their own
+  let memo = { ver: -1, legacy: null, arr: [] };
+  const unpackPend = (k, json) => {
+    const hit = pendCache.get(k);
+    if (hit && hit.json === json) return hit.rec;
+    const rec = llqaClsUnpack(k, json);
+    if (pendCache.size > 5000) pendCache.clear();
+    pendCache.set(k, { json, rec });
+    return rec;
+  };
+  const view = (legacy) => {
+    const lg = Array.isArray(legacy) ? legacy : [];
+    if (memo.ver === ver && memo.legacy === lg) return memo.arr;
+    const m = new Map();
+    if (isLocal()) {
+      const all = loadLocal();
+      Object.keys(all).forEach((id) =>
+        Object.keys(all[id] || {}).forEach((k) => {
+          const r = unpackPend(k, all[id][k]);
+          if (r) m.set(k, r);
+        }),
+      );
+    } else {
+      docs.forEach((d) => d.recs.forEach((r, k) => m.set(k, r)));
+      pendIds.forEach((id) => {
+        const p = LLQAPending.get(PEND(id));
+        if (!p) return;
+        Object.keys(p).forEach((k) => {
+          if (p[k] === null) m.delete(k);
+          else {
+            const r = unpackPend(k, p[k]);
+            if (r) m.set(k, r);
+          }
+        });
+      });
+    }
+    const keys = Array.from(m.keys()).sort();
+    const out = keys.map((k) => m.get(k));
+    const has = new Set(out.map((r) => String(r.studentId) + "|" + r.date));
+    lg.forEach((p) => {
+      if (p && p.studentId != null && p.date && !has.has(String(p.studentId) + "|" + p.date)) out.push(p);
+    });
+    memo = { ver, legacy: lg, arr: out };
+    return out;
+  };
+  const api = {
+    setScope,
+    ready,
+    view,
+    save: (rec) => put(rec, false),
+    remove: (rec) => put(rec, true),
+    subscribe: (f) => {
+      subs.add(f);
+      return () => subs.delete(f);
+    },
+    months: () => months.slice(),
+    parts: () => (parts === null ? null : parts.slice()),
+    queryCount: () => queries.size,
+    docIds: () => Array.from(docs.keys()).sort(),
+    version: () => ver,
+    need: null,
+    needPart: null,
+    legacy: [],
+    setLegacy: null,
+  };
+  return api;
+})();
+const llqaClsReady = (ym) => LLQACls.ready(ym);
+// these records are this computer's own list of classes and the cloud has not answered yet (counts would be too low)
+const llqaClsLoading = (dp) => !LLQACls.ready() && Array.isArray(dp) && dp === LLQACls.view(LLQACls.legacy);
+// the first day whose records this computer has (the earlier months are loaded only when asked for); "" = all of them
+const llqaClsFrom = () => {
+  if (!initFirebase()) return "";
+  const ms = LLQACls.months();
+  return ms.length ? ms[0] + "-01" : "";
+};
+// the setter screens used before v73 (a new list, or a function of it): the classes that changed are written one by one
+const llqaClsSetList = (v) => {
+  const base = LLQACls.view(LLQACls.legacy);
+  const next = typeof v === "function" ? v(base) : v;
+  if (!Array.isArray(next) || next === base) return;
+  const before = new Map(base.map((r) => [String(r && r.id), r]));
+  const seen = new Set();
+  next.forEach((r) => {
+    if (!r || r.studentId == null || !r.date) return;
+    const id = String(r.id);
+    seen.add(id);
+    const b = before.get(id);
+    if (b === r || (b && llqaStable(b) === llqaStable(r))) return;
+    LLQACls.save(r);
+  });
+  before.forEach((r, id) => {
+    if (seen.has(id) || !r) return;
+    if (llqaIsClsKey(id)) LLQACls.remove(r);
+    else if (typeof LLQACls.setLegacy === "function") LLQACls.setLegacy((prev) => (prev || []).filter((p) => String(p && p.id) !== id)); // a record from before v73
+  });
+};
+// the students whose classes a teacher's computer needs: their own students, the students in their Timetable rows,
+// the classes they cover and their make-up classes
+const llqaClsTeacherSids = (user, teachers, students, covers, makeups) => {
+  const me = String(user.teacherId != null ? user.teacherId : user.id);
+  const name = String(user.name || "").trim();
+  const sids = new Set();
+  (students || []).forEach((s) => {
+    if (s && String(s.teacher || "").trim() === name) sids.add(String(s.id));
+  });
+  const mine = (teachers || []).filter((t) => t && String(t.id) === me);
+  LLQABooking.eachBooked(mine, (c) => {
+    const cell = c.cell || {};
+    if (cell.sid != null && cell.sid !== "") sids.add(String(cell.sid));
+    else {
+      const s = (students || []).find((x) => LLQABooking.sameStudent(cell, x));
+      if (s) sids.add(String(s.id));
+    }
+  });
+  (covers || []).forEach((x) => {
+    if (x && String(x.coverId) === me && x.sid != null && x.sid !== "") sids.add(String(x.sid));
+  });
+  (makeups || []).forEach((m) => {
+    if (m && String(m.teacherId) === me && m.sid != null && m.sid !== "") sids.add(String(m.sid));
+  });
+  return sids;
+};
+// the parts this person's computer loads: null = all (staff); a teacher their students'; a parent their children's
+const llqaClsScopeParts = (user, teachers, students, covers, makeups) => {
+  if (!user) return [];
+  const toParts = (sids) => [...new Set(Array.from(sids).map(llqaClsPart))].sort((a, b) => a - b);
+  if (user.role === "parent") {
+    const pid = String(user.parentId || "").toUpperCase();
+    const sids = new Set();
+    if (user.studentId != null) sids.add(String(user.studentId));
+    (students || []).forEach((s) => {
+      if (s && pid && String(s.parentId || "").toUpperCase() === pid) sids.add(String(s.id));
+    });
+    return toParts(sids);
+  }
+  if (user.role === "teacher") {
+    const ps = toParts(llqaClsTeacherSids(user, teachers, students, covers, makeups));
+    return ps.length > 30 ? null : ps; // most of the academy: one listener for all of it
+  }
+  return null;
+};
+// App: the class records a signed-in person needs → [records, setter, ask for a month]
+const useLLQAClasses = (user, legacy, setLegacy, teachers, students, covers, makeups) => {
+  const [months, setMonths] = React.useState(llqaClsBaseMonths);
+  const [extra, setExtra] = React.useState([]); // parts a save on this computer asked for (a class outside the usual ones)
+  const [, setVer] = React.useState(0);
+  const base = llqaClsScopeParts(user, teachers, students, covers, makeups);
+  const parts = base === null ? null : base.length || user ? [...new Set([...base, ...extra])].sort((a, b) => a - b) : [];
+  const partsKey = parts === null ? "*" : parts.join(",");
+  const who = user ? user.role + ":" + (user.teacherId != null ? user.teacherId : user.parentId || user.name || "") : "";
+  React.useEffect(() => setExtra([]), [who]); // a new person signs in: only their own parts
+  LLQACls.legacy = Array.isArray(legacy) ? legacy : [];
+  LLQACls.setLegacy = setLegacy;
+  React.useEffect(() => LLQACls.subscribe(() => setVer((n) => n + 1)), []);
+  React.useEffect(() => {
+    LLQACls.setScope(months, parts);
+  }, [months.join(","), partsKey]);
+  const need = React.useCallback((ym) => {
+    if (!/^\d{4}-\d{2}$/.test(String(ym || ""))) return;
+    setMonths((m) => (m.includes(ym) ? m : [...m, ym].sort()));
+  }, []);
+  LLQACls.need = need;
+  LLQACls.needPart = React.useCallback((p) => setExtra((x) => (x.includes(p) ? x : [...x, p])), []);
+  // a new month begins while the CRM is open
+  React.useEffect(() => {
+    const id = setInterval(() => {
+      const b = llqaClsBaseMonths();
+      setMonths((m) => (b.every((x) => m.includes(x)) ? m : [...new Set([...m, ...b])].sort()));
+    }, 300000);
+    return () => clearInterval(id);
+  }, []);
+  return [LLQACls.view(LLQACls.legacy), llqaClsSetList, need];
+};
+
+/* ---------- v73: books, pages, counts — worked out from the class records ---------- */
+// Qaida courses ("EN-Quaida", "Eng/Noorani Quaida", "Noorani Qaida" …) count Qaida pages; a Subject course has no
+// page; every other course counts Quran pages (604, Madani print). Before v73 only "Quaida" was found, so a
+// "Noorani Qaida" student was measured against the 604 Quran pages.
+const llqaIsQaida = (course) => /qu?a{1,2}ida/i.test(String(course || ""));
+const llqaBookOf = (s) => {
+  const course = String((s && s.course) || "").trim();
+  if (/^subject$/i.test(course)) return "none";
+  return llqaIsQaida(course) ? "qaida" : "quran";
+};
+const LLQA_BOOK_PAGES = { quran: 604, qaida: 30 };
+const LLQA_BOOK_MAX = { quran: 604, qaida: 100 };
+// juz of a Madani-print page: juz 1 is pages 1–21, then 20 pages each (juz 30 from page 582)
+const llqaJuzOf = (page) => {
+  const p = parseInt(page, 10);
+  if (!(p > 0)) return null;
+  return p <= 21 ? 1 : Math.min(30, Math.floor((p - 2) / 20) + 1);
+};
+const llqaIsAtt = (a) => /^(present|late)$/i.test(String(a || ""));
+const llqaAttCount = (list) => {
+  let present = 0, late = 0, absent = 0, excused = 0;
+  (list || []).forEach((p) => {
+    const a = String((p && p.attended) || "").toLowerCase();
+    if (a === "present") present++;
+    else if (a === "late") late++;
+    else if (a === "absent") absent++;
+    else if (a === "excused") excused++;
+  });
+  const counted = present + late + absent; // an excused class is not held against the student
+  return { classes: (list || []).length, present, late, absent, excused, attended: present + late, pct: counted ? Math.round(((present + late) / counted) * 100) : null };
+};
+// the page reached: the newest class with a page, else what the student record says (null: not known yet)
+const llqaReach = (s, recs) => {
+  const book = llqaBookOf(s);
+  if (!s || book === "none") return null;
+  let page = null, date = "";
+  for (const r of recs || []) {
+    const p = parseInt(r && r.pages, 10);
+    if (p > 0 && (!r.book || r.book === book)) {
+      page = p;
+      date = r.date;
+      break;
+    }
+  }
+  if (page == null) {
+    // (before v73 a Qaida page was kept in "page": "qaida" stayed 0)
+    const p = parseInt(book === "qaida" ? s.qaida || s.page : s.page, 10);
+    if (p > 0) page = p;
+  }
+  if (page == null) return null;
+  const total = LLQA_BOOK_PAGES[book];
+  const exact = Math.min(100, (page / total) * 100);
+  // "0.5%" for page 3 of 604 (a whole number said 0%)
+  return { book, page, total, pct: Math.round(exact), pctText: (exact < 10 ? Math.round(exact * 10) / 10 : Math.round(exact)) + "%", juz: book === "quran" ? llqaJuzOf(page) : null, date };
+};
+// the day a student's classes are expected from: registered and in the CRM (a family from before the CRM is added today)
+const llqaStuFrom = (s) => {
+  const a = String((s && s.dor) || ""), b = String((s && s.addedAt) || "").slice(0, 10);
+  const ok = (x) => /^\d{4}-\d{2}-\d{2}$/.test(x);
+  return ok(a) && ok(b) ? (a > b ? a : b) : ok(a) ? a : ok(b) ? b : "";
+};
+const llqaProgressPct = (s) => {
+  const r = llqaReach(s, llqaDpOf(LLQAApp.ctx.dailyProgress, s && s.id));
+  return r ? r.pct : null;
+};
+const llqaReachText = (r) =>
+  !r ? "—" : r.book === "qaida" ? "Qaida page " + r.page + " of " + r.total : "Page " + r.page + " of " + r.total + " · Juz " + r.juz;
+// one student: the last 30 days, everything loaded, the newest class and lesson, the page reached
+const llqaStuStats = (s, opt) => {
+  const o = opt || {};
+  const today = o.today || llqaToday();
+  const mine = llqaDpOf(o.dp || LLQAApp.ctx.dailyProgress, s && s.id).filter((p) => p.date <= today);
+  const since = llqaAddDays(today, -29);
+  return {
+    last30: llqaAttCount(mine.filter((p) => p.date >= since)),
+    all: llqaAttCount(mine),
+    last: mine[0] || null,
+    lastFull: mine.find((p) => String(p.lesson || "").trim()) || null,
+    reach: llqaReach(s, mine),
+    recs: mine,
+  };
+};
+// trial classes attended: classes marked Present / Late since the trial began. Until the class records have come from
+// the cloud, the count kept on the student.
+const llqaTrialDone = (s, dp) => {
+  if (!s) return 0;
+  const list = dp || LLQAApp.ctx.dailyProgress;
+  const start = String(s.trialStart || s.dor || "");
+  const ok = /^\d{4}-\d{2}-\d{2}$/.test(start);
+  const n = llqaDpOf(list, s.id).filter((p) => llqaIsAtt(p.attended) && (!ok || p.date >= start)).length;
+  return llqaClsLoading(list) ? Math.max(n, parseInt(s.attended, 10) || 0) : n;
+};
+// the family's own day for a class on a Pakistan date (a US evening class is the next morning in Pakistan)
+const llqaFamDate = (date, rowDay) => {
+  if (!rowDay || !date || llqaWeekday(date) === rowDay) return date;
+  const a = llqaAddDays(date, -1), b = llqaAddDays(date, 1);
+  return llqaWeekday(a) === rowDay ? a : llqaWeekday(b) === rowDay ? b : date;
+};
+// all classes of one day as one mark (the calendar): attended if any class was, else excused, else absent
+const llqaDayMark = (recs) => {
+  const a = (recs || []).map((p) => String((p && p.attended) || "").toLowerCase());
+  if (!a.length) return "";
+  if (a.includes("present")) return "present";
+  if (a.includes("late")) return "late";
+  if (a.includes("excused")) return "excused";
+  return a.includes("absent") ? "absent" : a[0];
+};
+// the record of one class (exact: student, day, time)
+const llqaClsFind = (dp, sid, date, slot) => llqaDpIndex(dp).bySlot.get(String(sid) + "|" + date + "|" + String(slot || "")) || null;
+// what a Timetable class shows: its own record, else a record of that day from before v73 (one per student per day,
+// no time — it stands for the day's classes). An extra class logged since has no time either, but is not one of them.
+const llqaClsEntry = (dpx, sid, date, slot) => {
+  const k = String(sid) + "|" + date + "|";
+  const own = dpx.bySlot.get(k + String(slot || ""));
+  if (own) return own;
+  const day = dpx.bySlot.get(k);
+  return day && !llqaIsClsKey(day.id) ? day : null;
+};
+// the average of the students' last 30 days (those with a class logged in that time)
+const llqaAvgAtt = (list) => {
+  const ps = (list || []).map((s) => llqaStuStats(s).last30.pct).filter((p) => p != null);
+  return ps.length ? Math.round(ps.reduce((a, b) => a + b, 0) / ps.length) + "%" : "—";
+};
+// all classes of one day as one record (the parent's calendar and streak)
+const llqaDayRec = (list, d) => {
+  const recs = (list || []).filter((p) => p && p.date === d);
+  return recs.length ? { ...recs[0], attended: llqaDayMark(recs), classes: recs.length } : undefined;
+};
+// a student's classes on a Pakistan date (their Timetable classes and make-ups)
+const llqaStuClassesOn = (sid, date) => {
+  const ctx = LLQAApp.ctx || {};
+  return llqaClassesOn(date, ctx.teachers || [], ctx.students || [], ctx.dailyProgress).filter((it) => it.stu && String(it.stu.id) === String(sid));
+};
+// the latest day (today or before) a Timetable class took place
+// (the Timetable's own teacher rows carry the app id as _appId / _overlayAppId; the name is used when there is none)
+const llqaLastClassDate = (teacherId, rowDay, slot, from, teacherName) => {
+  const ctx = LLQAApp.ctx || {};
+  const t0 = from || todayPK();
+  const byId = teacherId != null && teacherId !== "";
+  for (let i = 0; i < 8; i++) {
+    const d = llqaAddDays(t0, -i);
+    const hit = llqaClassesOn(d, ctx.teachers || [], ctx.students || [], ctx.dailyProgress).some(
+      (it) => !it.makeup && (byId ? String(it.teacherId) === String(teacherId) : !!teacherName && it.teacher === teacherName) && it.rowDay === rowDay && String(it.slot) === String(slot),
+    );
+    if (hit) return d;
+  }
+  return t0;
+};
+// the student's own fields that follow their classes: the newest lesson, behaviour and page, and the counts — worked out
+// again from the records when every class of theirs is loaded, else moved by exactly what this change did (a student from
+// before the months loaded keeps a true total). Only what changed is returned.
+const llqaStuFields = (stu, list, prevList, removedDate) => {
+  const mine = llqaDpOf(list, stu.id);
+  const out = {};
+  const set = (k, v) => {
+    if (v !== undefined && stu[k] !== v) out[k] = v;
+  };
+  // the newest class wins — but a newer last lesson kept on the student (from before the CRM, or a month not loaded)
+  // is not replaced by an older one; when the newest class is removed, the one before it takes its place
+  const stored = String(stu.lastDate || "");
+  const may = (d) => !stored || String(d) >= stored || (!!removedDate && removedDate >= stored);
+  if (mine[0] && may(mine[0].date)) set("lastDate", mine[0].date);
+  const full = mine.find((p) => String(p.lesson || "").trim());
+  if (full && may(full.date)) {
+    set("lastLesson", String(full.lesson).trim());
+    [["lB", "behavior"], ["lP", "performance"], ["lH", "homework"], ["lR", "recitation"], ["lT", "tajweed"]].forEach(([f, k]) => {
+      if (full[k]) set(f, full[k]);
+    });
+  }
+  const book = llqaBookOf(stu);
+  const pg = mine.find((p) => parseInt(p.pages, 10) > 0 && (!p.book || p.book === book));
+  if (pg && book !== "none" && may(pg.date)) set(book === "qaida" ? "qaida" : "page", parseInt(pg.pages, 10));
+  // the student's real beginning (a family from before the CRM was registered long before it was added)
+  const start = [stu.dor, stu.addedAt, stu.trialStart].map((x) => String(x || "").slice(0, 10)).filter((x) => /^\d{4}-\d{2}-\d{2}$/.test(x)).sort()[0] || "";
+  const from = llqaClsFrom();
+  if (!from || (/^\d{4}-\d{2}-\d{2}$/.test(start) && start >= from)) {
+    const n = llqaAttCount(mine);
+    set("attended", n.attended);
+    set("totalClasses", n.classes);
+    if (n.pct != null) set("attendance", n.pct);
+  } else if (prevList) {
+    const a = llqaAttCount(llqaDpOf(prevList, stu.id)), b = llqaAttCount(mine);
+    if (a.attended !== b.attended || a.classes !== b.classes) {
+      const att = Math.max(0, (parseInt(stu.attended, 10) || 0) + b.attended - a.attended);
+      const tot = Math.max(att, (parseInt(stu.totalClasses, 10) || 0) + b.classes - a.classes);
+      set("attended", att);
+      set("totalClasses", tot);
+      if (tot) set("attendance", Math.round((att / tot) * 100));
+    }
+  }
+  return out;
+};
+const LLQA_ATT_KINDS = ["present", "late", "absent", "excused"];
+// v73: saves one class — a full log (lesson, page, behaviour …) or only the mark (Present / Late / Absent / Excused).
+// The same class saved again updates its record (never counted twice); a second class on the same day is its own
+// record. Returns "" or why it was not saved.
+const llqaClassSave = (o) => {
+  const ctx = LLQAApp.ctx || {};
+  const students = o.students || ctx.students || [];
+  const stu = students.find((x) => x && String(x.id) === String(o.studentId));
+  if (!stu) return "This class is not linked to a student record, so it can't be logged. Add the student in Sales or Students first.";
+  const today = todayPK();
+  const date = String(o.date || today).slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return "Pick the day of the class.";
+  if (date > today) return "A class can't be logged before its day.";
+  const f = o.form || {};
+  const att = String(f.attended || o.attended || "present").toLowerCase();
+  if (!LLQA_ATT_KINDS.includes(att)) return "Choose Present, Late, Absent or Excused.";
+  const full = !o.markOnly;
+  const lesson = String(f.lesson || "").trim();
+  if (full && (att === "present" || att === "late") && !lesson) return "Please write the lesson taught.";
+  const book = llqaBookOf(stu);
+  let pages = "";
+  const pRaw = String(f.pages == null ? "" : f.pages).trim();
+  if (full && pRaw && book !== "none") {
+    const max = LLQA_BOOK_MAX[book];
+    const p = /^\d+$/.test(pRaw) ? parseInt(pRaw, 10) : NaN;
+    if (!(p >= 1 && p <= max)) return "The page reached must be a number from 1 to " + max + ".";
+    pages = String(p);
+  }
+  const setDp = o.setDailyProgress || ctx.setDailyProgress;
+  if (typeof setDp !== "function") return "The class could not be saved — the page is still loading. Please try again.";
+  const slot = String(o.slot || "");
+  const dp = o.dp || ctx.dailyProgress || [];
+  const key = llqaClsKey(stu.id, date, slot);
+  const sameDay = llqaDpOf(dp, stu.id).filter((p) => p.date === date);
+  const old = sameDay.find((p) => String(p.id) === key) || null;
+  // a record of that day from before v73 (no time): a mark keeps what it says
+  const legacyDay = !old && o.markOnly ? sameDay.find((p) => !llqaIsClsKey(p.id)) || null : null;
+  const nowIso = new Date(llqaNowMs()).toISOString();
+  const by = o.by || (ctx.user && ctx.user.name) || "";
+  const rowDay = o.rowDay || (old && old.rowDay) || "";
+  const rec = {
+    ...(old || legacyDay || {}),
+    id: key,
+    key,
+    studentId: stu.id,
+    date,
+    slot,
+    teacherId: o.teacherId != null && o.teacherId !== "" ? o.teacherId : (old && old.teacherId) || "",
+    teacherName: o.teacherName || (old && old.teacherName) || stu.teacher || "",
+    rowDay,
+    famDate: llqaFamDate(date, rowDay),
+    attended: att,
+    source: o.source || (old && old.source) || "log",
+    createdAt: (old && old.createdAt) || nowIso,
+    createdBy: (old && old.createdBy) || by,
+    updatedAt: nowIso,
+    by,
+  };
+  if (o.makeupId) rec.makeupId = o.makeupId;
+  if (full)
+    Object.assign(rec, {
+      lesson,
+      pages,
+      book: pages ? book : "",
+      behavior: f.behavior || "",
+      performance: f.performance || "",
+      homework: f.homework || "",
+      recitation: f.recitation || "",
+      tajweed: f.tajweed || "",
+      notes: String(f.notes || "").trim(),
+    });
+  const next = dp.filter((p) => String(p.id) !== key).concat([rec]);
+  setDp((prev) => (prev || []).filter((p) => String(p.id) !== key).concat([rec]));
+  const fields = llqaStuFields(stu, next, dp);
+  // the class note goes on the student's notes too, as before (not again when the same note is saved twice)
+  const note = full ? rec.notes : "";
+  if (note && !(old && String(old.notes || "").trim() === note)) fields.notes = stu.notes ? stu.notes + " | " + note : note;
+  const setS = o.setStudents || ctx.setStudents;
+  if (Object.keys(fields).length && typeof setS === "function")
+    setS((prev) => (prev || []).map((x) => (String(x.id) === String(stu.id) ? { ...x, ...fields } : x)));
+  // the moment a trial reaches its classes: offer the fee message (once)
+  if (llqaInTrial(stu) && typeof llqaAfterCount === "function")
+    llqaAfterCount({ ...stu, attended: llqaTrialDone(stu, dp) }, { attended: llqaTrialDone(stu, next) });
+  return "";
+};
+// a quick mark for a class of the day's list (Present / Late / Absent / Excused), keeping a lesson already logged
+const llqaClassMark = (it, att, date) =>
+  !it || !it.stu
+    ? "This class is not linked to a student record."
+    : llqaClassSave({
+        studentId: it.stu.id,
+        date,
+        slot: it.slot,
+        rowDay: it.rowDay,
+        teacherId: it.covered && it.cover ? it.cover.coverId : it.teacherId,
+        teacherName: it.by || it.teacher,
+        attended: att,
+        markOnly: true,
+        source: "mark",
+        makeupId: it.makeup ? it.makeup.id : undefined,
+      });
+// the office removes a class logged by mistake (the student's fields follow what is left)
+const llqaClassRemove = (rec) => {
+  const ctx = LLQAApp.ctx || {};
+  if (!rec) return "";
+  if (!llqaCanManage()) return "Only the office can remove a logged class.";
+  if (typeof ctx.setDailyProgress !== "function") return "The page is still loading. Please try again.";
+  ctx.setDailyProgress((prev) => (prev || []).filter((p) => String(p.id) !== String(rec.id)));
+  const stu = (ctx.students || []).find((x) => String(x.id) === String(rec.studentId));
+  if (stu && typeof ctx.setStudents === "function") {
+    const fields = llqaStuFields(stu, (ctx.dailyProgress || []).filter((p) => String(p.id) !== String(rec.id)), ctx.dailyProgress || [], rec.date);
+    if (Object.keys(fields).length) ctx.setStudents((prev) => (prev || []).map((x) => (String(x.id) === String(stu.id) ? { ...x, ...fields } : x)));
+  }
+  return "";
+};
+
+/* ---------- v73: screens for the class records ---------- */
+const LLQA_MARKS = [
+  ["present", "P", "Present"],
+  ["late", "L", "Late"],
+  ["absent", "A", "Absent"],
+  ["excused", "E", "Excused"],
+];
+const llqaMarkCol = (a) =>
+  a === "present" ? c.success : a === "late" ? c.warn : a === "absent" ? c.danger : a === "excused" ? c.purple : a === "leave" ? c.accent : c.textSec;
+const llqaMarkWord = (a) => ({ present: "Present", late: "Late", absent: "Absent", excused: "Excused" })[String(a || "").toLowerCase()] || "";
+const llqaPctText = (p) => (p == null ? "—" : p + "%");
+const llqaSlotText = (slot) => (slot ? LLQABooking.fmt12(slot) : "extra class");
+// the teacher a class belongs to when it is logged (the substitute when one took it)
+const llqaClsWho = (it) =>
+  it ? { teacherId: it.covered && it.cover ? it.cover.coverId : it.teacherId, teacherName: it.by || it.teacher || "" } : { teacherId: "", teacherName: "" };
+// is this class one of the signed-in teacher's own (their row, or one they cover)?
+const llqaMyClass = (it, u) => {
+  if (!u || u.role !== "teacher") return true;
+  const me = String(u.teacherId != null ? u.teacherId : u.id);
+  return String(it.teacherId) === me || (it.covered && it.cover && String(it.cover.coverId) === me);
+};
+const llqaMarkErr = (e) => {
+  if (e) llqaToast({ kind: "info", ttl: 7000, text: e });
+};
+// four small buttons (P / L / A / E) for one class; the mark it has is filled in
+const llqaMarkBtns = (it, date, cur, keyp) =>
+  React.createElement(
+    "div",
+    { key: keyp, style: { display: "inline-flex", gap: 3 } },
+    LLQA_MARKS.map(([k, l, w]) =>
+      React.createElement(
+        "button",
+        {
+          key: k,
+          type: "button",
+          title: w + (it && it.slot ? " — " + LLQABooking.fmt12(it.slot) + " class" : ""),
+          "aria-label": w,
+          "aria-pressed": cur === k,
+          onClick: (e) => {
+            e.stopPropagation();
+            llqaMarkErr(llqaClassMark(it, k, date));
+          },
+          style: {
+            minWidth: 24,
+            padding: "3px 6px",
+            borderRadius: 5,
+            border: "1px solid " + llqaAlpha(llqaMarkCol(k), cur === k ? "ff" : "55"),
+            background: cur === k ? llqaAlpha(llqaMarkCol(k), "2e") : "transparent",
+            color: llqaMarkCol(k),
+            fontSize: 10,
+            fontWeight: 800,
+            cursor: "pointer",
+          },
+        },
+        l,
+      ),
+    ),
+  );
+
+/* ----- the window to log a class (Timetable, Today's classes, Students, Monthly Sheet) ----- */
+const llqaDateInput = (value, onChange, max) =>
+  React.createElement("input", {
+    type: "date",
+    value,
+    max,
+    onChange: (e) => e.target.value && onChange(e.target.value),
+    style: { width: "100%", boxSizing: "border-box", padding: "8px 10px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 12 },
+  });
+const llqaFieldLabel = (t) =>
+  React.createElement("label", { style: { display: "block", color: c.textSec, fontSize: 10, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 } }, t);
+const LLQALogClassModal = ({ info, onClose }) => {
+  const ctx = LLQAApp.ctx || {};
+  const u = ctx.user || {};
+  const today = todayPK();
+  const stu = (ctx.students || []).find((x) => String(x.id) === String(info.studentId)) || null;
+  const fixed = info.slot != null && info.slot !== ""; // opened for one booked class
+  const [date, setDate] = React.useState(info.date && String(info.date) <= today ? String(info.date) : today);
+  const [pick, setPick] = React.useState("");
+  const [err, setErr] = React.useState("");
+  const dp = ctx.dailyProgress || [];
+  const opts = stu && !fixed ? llqaStuClassesOn(stu.id, date) : [];
+  let it = null;
+  if (!fixed && opts.length && pick !== "x")
+    it = opts.find((x) => String(x.slot) === pick) || opts.find((x) => !llqaClsFind(dp, stu.id, date, x.slot)) || opts[0];
+  const slot = fixed ? String(info.slot) : it ? String(it.slot) : "";
+  const who = fixed
+    ? { teacherId: info.teacherId != null ? info.teacherId : "", teacherName: info.teacherName || "" }
+    : it
+      ? llqaClsWho(it)
+      : u.role === "teacher"
+        ? { teacherId: u.teacherId != null ? u.teacherId : u.id, teacherName: u.name || "" }
+        : { teacherId: "", teacherName: (stu && stu.teacher) || "" };
+  const rowDay = fixed ? info.day || info.rowDay || "" : it ? it.rowDay : "";
+  const makeupId = fixed ? info.makeupId : it && it.makeup ? it.makeup.id : undefined;
+  const old = stu ? llqaClsFind(dp, stu.id, date, slot) : null;
+  const book = llqaBookOf(stu);
+  const logged = !!(stu && stu.lastDate); // the student's own last values only once a class was logged
+  const init = () =>
+    old
+      ? {
+          attended: llqaMarkWord(old.attended) || "Present",
+          lesson: old.lesson || "",
+          pages: old.pages || "",
+          behavior: old.behavior || "",
+          performance: old.performance || "",
+          homework: old.homework || "",
+          recitation: old.recitation || "",
+          tajweed: old.tajweed || "",
+          notes: old.notes || "",
+        }
+      : {
+          attended: "Present",
+          lesson: "",
+          pages: "",
+          behavior: (logged && stu.lB) || "Good",
+          performance: (logged && stu.lP) || "Satisfactory",
+          homework: (logged && stu.lH) || "Not Assigned",
+          recitation: (logged && stu.lR) || "N/A",
+          tajweed: (logged && stu.lT) || "N/A",
+          notes: "",
+        };
+  // (the form starts again when the day or the class changes — and when the class's saved record arrives from the cloud
+  // after the window opened, so a save never overwrites it with empty fields)
+  const fkNow = date + "|" + slot + "|" + (old ? "saved" : "new");
+  // this computer's own records still loading for that month: wait (whether it was logged is not known yet)
+  const ownList = dp === LLQACls.view(LLQACls.legacy);
+  const loading = ownList && !llqaClsReady(date.slice(0, 7));
+  React.useEffect(() => {
+    if (typeof ctx.clsNeed === "function") ctx.clsNeed(date.slice(0, 7));
+  }, [date]);
+  const [form, setForm] = React.useState(init);
+  const [fk, setFk] = React.useState(fkNow);
+  if (fk !== fkNow) {
+    setFk(fkNow);
+    setForm(init());
+  }
+  const set = (k, v) => {
+    setErr("");
+    setForm((f) => ({ ...f, [k]: v }));
+  };
+  const attended = String(form.attended || "Present").toLowerCase();
+  const needLesson = attended === "present" || attended === "late";
+  const st = stu ? llqaStuStats(stu) : null;
+  const reach = st ? st.reach : null;
+  const trialN = stu ? llqaTrialDone(stu) : 0;
+  const cl = info.cell || {};
+  const famTime = String(cl.t || "").replace(/\s+(USA|CA)$/i, "").trim();
+  const famDay = cl.day || info.day || "";
+  const which = fixed
+    ? [famDay ? famDay + (famTime ? " " + LLQABooking.timeLabel(famTime) + " family time" : " class") : "", LLQABooking.fmt12(slot) + " PKT slot"].filter(Boolean).join(" → ")
+    : "";
+  const save = () => {
+    if (!stu) return;
+    const e = llqaClassSave({ studentId: stu.id, date, slot, rowDay, teacherId: who.teacherId, teacherName: who.teacherName, makeupId, form, source: info.source || (fixed ? "timetable" : "students") });
+    if (e) {
+      setErr(e);
+      return;
+    }
+    onClose();
+  };
+  const remove = () => {
+    if (!old || !confirm("Remove this logged class (" + llqaDateLabel(date) + ", " + llqaSlotText(slot) + ")?")) return;
+    const e = llqaClassRemove(old);
+    if (e) setErr(e);
+    else onClose();
+  };
+  const note = (text, col, bg, key) =>
+    React.createElement("div", { key, style: { padding: "8px 10px", background: bg || c.bgDeep, color: col || c.textSec, borderRadius: 8, fontSize: 11, marginBottom: 10, lineHeight: 1.45 } }, text);
+  const sub = [who.teacherName || info.teacherName || "", which, (fixed ? "logged for " : "") + llqaDateLabel(date) + " (Pakistan)"].filter(Boolean).join(" · ");
+  const body = React.createElement(
+    "div",
+    null,
+    !stu && note("This booking is not linked to a student record, so the class can't be logged. Add the student in Sales or Students first.", c.warn, c.warnBg, "nl"),
+    stu && llqaInTrial(stu) && note("Trial student · " + trialN + " of " + llqaTrialTarget(stu) + " classes attended so far" + (trialN >= llqaTrialTarget(stu) ? " — trial done, fee due" : ""), c.accent, c.accentBg, "tr"),
+    stu && reach && note((reach.book === "qaida" ? "Qaida: page " + reach.page + " of " + reach.total : "Quran: page " + reach.page + " of " + reach.total + " · Juz " + reach.juz) + " (" + reach.pctText + ")", c.textSec, null, "lv"),
+    stu && !old && st && st.lastFull && note("Last lesson (" + llqaDateLabel(st.lastFull.date) + "): " + st.lastFull.lesson, c.textSec, null, "ll"),
+    old && note("Already logged by " + (old.by || old.teacherName || "someone") + " — saving updates this class (it is not counted twice).", c.textMuted, null, "al"),
+    loading && note("Loading this month's classes…", c.textMuted, null, "ld"),
+    stu && !fixed &&
+      React.createElement(
+        "div",
+        { key: "dc", style: { display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: "0 12px", marginBottom: 12 } },
+        React.createElement("div", null, llqaFieldLabel("Day (Pakistan)"), llqaDateInput(date, (v) => { setErr(""); setDate(v <= today ? v : today); }, today)),
+        React.createElement(
+          "div",
+          null,
+          llqaFieldLabel("Class"),
+          opts.length
+            ? React.createElement(
+                LLQASelect,
+                {
+                  value: it ? String(it.slot) : "x",
+                  onChange: (e) => setPick(e.target.value),
+                  style: { width: "100%", padding: "8px 10px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 12 },
+                },
+                opts.map((x) => {
+                  const k = llqaClassState(x, date, llqaNowPkMin()).k;
+                  const why = { leave: "student on leave", holiday: "holiday", off: "class off", cover: "needs a substitute", noteacher: "teacher was on leave" }[k];
+                  return React.createElement(
+                    "option",
+                    { key: x.key, value: String(x.slot) },
+                    LLQABooking.fmt12(x.slot) + " · " + (x.by || x.teacher) + (llqaClsFind(dp, stu.id, date, x.slot) ? " · logged" : why ? " · " + why : ""),
+                  );
+                }),
+                React.createElement("option", { key: "x", value: "x" }, "An extra class (not in the Timetable)"),
+              )
+            : React.createElement("div", { style: { color: c.textSec, fontSize: 11, padding: "8px 0" } }, "No class booked that day — it is saved as an extra class."),
+        ),
+      ),
+    stu &&
+      React.createElement(
+        "div",
+        { key: "ap", style: { display: "grid", gridTemplateColumns: book === "none" ? "1fr" : "1fr 1fr", gap: "0 12px" } },
+        React.createElement(Inp, { label: "Attendance", value: form.attended || "Present", onChange: (v) => set("attended", v), options: ATT_OPTS }),
+        book !== "none" &&
+          React.createElement(Inp, {
+            label: book === "qaida" ? "Qaida page reached" : "Quran page reached",
+            value: form.pages || "",
+            onChange: (v) => set("pages", v),
+            placeholder: reach ? "last: " + reach.page : book === "qaida" ? "1–30" : "1–604",
+          }),
+      ),
+    stu && React.createElement(Inp, { key: "le", label: needLesson ? "Lesson taught *" : "Lesson taught", value: form.lesson || "", onChange: (v) => set("lesson", v), placeholder: needLesson ? "What was taught in this class" : "Not needed for an absent student" }),
+    stu &&
+      React.createElement(
+        "div",
+        { key: "bp", style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 10px" } },
+        React.createElement(Inp, { label: "Behavior", value: form.behavior || "", onChange: (v) => set("behavior", v), options: BEHAV_OPTS }),
+        React.createElement(Inp, { label: "Performance", value: form.performance || "", onChange: (v) => set("performance", v), options: PERF_OPTS }),
+        React.createElement(Inp, { label: "Homework", value: form.homework || "", onChange: (v) => set("homework", v), options: HW_OPTS }),
+      ),
+    stu &&
+      React.createElement(
+        "div",
+        { key: "rt", style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" } },
+        React.createElement(Inp, { label: "Recitation", value: form.recitation || "", onChange: (v) => set("recitation", v), options: RECIT_OPTS }),
+        React.createElement(Inp, { label: "Tajweed", value: form.tajweed || "", onChange: (v) => set("tajweed", v), options: TAJ_OPTS }),
+      ),
+    stu && React.createElement(Inp, { key: "no", label: "Notes", value: form.notes || "", onChange: (v) => set("notes", v), placeholder: "Optional" }),
+    err && React.createElement("div", { key: "er", role: "alert", style: { color: c.danger, fontSize: 12, fontWeight: 600, marginTop: 2 } }, err),
+  );
+  return llqaShell(
+    "✍ Log class — " + ((stu && stu.name) || info.studentName || "?"),
+    sub,
+    body,
+    [
+      old && llqaCanManage() ? llqaMini("Remove this log", remove, { key: "rm", big: true, tone: "danger" }) : null,
+      llqaMini("Cancel", onClose, { key: "x", big: true }),
+      stu ? llqaMini(old ? "Save changes" : "Save class", save, { key: "ok", big: true, solid: true, tone: "accent", icon: "check-circle", disabled: loading, title: loading ? "Loading this month's classes…" : "" }) : null,
+    ],
+    { onClose, width: 520 },
+  );
+};
+
+/* ----- the student's progress (student details) ----- */
+const LLQAStuProgress = ({ s, bc }) => {
+  const st = llqaStuStats(s);
+  const r = st.reach;
+  const book = llqaBookOf(s);
+  const box = (kids, key, extra) => React.createElement("div", { key, style: { background: c.bgDeep, borderRadius: 8, padding: "10px 12px", marginBottom: 12, ...(extra || {}) } }, kids);
+  const h = (t, key) => React.createElement("h4", { key, style: { color: c.text, fontSize: 12, margin: "0 0 8px", fontWeight: 600 } }, t);
+  const lf = st.lastFull;
+  const tiles = lf
+    ? [
+        ["Behavior", lf.behavior, bc ? bc(lf.behavior) : c.text],
+        ["Performance", lf.performance, lf.performance === "Outstanding" || lf.performance === "Very Good" ? c.success : lf.performance === "Below Average" || lf.performance === "Struggling" ? c.danger : c.textSec],
+        ["Homework", lf.homework, lf.homework === "Completed" ? c.success : lf.homework === "Not Done" ? c.danger : c.warn],
+        ["Recitation", lf.recitation, lf.recitation === "Fluent & Clear" ? c.success : c.textSec],
+        ["Tajweed", lf.tajweed, lf.tajweed === "Excellent Tajweed" ? c.success : c.textSec],
+      ].filter(([, v]) => v && v !== "N/A")
+    : [];
+  return React.createElement(
+    React.Fragment,
+    null,
+    h("Course Progress", "h1"),
+    box(
+      book === "none"
+        ? React.createElement("div", { style: { color: c.textSec, fontSize: 11 } }, "A Subject course — progress is in the lessons below (no book pages).")
+        : [
+            React.createElement(
+              "div",
+              { key: "t", style: { display: "flex", justifyContent: "space-between", marginBottom: 6 } },
+              React.createElement("span", { style: { color: c.textSec, fontSize: 11 } }, book === "qaida" ? "Qaida" : "Quran"),
+              React.createElement("span", { style: { color: c.accent, fontWeight: 700 } }, r ? r.pctText : "—"),
+            ),
+            React.createElement(PBar, { key: "b", value: r ? r.pct : 0, color: r && r.pct >= 80 ? c.success : r && r.pct >= 40 ? c.accent : c.warn }),
+            React.createElement(
+              "div",
+              { key: "d", style: { display: "flex", justifyContent: "space-between", marginTop: 5, fontSize: 10 } },
+              React.createElement("span", { style: { color: c.textSec } }, r ? llqaReachText(r) : "No page logged yet"),
+              React.createElement("span", { style: { color: book === "qaida" ? c.purple : c.accent } }, r && r.date ? "as of " + llqaDateLabel(r.date) : s.surah || ""),
+            ),
+          ],
+      "pr",
+    ),
+    h("Attendance — last 30 days", "h2"),
+    box(
+      React.createElement(
+        "div",
+        { style: { display: "flex", gap: 14, flexWrap: "wrap", fontSize: 11, color: c.textSec } },
+        React.createElement("span", { key: "p" }, React.createElement("b", { style: { color: c.text } }, llqaPctText(st.last30.pct)), " attended"),
+        React.createElement("span", { key: "c" }, st.last30.classes + " class" + (st.last30.classes === 1 ? "" : "es") + " logged"),
+        React.createElement("span", { key: "a", style: { color: st.last30.absent ? c.danger : c.textSec } }, st.last30.absent + " absent"),
+        React.createElement("span", { key: "l" }, st.last30.late + " late"),
+        st.last30.excused ? React.createElement("span", { key: "e" }, st.last30.excused + " excused") : null,
+      ),
+      "at",
+    ),
+    h("Last Session", "h3"),
+    tiles.length
+      ? React.createElement(
+          "div",
+          { key: "ls", style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 12 } },
+          tiles.map(([l, v, col]) =>
+            React.createElement(
+              "div",
+              { key: l, style: { background: c.bgDeep, borderRadius: 6, padding: "6px 10px" } },
+              React.createElement("div", { style: { color: c.textSec, fontSize: 9, textTransform: "uppercase", marginBottom: 2 } }, l),
+              React.createElement("div", { style: { color: col, fontSize: 11, fontWeight: 600 } }, v),
+            ),
+          ),
+        )
+      : box(React.createElement("div", { style: { color: c.textMuted, fontSize: 11 } }, "No class logged yet."), "nl"),
+    h("Recent classes", "h4"),
+    box(
+      st.recs.length
+        ? st.recs.slice(0, 8).map((p, i) =>
+            React.createElement(
+              "div",
+              { key: p.id || i, style: { display: "flex", gap: 8, alignItems: "baseline", padding: "5px 0", borderTop: i ? "1px solid " + llqaAlpha(c.border, "66") : "none", fontSize: 11 } },
+              React.createElement("span", { style: { color: c.text, fontWeight: 600, minWidth: 92 } }, llqaDateLabel(p.date)),
+              React.createElement("span", { style: { color: c.textSec, minWidth: 68 } }, llqaSlotText(p.slot)),
+              React.createElement("span", { style: { color: llqaMarkCol(p.attended), fontWeight: 700, minWidth: 56 } }, llqaMarkWord(p.attended) || "—"),
+              React.createElement("span", { style: { color: c.textSec, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }, title: p.lesson || "" }, [p.lesson, p.pages ? "page " + p.pages : "", p.teacherName].filter(Boolean).join(" · ")),
+            ),
+          )
+        : React.createElement("div", { style: { color: c.textMuted, fontSize: 11 } }, "No class logged yet."),
+      "rc",
+      { padding: "6px 12px" },
+    ),
+  );
+};
+
+/* ----- Students → Attendance: 30-day spread and the quick marks of today's classes ----- */
+const llqaAttBuckets = (students) => {
+  const b = [
+    { r: "95-100%", n: 0 },
+    { r: "90-94%", n: 0 },
+    { r: "85-89%", n: 0 },
+    { r: "80-84%", n: 0 },
+    { r: "<80%", n: 0 },
+  ];
+  let none = 0;
+  (students || []).forEach((s) => {
+    const p = llqaStuStats(s).last30.pct;
+    if (p == null) none++;
+    else b[p >= 95 ? 0 : p >= 90 ? 1 : p >= 85 ? 2 : p >= 80 ? 3 : 4].n++;
+  });
+  return { data: b, none };
+};
+const LLQAQuickMark = ({ students }) => {
+  const ctx = LLQAApp.ctx || {};
+  const u = ctx.user || {};
+  const today = todayPK();
+  const nowMin = llqaNowPkMin();
+  const dp = ctx.dailyProgress || [];
+  const day = llqaClassesOn(today, ctx.teachers || [], ctx.students || [], dp).filter((it) => it.stu && llqaMyClass(it, u));
+  const byStu = new Map();
+  day.forEach((it) => {
+    const k = String(it.stu.id);
+    if (!byStu.has(k)) byStu.set(k, []);
+    byStu.get(k).push(it);
+  });
+  const rows = (students || []).map((s) => ({ s, st: llqaStuStats(s), cls: byStu.get(String(s.id)) || [] }));
+  rows.sort(
+    (a, b) =>
+      (b.cls.length ? 1 : 0) - (a.cls.length ? 1 : 0) ||
+      (a.cls.length && b.cls.length ? a.cls[0].min - b.cls[0].min : 0) ||
+      (a.st.last30.pct == null ? 101 : a.st.last30.pct) - (b.st.last30.pct == null ? 101 : b.st.last30.pct) ||
+      String(a.s.name).localeCompare(String(b.s.name)),
+  );
+  const td = (kids, key, st) => React.createElement("td", { key, style: { padding: "7px 8px", verticalAlign: "middle", ...(st || {}) } }, kids);
+  const ready = llqaClsReady();
+  return React.createElement(
+    React.Fragment,
+    null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap", margin: "0 0 10px" } },
+      React.createElement("h4", { style: { color: c.text, fontSize: 13, margin: 0, fontWeight: 600 } }, "Quick Mark — Today (" + llqaDateLabel(today) + ", Pakistan)"),
+      React.createElement(
+        "div",
+        { style: { color: c.textMuted, fontSize: 11 } },
+        (ready ? "" : "Loading the class records… · ") + "Each class of today is marked on its own · P Present · L Late · A Absent · E Excused · counts are the last 30 days",
+      ),
+    ),
+    React.createElement(
+      "div",
+      { style: { overflowX: "auto", borderRadius: 10, border: "1px solid " + c.border } },
+      React.createElement(
+        "table",
+        { style: { width: "100%", borderCollapse: "collapse", fontSize: 11 } },
+        React.createElement(
+          "thead",
+          null,
+          React.createElement(
+            "tr",
+            null,
+            ["Student", "Teacher", "Classes", "Attended", "Missed", "Rate", "Today's classes"].map((h) =>
+              React.createElement(
+                "th",
+                { key: h, style: { padding: "9px 8px", textAlign: "left", color: c.textSec, fontWeight: 600, fontSize: 9, textTransform: "uppercase", borderBottom: "1px solid " + c.border, background: c.bgDeep, whiteSpace: "nowrap" } },
+                h,
+              ),
+            ),
+          ),
+        ),
+        React.createElement(
+          "tbody",
+          null,
+          llqaEmptyRow("No active students yet", "Each active student’s classes attended and missed show here."),
+          rows.map(({ s, st, cls }, i) =>
+            React.createElement(
+              "tr",
+              { key: s.id, style: { borderBottom: "1px solid " + c.border, background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent" } },
+              td(React.createElement("span", { style: { fontWeight: 600 } }, s.name), "n"),
+              td(String(s.teacher || "—").split(" ").slice(-2).join(" "), "t", { color: c.textSec, fontSize: 10 }),
+              td(st.last30.classes, "c", { color: c.textSec }),
+              td(st.last30.attended, "a", { color: c.success, fontWeight: 600 }),
+              td(st.last30.absent, "m", { color: st.last30.absent ? c.danger : c.textSec }),
+              td(
+                React.createElement(
+                  "div",
+                  { style: { display: "flex", alignItems: "center", gap: 4, minWidth: 80 } },
+                  React.createElement(PBar, { value: st.last30.pct || 0, color: st.last30.pct == null ? c.border : st.last30.pct >= 95 ? c.success : st.last30.pct >= 85 ? c.warn : c.danger }),
+                  React.createElement("span", { style: { fontSize: 10, fontWeight: 600, color: st.last30.pct == null ? c.textMuted : st.last30.pct >= 95 ? c.success : st.last30.pct >= 85 ? c.warn : c.danger } }, llqaPctText(st.last30.pct)),
+                ),
+                "r",
+              ),
+              td(
+                cls.length
+                  ? React.createElement(
+                      "div",
+                      { style: { display: "flex", flexDirection: "column", gap: 4 } },
+                      cls.map((it) => {
+                        const rec = llqaClsFind(dp, s.id, today, it.slot);
+                        const state = llqaClassState({ ...it, entry: rec }, today, nowMin);
+                        const blocked = ["leave", "holiday", "off", "quit", "noteacher", "cover"].includes(state.k);
+                        return React.createElement(
+                          "div",
+                          { key: it.key, style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
+                          React.createElement("span", { style: { color: c.textSec, fontSize: 10, minWidth: 54 } }, LLQABooking.fmt12(it.slot)),
+                          blocked ? React.createElement("span", { style: { color: state.col, fontSize: 10, fontWeight: 600 } }, state.text) : llqaMarkBtns(it, today, rec ? rec.attended : "", "b"),
+                        );
+                      }),
+                    )
+                  : React.createElement("span", { style: { color: c.textMuted, fontSize: 10 } }, "No class today"),
+                "d",
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+};
+
+/* ----- Students → Daily Progress: today's classes and each student's latest lesson ----- */
+const LLQADailyProgress = ({ students, bc, onLog }) => {
+  const ctx = LLQAApp.ctx || {};
+  const u = ctx.user || {};
+  const today = todayPK();
+  const nowMin = llqaNowPkMin();
+  const dp = ctx.dailyProgress || [];
+  const day = llqaClassesOn(today, ctx.teachers || [], ctx.students || [], dp).filter((it) => it.stu && llqaMyClass(it, u));
+  const byStu = new Map();
+  day.forEach((it) => {
+    const k = String(it.stu.id);
+    if (!byStu.has(k)) byStu.set(k, []);
+    byStu.get(k).push({ ...it, st: llqaClassState(it, today, nowMin) });
+  });
+  const rank = (cls) =>
+    !cls.length ? 4 : cls.some((x) => x.st.k === "missing") ? 0 : cls.some((x) => x.st.k === "now" || x.st.k === "upcoming") ? 1 : cls.some((x) => ["logged", "absent", "excused"].includes(x.st.k)) ? 2 : 3;
+  const cards = (students || []).map((s) => {
+    const cls = byStu.get(String(s.id)) || [];
+    return { s, cls, st: llqaStuStats(s), r: rank(cls) };
+  });
+  cards.sort((a, b) => a.r - b.r || (a.cls[0] ? a.cls[0].min : 9999) - (b.cls[0] ? b.cls[0].min : 9999) || String(a.s.name).localeCompare(String(b.s.name)));
+  const all = Array.from(byStu.values()).flat().filter((x) => (students || []).some((s) => String(s.id) === String(x.stu.id)));
+  const n = (f) => all.filter(f).length;
+  const tag = (text, col, key) => React.createElement("span", { key, style: { fontSize: 9, padding: "1px 5px", borderRadius: 3, background: llqaAlpha(col, "20"), color: col } }, text);
+  return React.createElement(
+    React.Fragment,
+    null,
+    React.createElement("h4", { style: { color: c.text, margin: "0 0 10px", fontSize: 13, fontWeight: 600 } }, "Today — " + llqaDateLabel(today) + " (Pakistan)" + (llqaClsReady() ? "" : " · loading the class records…")),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      llqaStat("Classes today", all.length, u.role === "teacher" ? "yours" : "these students"),
+      llqaStat("Logged", n((x) => ["logged", "absent", "excused"].includes(x.st.k)), "saved", n((x) => ["logged", "absent", "excused"].includes(x.st.k)) ? c.success : c.text),
+      llqaStat("Not logged", n((x) => x.st.k === "missing"), "class time passed", n((x) => x.st.k === "missing") ? c.danger : c.text),
+      llqaStat("Upcoming", n((x) => x.st.k === "upcoming" || x.st.k === "now"), "later today"),
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))", gap: 10 } },
+      cards.length === 0 && React.createElement("div", { style: { color: c.textMuted, fontSize: 12 } }, "No active students yet."),
+      cards.map(({ s, cls, st, r }) => {
+        const lf = st.lastFull;
+        const reach = st.reach;
+        return React.createElement(
+          "div",
+          {
+            key: s.id,
+            style: {
+              background: c.bgCard,
+              boxShadow: c.shadow3d,
+              borderRadius: 8,
+              padding: "10px 12px",
+              border: "1px solid " + (r === 0 ? llqaAlpha(c.danger, "66") : r === 2 ? llqaAlpha(c.success, "66") : c.border),
+            },
+          },
+          React.createElement(
+            "div",
+            { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, gap: 6 } },
+            React.createElement(
+              "div",
+              { style: { display: "flex", alignItems: "center", gap: 6, minWidth: 0 } },
+              React.createElement("div", { style: { width: 28, height: 28, flexShrink: 0, borderRadius: 6, background: c.accentBg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: c.accent } }, String(s.name || "?")[0]),
+              React.createElement(
+                "div",
+                { style: { minWidth: 0 } },
+                React.createElement("div", { style: { color: c.text, fontSize: 11, fontWeight: 600 } }, s.name + (s.age ? " (" + s.age + ")" : "")),
+                React.createElement("div", { style: { color: c.textSec, fontSize: 9 } }, (s.teacher || "—") + " \xB7 " + (s.course || "—")),
+              ),
+            ),
+            llqaMini("✍ Log", () => onLog(s), { key: "lg", tone: r === 0 ? "danger" : "success", solid: r === 0, title: "Log a class" }),
+          ),
+          cls.length
+            ? React.createElement(
+                "div",
+                { style: { display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 6 } },
+                cls.map((x) => llqaPill(LLQABooking.fmt12(x.slot) + " · " + x.st.text, x.st.col, null, x.key)),
+              )
+            : null,
+          React.createElement(
+            "div",
+            { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 } },
+            React.createElement(
+              "div",
+              { style: { flex: 1, minWidth: 0 } },
+              React.createElement("div", { style: { color: lf ? c.text : c.textMuted, fontSize: 10, fontWeight: 500 } }, lf ? lf.lesson : "No class logged yet"),
+              lf
+                ? React.createElement(
+                    "div",
+                    { style: { display: "flex", gap: 4, marginTop: 4, flexWrap: "wrap" } },
+                    tag(llqaDateLabel(lf.date), c.textSec, "d"),
+                    lf.behavior ? tag(lf.behavior, bc ? bc(lf.behavior) : c.accent, "b") : null,
+                    lf.performance && lf.performance !== "Satisfactory" ? tag(lf.performance, c.purple, "p") : null,
+                    lf.homework && lf.homework !== "Not Assigned" ? tag("HW: " + lf.homework, lf.homework === "Completed" ? c.success : c.danger, "h") : null,
+                  )
+                : null,
+            ),
+            React.createElement(
+              "div",
+              { style: { textAlign: "right", marginLeft: 10 } },
+              React.createElement("div", { style: { color: reach && reach.book === "qaida" ? c.purple : c.accent, fontSize: 14, fontWeight: 700 } }, reach ? (reach.book === "qaida" ? "P." : "Pg ") + reach.page : "—"),
+              React.createElement("div", { style: { color: c.textSec, fontSize: 9 } }, reach ? (reach.book === "qaida" ? "of 30 · Qaida" : "Juz " + reach.juz) : llqaBookOf(s) === "none" ? "Subject" : "no page yet"),
+            ),
+          ),
+        );
+      }),
+    ),
+  );
+};
+
+/* ----- Students → Monthly Sheet: filled in from the class records ----- */
+// one student on one day: the marks of their classes, else what the day was (leave, holiday, class off, not logged …)
+const llqaSheetCell = (s, date, items, recs, today, nowMin) => {
+  const marks = (recs || []).map((p) => String(p.attended || "").toLowerCase()).filter(Boolean);
+  const open = (items || []).filter((it) => !llqaClsEntry(llqaDpIndex(recs || []), s.id, date, it.slot));
+  const states = open.map((it) => llqaClassState({ ...it, entry: null }, date, nowMin).k);
+  const missing = states.filter((k) => k === "missing").length;
+  if (marks.length) return { marks, missing, states };
+  if (!states.length) return { marks: [], missing: 0, states: [], none: true };
+  const k = states.includes("missing") ? "missing" : states[0];
+  return { marks: [], missing, states, k };
+};
+const LLQA_SHEET_SIGN = {
+  leave: ["V", "On leave"],
+  holiday: ["H", "Holiday"],
+  off: ["–", "Class off"],
+  noteacher: ["–", "Teacher was on leave"],
+  cover: ["·", "Needs a substitute"],
+  missing: ["!", "Not logged yet"],
+  upcoming: ["·", "Upcoming"],
+  now: ["·", "Class now"],
+  quit: ["", "Quit"],
+};
+const LLQAMonthSheet = ({ students }) => {
+  const ctx = LLQAApp.ctx || {};
+  const u = ctx.user || {};
+  const today = todayPK();
+  const nowMin = llqaNowPkMin();
+  const [ym, setYm] = React.useState(today.slice(0, 7));
+  const [search, setSearch] = React.useState("");
+  const [tf, setTf] = React.useState("all");
+  const [win, setWin] = React.useState(null); // {sid, date}
+  React.useEffect(() => {
+    if (typeof ctx.clsNeed === "function") ctx.clsNeed(ym);
+  }, [ym]);
+  const dp = ctx.dailyProgress || [];
+  const dpx = llqaDpIndex(dp);
+  const y = Number(ym.slice(0, 4)), m = Number(ym.slice(5, 7));
+  const nDays = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const dates = Array.from({ length: nDays }, (_, i) => ym + "-" + String(i + 1).padStart(2, "0"));
+  const monthName = new Date(Date.UTC(y, m - 1, 15)).toLocaleString("en-US", { month: "long", year: "numeric", timeZone: "UTC" });
+  const mine = (students || []).map((s) => String(s.id));
+  const inMonth = new Set(dp.filter((p) => String(p.date).slice(0, 7) === ym).map((p) => String(p.studentId)));
+  let list = (students || []).filter((s) => s.status === "active" || s.status === "leave" || inMonth.has(String(s.id)));
+  const teacherOpts = ["all", ...Array.from(new Set(list.map((s) => s.teacher).filter(Boolean))).sort()];
+  if (tf !== "all") list = list.filter((s) => s.teacher === tf);
+  if (search) {
+    const q = search.toLowerCase();
+    list = list.filter((s) => [s.name, s.code, s.parent].some((v) => String(v || "").toLowerCase().includes(q)));
+  }
+  list = list.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  // each day's classes of these students (today's Timetable; days to come are not filled)
+  const ids = new Set(mine);
+  const dayItems = new Map();
+  dates.forEach((d) => {
+    if (d > today) return;
+    const per = new Map();
+    llqaClassesOn(d, ctx.teachers || [], ctx.students || [], dp).forEach((it) => {
+      if (!it.stu || !ids.has(String(it.stu.id)) || !llqaMyClass(it, u)) return;
+      const k = String(it.stu.id);
+      if (!per.has(k)) per.set(k, []);
+      per.get(k).push(it);
+    });
+    dayItems.set(d, per);
+  });
+  const monthRecs = new Map(); // "student|day" → that day's records
+  dp.forEach((p) => {
+    if (!p || p.studentId == null || String(p.date).slice(0, 7) !== ym) return;
+    const k = String(p.studentId) + "|" + p.date;
+    if (!monthRecs.has(k)) monthRecs.set(k, []);
+    monthRecs.get(k).push(p);
+  });
+  const recsOf = (sid, d) => monthRecs.get(String(sid) + "|" + d) || [];
+  const cellOf = (s, d) => {
+    if (d > today) return { future: true, marks: [], missing: 0 };
+    const recs = recsOf(s.id, d);
+    const from = llqaStuFrom(s); // before the student was registered and in the CRM no class is expected
+    const c0 = llqaSheetCell(s, d, from && d < from ? [] : (dayItems.get(d) || new Map()).get(String(s.id)) || [], recs, today, nowMin);
+    if (!recs.length && c0.none) {
+      const old = (s.attendanceLog || {})[d]; // the sheet before v73
+      if (old) return { ...c0, legacy: old };
+    }
+    return c0;
+  };
+  const grid = new Map(list.map((s) => [String(s.id), dates.map((d) => cellOf(s, d))]));
+  const cellAt = (s, i) => grid.get(String(s.id))[i];
+  const sumOf = (s) => {
+    const t = { present: 0, late: 0, absent: 0, excused: 0, leave: 0, missing: 0 };
+    dates.forEach((d, i) => {
+      const x = cellAt(s, i);
+      x.marks.forEach((a) => (t[a] = (t[a] || 0) + 1));
+      if (x.legacy && t[x.legacy] != null) t[x.legacy]++;
+      t.missing += x.missing || 0;
+      if (!x.marks.length && x.k === "leave") t.leave++;
+    });
+    const counted = t.present + t.late + t.absent;
+    return { ...t, pct: counted ? Math.round(((t.present + t.late) / counted) * 100) : null };
+  };
+  const sums = new Map(list.map((s) => [String(s.id), sumOf(s)]));
+  const todayIn = today.slice(0, 7) === ym;
+  const todayMarks = todayIn ? list.flatMap((s) => recsOf(s.id, today).map((p) => String(p.attended))) : [];
+  const shift = (n) => {
+    const d = new Date(Date.UTC(y, m - 1 + n, 15));
+    setYm(d.toISOString().slice(0, 7));
+  };
+  const markAll = (d) => {
+    if (d > today) return;
+    const todo = [];
+    list.forEach((s) => {
+      const from = llqaStuFrom(s);
+      if (from && d < from) return; // before the student joined
+      ((dayItems.get(d) || new Map()).get(String(s.id)) || []).forEach((it) => {
+        if (llqaClsEntry(dpx, s.id, d, it.slot)) return;
+        const k = llqaClassState({ ...it, entry: null }, d, nowMin).k;
+        if (["leave", "holiday", "off", "quit", "noteacher", "cover"].includes(k)) return;
+        todo.push(it);
+      });
+    });
+    if (!todo.length) {
+      llqaToast({ kind: "info", ttl: 6000, text: "Nothing to mark on " + llqaDateLabel(d) + " — every class of the students shown is marked (or off)." });
+      return;
+    }
+    if (!confirm("Mark " + todo.length + " class" + (todo.length === 1 ? "" : "es") + " on " + llqaDateLabel(d) + " as Present?\n\nOnly classes with no mark yet; marks already given stay as they are.")) return;
+    let bad = 0;
+    todo.forEach((it) => {
+      if (llqaClassMark(it, "present", d)) bad++;
+    });
+    llqaToast({ kind: "info", ttl: 6000, text: "Marked " + (todo.length - bad) + " class" + (todo.length - bad === 1 ? "" : "es") + " Present on " + llqaDateLabel(d) + (bad ? " · " + bad + " could not be marked" : "") + "." });
+  };
+  const csv = () => {
+    const q = (v) => '"' + String(v == null ? "" : v).split('"').join('""') + '"';
+    let out = "Student,Code,Teacher," + dates.map((d) => d.slice(8)).join(",") + ",Present,Late,Absent,Excused,Leave,Not logged,Att%\n";
+    list.forEach((s) => {
+      const t = sums.get(String(s.id));
+      const cells = dates.map((d, i) => {
+        const x = cellAt(s, i);
+        if (x.marks.length) return x.marks.map((a) => (LLQA_MARKS.find((mk) => mk[0] === a) || ["", "?"])[1]).join("");
+        if (x.legacy) return (LLQA_MARKS.find((mk) => mk[0] === x.legacy) || ["", x.legacy === "leave" ? "V" : "?"])[1];
+        return x.k ? (LLQA_SHEET_SIGN[x.k] || [""])[0] : "";
+      });
+      out += [q(s.name), q(s.code), q(s.teacher), ...cells, t.present, t.late, t.absent, t.excused, t.leave, t.missing, t.pct == null ? "" : t.pct + "%"].join(",") + "\n";
+    });
+    const blob = new Blob([out], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "monthly-attendance-" + ym + ".csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  const nav = { padding: "6px 12px", background: c.bgDeep, border: "1px solid " + c.border, borderRadius: 6, color: c.text, cursor: "pointer", fontSize: 11, fontWeight: 500, display: "flex", alignItems: "center", gap: 5 };
+  // cells that stay in place while the rest scrolls are painted solid (the theme's card colour can be see-through)
+  const solidCard = "linear-gradient(" + c.bgCard + ", " + c.bgCard + "), " + c.bg;
+  const solidDeep = "linear-gradient(" + c.bgDeep + ", " + c.bgDeep + "), " + c.bg;
+  const sticky = { position: "sticky", left: 0, zIndex: 1, background: solidCard, borderRight: "1px solid " + c.border };
+  // P L A E ! (26 px each) and % (46 px), kept at the right edge
+  const SUMW = [26, 26, 26, 26, 26, 46];
+  const sumCol = (i) => ({ position: "sticky", right: SUMW.slice(i + 1).reduce((a, b) => a + b, 0), width: SUMW[i], minWidth: SUMW[i], maxWidth: SUMW[i], boxSizing: "border-box", borderLeft: i === 0 ? "1px solid " + c.border : "none" });
+  const cellBox = (x) => {
+    if (x.future) return { t: "", col: c.textMuted, title: "" };
+    if (x.marks.length) {
+      const t = x.marks.length > 2 ? x.marks.length + "✓" : x.marks.map((a) => (LLQA_MARKS.find((mk) => mk[0] === a) || ["", "?"])[1]).join("");
+      const a0 = x.marks.includes("absent") && !x.marks.some(llqaIsAtt) ? "absent" : x.marks[0];
+      return { t: t + (x.missing ? "!" : ""), col: llqaMarkCol(a0), fill: true, title: x.marks.map(llqaMarkWord).join(", ") + (x.missing ? " · a class not logged yet" : "") };
+    }
+    if (x.legacy) return { t: (LLQA_MARKS.find((mk) => mk[0] === x.legacy) || ["", x.legacy === "leave" ? "V" : "?"])[1], col: llqaMarkCol(x.legacy), fill: true, title: (llqaMarkWord(x.legacy) || "Leave") + " (from the sheet before the class records)" };
+    if (x.k) {
+      const sg = LLQA_SHEET_SIGN[x.k] || ["", ""];
+      return { t: sg[0], col: x.k === "missing" ? c.danger : x.k === "leave" ? c.accent : c.textMuted, outline: x.k === "missing", title: sg[1] };
+    }
+    return { t: "", col: c.textMuted, title: "No class" };
+  };
+  const ready = llqaClsReady(ym);
+  return React.createElement(
+    React.Fragment,
+    null,
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 12 } },
+      React.createElement(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: 6 } },
+        React.createElement("button", { type: "button", onClick: () => shift(-1), style: nav, title: "Previous month", "aria-label": "Previous month" }, React.createElement(ChevronLeft, { size: 14 })),
+        React.createElement("div", { style: { padding: "6px 14px", background: c.bgDeep, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 12, fontWeight: 700, minWidth: 130, textAlign: "center" } }, monthName),
+        React.createElement("button", { type: "button", onClick: () => shift(1), style: nav, title: "Next month", "aria-label": "Next month" }, React.createElement(ChevronRight, { size: 14 })),
+        React.createElement("button", { type: "button", onClick: () => setYm(today.slice(0, 7)), style: { ...nav, marginLeft: 6 } }, React.createElement(Calendar, { size: 12 }), "This month"),
+      ),
+      React.createElement(
+        "div",
+        { style: { position: "relative", flex: 1, minWidth: 200, maxWidth: 280 } },
+        React.createElement(Search, { size: 13, style: { position: "absolute", left: 9, top: 9, color: c.textMuted } }),
+        React.createElement("input", {
+          value: search,
+          onChange: (e) => setSearch(e.target.value),
+          placeholder: "Search student / code / parent...",
+          style: { width: "100%", padding: "7px 10px 7px 30px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 11, outline: "none", boxSizing: "border-box" },
+        }),
+      ),
+      teacherOpts.length > 2
+        ? React.createElement(
+            LLQASelect,
+            { value: tf, onChange: (e) => setTf(e.target.value), style: { padding: "7px 10px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 11 } },
+            teacherOpts.map((t) => React.createElement("option", { key: t, value: t }, t === "all" ? "All Teachers" : t)),
+          )
+        : null,
+      React.createElement("button", { type: "button", onClick: csv, style: nav, title: "Export to CSV" }, React.createElement(Download, { size: 12 }), "Export CSV"),
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } },
+      React.createElement(SC, { icon: Users, label: "Students Visible", value: list.length, color: c.accent }),
+      React.createElement(SC, { icon: Check, label: "Today · Present", value: todayIn ? todayMarks.filter((a) => a === "present").length : "—", color: c.success }),
+      React.createElement(SC, { icon: UserX, label: "Today · Absent", value: todayIn ? todayMarks.filter((a) => a === "absent").length : "—", color: c.danger }),
+      React.createElement(SC, { icon: Clock, label: "Today · Late", value: todayIn ? todayMarks.filter((a) => a === "late").length : "—", color: c.warn }),
+    ),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 12, flexWrap: "wrap", padding: "10px 14px", background: c.bgDeep, border: "1px solid " + c.border, borderRadius: 8, marginBottom: 12, fontSize: 11, color: c.textSec, alignItems: "center" } },
+      React.createElement("span", { style: { fontWeight: 700, color: c.text } }, "Legend:"),
+      [...LLQA_MARKS.map(([k, l, w]) => [l, w, llqaMarkCol(k), true]), ["V", "On leave", c.accent], ["H", "Holiday", c.textMuted], ["–", "Class off", c.textMuted], ["!", "Not logged yet", c.danger]].map(([l, w, col, fill]) =>
+        React.createElement(
+          "span",
+          { key: w, style: { display: "flex", alignItems: "center", gap: 5 } },
+          React.createElement("span", { style: { width: 18, height: 18, borderRadius: 4, background: fill ? llqaAlpha(col, "2e") : "transparent", border: "1px solid " + llqaAlpha(col, "77"), display: "flex", alignItems: "center", justifyContent: "center", color: col, fontSize: 10, fontWeight: 800 } }, l),
+          w,
+        ),
+      ),
+      React.createElement(
+        "span",
+        { style: { marginLeft: "auto", fontSize: 10, color: c.textMuted, fontStyle: "italic" } },
+        (ready ? "" : "Loading the class records… · ") + "Filled in from the logged classes · click a day to mark a class · click a date to mark that day's unmarked classes Present",
+      ),
+    ),
+    React.createElement(
+      "div",
+      { style: { background: c.bgCard, boxShadow: c.shadow3d, border: "1px solid " + c.border, borderRadius: 12, overflow: "hidden" } },
+      list.length === 0
+        ? React.createElement("div", { style: { textAlign: "center", padding: 50, color: c.textMuted, fontSize: 12 } }, "No students match your search/filter.")
+        : React.createElement(
+            "div",
+            { style: { overflowX: "auto", maxHeight: "65vh", overflowY: "auto" } },
+            React.createElement(
+              "table",
+              { style: { borderCollapse: "separate", borderSpacing: 0, fontSize: 11, minWidth: "100%" } },
+              React.createElement(
+                "thead",
+                null,
+                React.createElement(
+                  "tr",
+                  null,
+                  React.createElement("th", { style: { ...sticky, top: 0, zIndex: 4, background: solidDeep, color: c.textSec, fontSize: 10, fontWeight: 700, textTransform: "uppercase", padding: "10px 12px", textAlign: "left", borderBottom: "1px solid " + c.border, minWidth: 180 } }, "Student"),
+                  dates.map((d) => {
+                    const future = d > today;
+                    const wd = llqaWeekday(d);
+                    return React.createElement(
+                      "th",
+                      {
+                        key: d,
+                        onClick: future ? undefined : () => markAll(d),
+                        title: future ? "" : "Mark the unmarked classes of " + llqaDateLabel(d) + " Present",
+                        style: {
+                          position: "sticky",
+                          top: 0,
+                          zIndex: 2,
+                          background: d === today ? "linear-gradient(" + c.accentBg + ", " + c.accentBg + "), " + solidDeep : solidDeep,
+                          color: d === today ? c.accent : c.textSec,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          padding: "6px 2px",
+                          textAlign: "center",
+                          borderBottom: "1px solid " + c.border,
+                          cursor: future ? "default" : "pointer",
+                          minWidth: 30,
+                        },
+                      },
+                      React.createElement("div", null, Number(d.slice(8))),
+                      React.createElement("div", { style: { fontSize: 9, fontWeight: 500, color: c.textMuted } }, wd.slice(0, 2)),
+                    );
+                  }),
+                  // the totals stay in view at the right while the days scroll
+                  ["P", "L", "A", "E", "!", "%"].map((h, i) =>
+                    React.createElement("th", { key: "s" + h, style: { ...sumCol(i), top: 0, zIndex: 3, background: solidDeep, color: c.textSec, fontSize: 10, fontWeight: 700, padding: "6px 0", textAlign: "center", borderBottom: "1px solid " + c.border } }, h),
+                  ),
+                ),
+              ),
+              React.createElement(
+                "tbody",
+                null,
+                list.map((s) => {
+                  const t = sums.get(String(s.id));
+                  return React.createElement(
+                    "tr",
+                    { key: s.id },
+                    React.createElement(
+                      "td",
+                      { style: { ...sticky, padding: "6px 12px", borderBottom: "1px solid " + llqaAlpha(c.border, "88") } },
+                      React.createElement("div", { style: { color: c.text, fontWeight: 600 } }, s.name),
+                      React.createElement("div", { style: { color: c.textMuted, fontSize: 9 } }, (s.teacher || "—") + (s.status === "leave" ? " · on leave" : s.status === "quit" ? " · quit" : "")),
+                    ),
+                    dates.map((d, i) => {
+                      const x = cellAt(s, i);
+                      const b = cellBox(x);
+                      return React.createElement(
+                        "td",
+                        { key: d, style: { padding: 2, textAlign: "center", borderBottom: "1px solid " + llqaAlpha(c.border, "88"), background: d === today ? llqaAlpha(c.accent, "0d") : "transparent" } },
+                        React.createElement(
+                          "button",
+                          {
+                            type: "button",
+                            disabled: !!x.future,
+                            title: llqaDateLabel(d) + (b.title ? " — " + b.title : ""),
+                            "aria-label": s.name + ", " + llqaDateLabel(d) + (b.title ? ": " + b.title : ""),
+                            onClick: () => setWin({ sid: s.id, date: d }),
+                            style: {
+                              width: 26,
+                              height: 22,
+                              borderRadius: 4,
+                              border: "1px solid " + (b.fill || b.outline ? llqaAlpha(b.col, "88") : "transparent"),
+                              background: b.fill ? llqaAlpha(b.col, "2e") : "transparent",
+                              color: b.col,
+                              fontSize: b.t.length > 2 ? 9 : 10,
+                              fontWeight: 800,
+                              cursor: x.future ? "default" : "pointer",
+                              padding: 0,
+                            },
+                          },
+                          b.t,
+                        ),
+                      );
+                    }),
+                    [t.present, t.late, t.absent, t.excused, t.missing].map((v, i) =>
+                      React.createElement("td", { key: "n" + i, style: { ...sumCol(i), zIndex: 1, background: solidCard, textAlign: "center", padding: "6px 0", borderBottom: "1px solid " + llqaAlpha(c.border, "88"), color: i === 4 && v ? c.danger : [c.success, c.warn, c.danger, c.purple, c.textMuted][i], fontWeight: 700 } }, v),
+                    ),
+                    React.createElement("td", { style: { ...sumCol(5), zIndex: 1, background: solidCard, textAlign: "center", padding: "6px 0", borderBottom: "1px solid " + llqaAlpha(c.border, "88"), color: t.pct == null ? c.textMuted : t.pct >= 90 ? c.success : t.pct >= 75 ? c.warn : c.danger, fontWeight: 700 } }, llqaPctText(t.pct)),
+                  );
+                }),
+              ),
+            ),
+          ),
+    ),
+    win &&
+      React.createElement(LLQASheetDayWin, {
+        info: win,
+        // (no class is offered before the student joined)
+        items: (() => { const s = (students || []).find((x) => String(x.id) === String(win.sid)); const from = llqaStuFrom(s); return from && win.date < from ? [] : (dayItems.get(win.date) || new Map()).get(String(win.sid)) || []; })(),
+        onClose: () => setWin(null),
+      }),
+  );
+};
+// one student's day on the sheet: each class with its four marks, its full log, or an extra class
+const LLQASheetDayWin = ({ info, items, onClose }) => {
+  const ctx = LLQAApp.ctx || {};
+  const dp = ctx.dailyProgress || [];
+  const s = (ctx.students || []).find((x) => String(x.id) === String(info.sid));
+  if (!s) return null;
+  const d = info.date;
+  const nowMin = llqaNowPkMin();
+  const recs = llqaDpOf(dp, s.id).filter((p) => p.date === d);
+  const slots = new Set(items.map((it) => String(it.slot)));
+  const extra = recs.filter((p) => !slots.has(String(p.slot || "")) || !p.slot);
+  const row = (kids, key) => React.createElement("div", { key, style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "8px 0", borderTop: "1px solid " + llqaAlpha(c.border, "88") } }, kids);
+  const logBtn = (it, p) =>
+    llqaMini(p ? "✍ Edit log" : "✍ Full log", () => {
+      onClose();
+      llqaOpen("log", it ? { studentId: s.id, studentName: s.name, date: d, slot: it.slot, day: it.rowDay, teacherId: llqaClsWho(it).teacherId, teacherName: llqaClsWho(it).teacherName, cell: it.cell, makeupId: it.makeup ? it.makeup.id : undefined } : { studentId: s.id, studentName: s.name, date: d, slot: p && p.slot ? p.slot : undefined, teacherId: p ? p.teacherId : undefined, teacherName: p ? p.teacherName : undefined, day: p ? p.rowDay : undefined });
+    }, { key: "lg" });
+  return llqaShell(
+    "📅 " + s.name + " — " + llqaDateLabel(d),
+    "Pakistan date · " + (items.length ? items.length + " class" + (items.length === 1 ? "" : "es") + " booked" : "no class booked"),
+    React.createElement(
+      "div",
+      null,
+      items.map((it) => {
+        const p = llqaClsEntry(llqaDpIndex(dp), s.id, d, it.slot);
+        const stt = llqaClassState({ ...it, entry: p }, d, nowMin);
+        const blocked = !p && ["leave", "holiday", "off", "quit", "noteacher", "cover"].includes(stt.k);
+        return row(
+          [
+            React.createElement("b", { key: "t", style: { color: c.text, fontSize: 12, minWidth: 64 } }, LLQABooking.fmt12(it.slot)),
+            React.createElement("span", { key: "w", style: { color: c.textSec, fontSize: 11, flex: 1, minWidth: 120 } }, (it.by || it.teacher) + (it.makeup ? " · make-up" : "") + " · " + stt.text),
+            blocked ? null : llqaMarkBtns(it, d, p ? p.attended : "", "mb"),
+            blocked ? null : logBtn(it, p),
+          ],
+          it.key,
+        );
+      }),
+      extra.map((p) =>
+        row(
+          [
+            React.createElement("b", { key: "t", style: { color: c.text, fontSize: 12, minWidth: 64 } }, llqaSlotText(p.slot)),
+            React.createElement("span", { key: "w", style: { color: llqaMarkCol(p.attended), fontSize: 11, fontWeight: 700, flex: 1 } }, (llqaMarkWord(p.attended) || "—") + (p.teacherName ? " · " + p.teacherName : "") + (p.lesson ? " · " + p.lesson : "")),
+            logBtn(null, p),
+          ],
+          "x" + p.id,
+        ),
+      ),
+      !items.length && !extra.length && React.createElement("div", { key: "n", style: { color: c.textSec, fontSize: 12, padding: "6px 0" } }, "No class was booked for " + s.name + " that day."),
+    ),
+    [
+      llqaMini("Log an extra class", () => {
+        onClose();
+        llqaOpen("log", { studentId: s.id, studentName: s.name, date: d });
+      }, { key: "ex", big: true, icon: "circle-plus" }),
+      llqaMini("Close", onClose, { key: "x", big: true, solid: true, tone: "accent" }),
+    ],
+    { onClose, width: 560 },
+  );
+};
+
 const CC = [
   "#4a7aff",
   "#10b981",
@@ -6534,7 +8327,7 @@ const llqaStudentRows = (s, withCode) => {
   if (!s) return [];
   const tz = s.tz || LLQABooking.timezoneFor(s.country, s.state);
   const fee = s.fee ? s.fee + (s.fee_amount ? " · " + s.fee_amount + " " + (s.currency || "") : "") : "";
-  const n = s.attended || 0;
+  const n = llqaTrialDone(s); // v73: from the class records
   const trial = llqaInTrial(s)
     ? "Since " + (s.trialStart || s.dor || "?") + " · " + n + " of " + llqaTrialTarget(s) + " classes attended"
     : "";
@@ -6560,7 +8353,7 @@ const llqaStudentRows = (s, withCode) => {
     ["Referred by", s.referredBy],
     ["Parent Portal ID", s.parentId],
     ["Status", s.status],
-    ["Attendance", s.attendance != null && s.attendance !== "" ? s.attendance + "%" : ""],
+    ["Attendance (30 days)", llqaPctText(llqaStuStats(s).last30.pct)], // v73: from the class records
   ].map(([l, v]) => [l, v === undefined || v === null || v === "" ? "—" : String(v)]);
 };
 
@@ -6695,201 +8488,19 @@ const llqaCountClass = (s, dailyProgress, date, att) => {
 
 // Logs one class from the Timetable: the same progress record and student
 // fields as the Students module's Log Progress.
-const llqaLogClass = ({ students, setStudents, dailyProgress, setDailyProgress, studentId, teacherName, form, date }) => {
-  const stu = (students || []).find((x) => String(x.id) === String(studentId));
-  if (!stu) return "This booking is not linked to a student record, so the class can't be logged.";
-  if (!form || !String(form.lesson || "").trim()) return "Please write today's lesson.";
-  // v65: a past day can be logged from Today's Classes (never a future one)
-  const dt = date && date <= todayPK() ? date : todayPK();
-  const att = String(form.attended || "Present");
-  const cnt = llqaCountClass(stu, dailyProgress, dt, att);
-  if (typeof llqaAfterCount === "function" && llqaCanManage()) llqaAfterCount(stu, cnt);
-  const earlier = cnt.earlier;
-  const pageN = parseInt(form.pages, 10);
-  const note = String(form.notes || "").trim();
-  setStudents(
-    (students || []).map((x) => {
-      if (String(x.id) !== String(stu.id)) return x;
-      // an older day (logged late) updates the counts, not the latest lesson
-      const latest = !x.lastDate || dt >= x.lastDate;
-      return {
-        ...x,
-        lastLesson: latest ? form.lesson : x.lastLesson,
-        lastDate: latest ? dt : x.lastDate,
-        page: latest && pageN > 0 ? pageN : x.page,
-        qaida: latest && x.qaida > 0 && pageN > 0 ? pageN : x.qaida,
-        attended: cnt.attended,
-        totalClasses: cnt.totalClasses,
-        attendance: cnt.attendance,
-        lB: latest ? form.behavior || x.lB : x.lB,
-        lP: latest ? form.performance || x.lP : x.lP,
-        lH: latest ? form.homework || x.lH : x.lH,
-        lR: latest ? form.recitation || x.lR : x.lR,
-        lT: latest ? form.tajweed || x.lT : x.lT,
-        // class notes are added to the student's notes, as Log Progress does
-        // (not again when the same note is saved twice on one day)
-        notes:
-          note && !(earlier && String(earlier.notes || "").trim() === note)
-            ? x.notes
-              ? x.notes + " | " + note
-              : note
-            : x.notes,
-      };
-    }),
-  );
-  if (typeof setDailyProgress === "function")
-    setDailyProgress((prev) => {
-      const list = prev || [];
-      const idx = list.findIndex((p) => String(p.studentId) === String(stu.id) && p.date === dt);
-      const entry = {
-        id: idx >= 0 ? list[idx].id : "dp_" + dt + "_" + stu.id + "_" + Date.now(),
-        studentId: stu.id,
-        date: dt,
-        attended: att.toLowerCase(),
-        lesson: form.lesson || "",
-        pages: form.pages || "",
-        behavior: form.behavior || "",
-        performance: form.performance || "",
-        homework: form.homework || "",
-        recitation: form.recitation || "",
-        tajweed: form.tajweed || "",
-        notes: form.notes || "",
-        teacherName: teacherName || stu.teacher || "",
-        source: "timetable",
-        createdAt: idx >= 0 ? list[idx].createdAt || new Date().toISOString() : new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      if (idx >= 0) {
-        const next = [...list];
-        next[idx] = { ...next[idx], ...entry };
-        return next;
-      }
-      return [...list, entry];
-    });
-  return "";
-};
+const llqaLogClass = ({ students, setStudents, dailyProgress, setDailyProgress, studentId, teacherName, teacherId, form, date, slot, rowDay }) =>
+  llqaClassSave({
+    students,
+    setStudents,
+    dp: dailyProgress,
+    setDailyProgress,
+    studentId,
+    teacherName,
+    teacherId,
+    slot,
+    rowDay,
+    date: date && date <= todayPK() ? date : todayPK(), // a past day can be logged (never a future one)
+    form: form || {},
+    source: "timetable",
+  });
 
-const LLQALogClassModal = ({ info, form, setForm, students, dailyProgress, onClose, onSave }) => {
-  const stu = (students || []).find((x) => String(x.id) === String(info.studentId));
-  const set = (k, v) => setForm({ ...form, [k]: v });
-  const cap = (v) => String(v || "").replace(/^./, (m) => m.toUpperCase());
-  const earlier =
-    stu && (dailyProgress || []).find((p) => String(p.studentId) === String(stu.id) && p.date === (info.date || todayPK()));
-  const n = (stu && stu.attended) || 0;
-  // Which class: the family's day + time as booked, and the Pakistan slot.
-  // (Timetable rows follow the family's day; a night slot is the next
-  // morning in Pakistan, so no Pakistan weekday is claimed here.)
-  const cl = info.cell || {};
-  const famTime = String(cl.t || "").replace(/\s+(USA|CA)$/i, "").trim();
-  const famDay = cl.day || info.day || "";
-  const which = [
-    famDay ? famDay + (famTime ? " " + LLQABooking.timeLabel(famTime) + " family time" : " class") : "",
-    info.slot ? LLQABooking.fmt12(info.slot) + " PKT slot" : "",
-  ]
-    .filter(Boolean)
-    .join(" → ");
-  return React.createElement(
-    "div",
-    {
-      style: {
-        position: "fixed",
-        inset: 0,
-        zIndex: 1100,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        background: "rgba(0,0,0,.65)",
-        backdropFilter: "blur(4px)",
-      },
-    },
-    React.createElement(
-      "div",
-      {
-        style: {
-          background: "linear-gradient(" + c.bgCard + ", " + c.bgCard + "), " + c.bg,
-          border: "1px solid " + c.border,
-          borderRadius: 14,
-          padding: 22,
-          width: 480,
-          maxWidth: "94vw",
-          maxHeight: "90vh",
-          overflowY: "auto",
-        },
-      },
-      React.createElement(
-        "h3",
-        { style: { color: c.text, fontSize: 16, margin: "0 0 4px" } },
-        llqaLabel("✍ Log today's class — " + (info.studentName || "?")),
-      ),
-      React.createElement(
-        "div",
-        { style: { color: c.textSec, fontSize: 11, marginBottom: 12 } },
-        [info.teacherName || "", which, "logged for " + (info.date || todayPK())].filter(Boolean).join(" · "),
-      ),
-      !stu &&
-        React.createElement(
-          "div",
-          {
-            style: {
-              padding: "8px 10px",
-              background: c.warnBg,
-              color: c.warn,
-              borderRadius: 8,
-              fontSize: 11,
-              marginBottom: 12,
-            },
-          },
-          "This booking is not linked to a student record, so the class can't be logged. Add the student in Sales or Students first.",
-        ),
-      stu &&
-        llqaInTrial(stu) &&
-        React.createElement(
-          "div",
-          {
-            style: {
-              padding: "8px 10px",
-              background: c.accentBg,
-              color: c.accent,
-              borderRadius: 8,
-              fontSize: 11,
-              marginBottom: 12,
-            },
-          },
-          "Trial student · " + n + " of " + llqaTrialTarget(stu) + " classes attended so far" + (n >= llqaTrialTarget(stu) ? " — trial done, fee due" : ""),
-        ),
-      earlier &&
-        React.createElement(
-          "div",
-          { style: { color: c.textMuted, fontSize: 11, marginBottom: 10 } },
-          "Already logged today — saving updates that entry (the class is not counted twice).",
-        ),
-      React.createElement(
-        "div",
-        { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" } },
-        React.createElement(Inp, { label: "Attendance", value: cap(form.attended || "Present"), onChange: (v) => set("attended", v), options: ATT_OPTS }),
-        React.createElement(Inp, { label: "Page reached", value: form.pages || "", onChange: (v) => set("pages", v), placeholder: "e.g. 24" }),
-      ),
-      React.createElement(Inp, { label: "Today's lesson *", value: form.lesson || "", onChange: (v) => set("lesson", v), placeholder: "What was taught today" }),
-      React.createElement(
-        "div",
-        { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "0 10px" } },
-        React.createElement(Inp, { label: "Behavior", value: form.behavior || "", onChange: (v) => set("behavior", v), options: BEHAV_OPTS }),
-        React.createElement(Inp, { label: "Performance", value: form.performance || "", onChange: (v) => set("performance", v), options: PERF_OPTS }),
-        React.createElement(Inp, { label: "Homework", value: form.homework || "", onChange: (v) => set("homework", v), options: HW_OPTS }),
-      ),
-      React.createElement(
-        "div",
-        { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 12px" } },
-        React.createElement(Inp, { label: "Recitation", value: form.recitation || "", onChange: (v) => set("recitation", v), options: RECIT_OPTS }),
-        React.createElement(Inp, { label: "Tajweed", value: form.tajweed || "", onChange: (v) => set("tajweed", v), options: TAJ_OPTS }),
-      ),
-      React.createElement(Inp, { label: "Notes", value: form.notes || "", onChange: (v) => set("notes", v), placeholder: "Optional" }),
-      React.createElement(
-        "div",
-        { style: { display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 6 } },
-        React.createElement(Btn, { variant: "outline", onClick: onClose }, "Cancel"),
-        stu && React.createElement(Btn, { icon: CheckCircle, onClick: onSave }, "Save class"),
-      ),
-    ),
-  );
-};

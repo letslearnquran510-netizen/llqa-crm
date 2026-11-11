@@ -107,7 +107,7 @@ const llqaSmallBtn = (label, onClick, col, title) =>
 
 const LLQA_LIST_NAMES = {
   students: "Students", teachers: "Teachers", salesMasterData: "Sales Master Data", salesReferrals: "Referrals",
-  dailyProgress: "Daily progress", parentNotes: "Parent notes", teacherFeedback: "Teacher feedback", leaves: "Leaves",
+  dailyProgress: "Daily progress (old list)", classes: "Class records", // v73 parentNotes: "Parent notes", teacherFeedback: "Teacher feedback", leaves: "Leaves",
   teamLeads: "Team leads", autoAttendance: "Auto attendance", arPayments: "Invoices & payments", apLiabilities: "Payables",
   qcViolations: "QC violations", trainingPrograms: "Training", procInventory: "Inventory", procPurchases: "Purchases",
   hrInterviews: "HR interviews", hrHiring: "HR hiring", shifts: "Shifts", customRoles: "Custom roles", loginAudit: "Login log",

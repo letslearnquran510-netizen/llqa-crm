@@ -3356,30 +3356,7 @@ const TimetableMod = ({
       ),
     // v64.5: the "Log Today's Class" form (the button existed, the form never showed)
     logProgressModal &&
-      React.createElement(LLQALogClassModal, {
-        info: logProgressModal,
-        form: progressForm,
-        setForm: setProgressForm,
-        students: students,
-        dailyProgress: dailyProgress,
-        onClose: () => setLogProgressModal(null),
-        onSave: () => {
-          const err = llqaLogClass({
-            students,
-            setStudents,
-            dailyProgress,
-            setDailyProgress,
-            studentId: logProgressModal.studentId,
-            teacherName: logProgressModal.teacherName,
-            form: progressForm,
-          });
-          if (err) {
-            alert(err);
-            return;
-          }
-          setLogProgressModal(null);
-        },
-      }),
+      React.createElement(LLQALogClassModal, { info: logProgressModal, onClose: () => setLogProgressModal(null) }), // v73
     cellModal &&
       React.createElement(
         "div",
@@ -3832,10 +3809,15 @@ const TimetableMod = ({
                     setLogProgressModal({
                       cell: cellModal.cell,
                       teacherName: cellModal.teacher.name,
+                      // v73: the teacher's id in the app (the Timetable's rows keep it as _appId / _overlayAppId)
+                      teacherId: cellModal.teacher._appId || cellModal.teacher._overlayAppId || cellModal.teacher.id || "",
                       studentId: stu ? stu.id : null,
                       studentName: cellModal.cell.s || "",
                       day: cellModal.day,
                       slot: cellModal.slot,
+                      // v73: the day this class last took place (it logged "today" even for Monday's class on a Wednesday)
+                      date: llqaLastClassDate(cellModal.teacher._appId || cellModal.teacher._overlayAppId || cellModal.teacher.id, cellModal.day, cellModal.slot, null, cellModal.teacher.name),
+                      source: "timetable",
                     });
                     setCellModal(null);
                   },
@@ -3850,7 +3832,7 @@ const TimetableMod = ({
                     cursor: "pointer",
                   },
                 },
-                "\u270D Log Today\u0027s Class",
+                "\u270D Log Class", // v73: the day it last took place
               ),
               // v65: move this student's classes / message the family
               llqaCanManage() && cellModal.cell.sid != null && cellModal.cell.sid !== "" &&

@@ -64,7 +64,8 @@ function App() {
     "customRoles",
     [],
   );
-  const [dailyProgress, setDailyProgress] = useFirestoreCollection(
+  // v73: classes are kept by month in parts (classes/…, see useLLQAClasses, set up below); this list from before is only read
+  const [dailyProgressLegacy, setDailyProgressLegacy] = useFirestoreCollection(
     "dailyProgress",
     [],
   );
@@ -142,6 +143,8 @@ function App() {
   const [runnerInfo, setRunnerInfo] = useFirestoreDoc("settings/runner", {});
   // v67: make-up classes, leads, referral rewards
   const [makeups, setMakeups] = useFirestoreCollection("makeups", []);
+  // v73: the class records this person needs (staff: all; a teacher: their students'; a parent: their child's)
+  const [dailyProgress, setDailyProgress, clsNeed] = useLLQAClasses(user, dailyProgressLegacy, setDailyProgressLegacy, teachers, students, covers, makeups);
   const [leads, setLeads] = useFirestoreCollection("leads", []);
   const [rewards, setRewards] = useFirestoreCollection("rewards", []);
   const upsertSalesMaster = (records) => {
@@ -548,7 +551,7 @@ function App() {
         setStudents(_mb(students, typeof a === "function" ? a(scStudents) : a))
     : setStudents;
   // v65: what the automation screens and pop-ups read
-  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory, appSettings, attNeed }); // v72: attNeed (older months on request) // v71: appSettings (exchange rates for the Autopilot) // v68: Dashboard "Teachers in today"
+  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory, appSettings, attNeed, clsNeed }); // v73: clsNeed (older months of class records) // v72: attNeed (older months on request) // v71: appSettings (exchange rates for the Autopilot) // v68: Dashboard "Teachers in today"
   const render = () => {
     switch (page) {
       case "dashboard":

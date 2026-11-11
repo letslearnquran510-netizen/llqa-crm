@@ -45,7 +45,9 @@ const ParentMod = ({
     );
   }
   const myProgress = (dailyProgress || [])
-    .filter((p) => p.studentId === stu.id)
+    .filter((p) => String(p.studentId) === String(stu.id))
+    // v73: each class on the family's own day (an evening class in the USA is the next morning in Pakistan)
+    .map((p) => (p.famDate && p.famDate !== p.date ? { ...p, date: p.famDate, pkDate: p.date } : p))
     .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
   const myNotes = (parentNotes || [])
     .filter((n) => n.studentId === stu.id)
@@ -2268,7 +2270,7 @@ const ParentMod = ({
             String(_d.getMonth() + 1).padStart(2, "0") +
             "-" +
             String(_d.getDate()).padStart(2, "0");
-          const r = myProgress.find((p) => p.date === d);
+          const r = llqaDayRec(myProgress, d); // v73: every class of the day
           if (r) {
             if (r.attended === "present" || r.attended === "late") streak++;
             else break;
@@ -2296,7 +2298,7 @@ const ParentMod = ({
             String(month + 1).padStart(2, "0") +
             "-" +
             String(d).padStart(2, "0");
-          const rec = myProgress.find((p) => p.date === dStr);
+          const rec = llqaDayRec(myProgress, dStr); // v73: every class of the day
           const cellDate = new Date(year, month, d);
           cells.push({
             d: d,

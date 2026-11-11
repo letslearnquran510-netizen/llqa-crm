@@ -171,8 +171,8 @@ const StudentDetailC = ({ s, onClose, onP, pp, bc, teacherFeedback }) =>
             Clock,
           ],
           ["Fee", s.fee, CreditCard],
-          ["Attendance", s.attendance + "%", Check],
-          ["Classes", String(s.totalClasses), BookOpen],
+          ["Attendance", llqaPctText(llqaStuStats(s).last30.pct) + " (30 days)", Check], // v73: from the class records
+          ["Classes", llqaStuStats(s).last30.classes + " in 30 days", BookOpen], // v73
           ["Status", s.status, UserCheck],
         ].map(([l, v, Ic]) =>
           React.createElement(
@@ -229,216 +229,8 @@ const StudentDetailC = ({ s, onClose, onP, pp, bc, teacherFeedback }) =>
         ),
       ),
       React.createElement(LLQAStudentAllDetails, { s: s }),
-      React.createElement(
-        "h4",
-        {
-          style: {
-            color: c.text,
-            fontSize: 12,
-            margin: "0 0 8px",
-            fontWeight: 600,
-          },
-        },
-        "Course Progress",
-      ),
-      React.createElement(
-        "div",
-        {
-          style: {
-            background: c.bgDeep,
-            borderRadius: 8,
-            padding: "10px 12px",
-            marginBottom: 12,
-          },
-        },
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "flex",
-              justifyContent: "space-between",
-              marginBottom: 6,
-            },
-          },
-          React.createElement(
-            "span",
-            {
-              style: {
-                color: c.textSec,
-                fontSize: 11,
-              },
-            },
-            s.course.includes("Quaida") ? "Qaida" : "Quran",
-          ),
-          React.createElement(
-            "span",
-            {
-              style: {
-                color: c.accent,
-                fontWeight: 700,
-              },
-            },
-            pp(s),
-            "%",
-          ),
-        ),
-        React.createElement(PBar, {
-          value: pp(s),
-          color: pp(s) >= 80 ? c.success : pp(s) >= 40 ? c.accent : c.warn,
-        }),
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "flex",
-              justifyContent: "space-between",
-              marginTop: 5,
-              fontSize: 10,
-            },
-          },
-          s.course.includes("Quaida")
-            ? React.createElement(
-                React.Fragment,
-                null,
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textSec,
-                    },
-                  },
-                  "Page ",
-                  s.qaida,
-                  "/30",
-                ),
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.purple,
-                    },
-                  },
-                  "Qaida",
-                ),
-              )
-            : React.createElement(
-                React.Fragment,
-                null,
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textSec,
-                    },
-                  },
-                  "Pg ",
-                  s.page,
-                  "/604 \xB7 Juz ",
-                  s.juz,
-                ),
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.accent,
-                    },
-                  },
-                  s.surah || "—",
-                ),
-              ),
-        ),
-      ),
-      React.createElement(
-        "h4",
-        {
-          style: {
-            color: c.text,
-            fontSize: 12,
-            margin: "0 0 8px",
-            fontWeight: 600,
-          },
-        },
-        "Last Session",
-      ),
-      React.createElement(
-        "div",
-        {
-          style: {
-            display: "grid",
-            gridTemplateColumns: "1fr 1fr 1fr",
-            gap: 8,
-            marginBottom: 12,
-          },
-        },
-        [
-          ["Behavior", s.lB, bc(s.lB)],
-          [
-            "Performance",
-            s.lP,
-            s.lP === "Outstanding" || s.lP === "Very Good"
-              ? c.success
-              : s.lP === "Below Average" || s.lP === "Struggling"
-                ? c.danger
-                : c.textSec,
-          ],
-          [
-            "Homework",
-            s.lH,
-            s.lH === "Completed"
-              ? c.success
-              : s.lH === "Not Done"
-                ? c.danger
-                : c.warn,
-          ],
-          [
-            "Recitation",
-            s.lR,
-            s.lR === "Fluent & Clear" ? c.success : c.textSec,
-          ],
-          [
-            "Tajweed",
-            s.lT,
-            s.lT === "Excellent Tajweed" ? c.success : c.textSec,
-          ],
-        ].map(([l, v, col]) =>
-          v && v !== "N/A" && v !== ""
-            ? React.createElement(
-                "div",
-                {
-                  key: l,
-                  style: {
-                    background: c.bgDeep,
-                    borderRadius: 6,
-                    padding: "6px 10px",
-                  },
-                },
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      color: c.textSec,
-                      fontSize: 9,
-                      textTransform: "uppercase",
-                      marginBottom: 2,
-                    },
-                  },
-                  l,
-                ),
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      color: col,
-                      fontSize: 11,
-                      fontWeight: 600,
-                    },
-                  },
-                  v,
-                ),
-              )
-            : null,
-        ),
-      ),
+      // v73: progress in the student's own book, the last 30 days, the last session and the recent classes — from the records
+      React.createElement(LLQAStuProgress, { s: s, bc: bc }),
       React.createElement(
         "div",
         {
@@ -460,7 +252,7 @@ const StudentDetailC = ({ s, onClose, onP, pp, bc, teacherFeedback }) =>
             },
           },
           "Last Lesson \u2014 ",
-          s.lastDate,
+          s.lastDate || "\u2014",
         ),
         React.createElement(
           "div",
@@ -471,7 +263,7 @@ const StudentDetailC = ({ s, onClose, onP, pp, bc, teacherFeedback }) =>
               fontWeight: 500,
             },
           },
-          s.lastLesson,
+          s.lastLesson || "No class logged yet",
         ),
         React.createElement(
           "h4",
