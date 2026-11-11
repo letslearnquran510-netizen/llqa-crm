@@ -56,25 +56,8 @@ const StudentsMod = ({
       type: "view",
       data: s,
     });
-  const oP = (s) => {
-    setPf({
-      id: s.id,
-      lesson: "",
-      page: "",
-      notes: "",
-      date: todayPK(),
-      att: "Present",
-      beh: s.lB || "Good",
-      perf: s.lP || "Satisfactory",
-      hw: s.lH || "Not Assigned",
-      rec: s.lR || "N/A",
-      taj: s.lT || "N/A",
-    });
-    setModal({
-      type: "progress",
-      data: s,
-    });
-  };
+  // v73: the one log window (day, class, page reached, lesson …)
+  const oP = (s) => llqaOpen("log", { studentId: s.id, studentName: s.name, date: todayPK(), source: "students" });
   const oL = (s) => {
     setPf({
       id: s.id,
@@ -99,87 +82,6 @@ const StudentsMod = ({
       type: "markQt",
       data: s,
     });
-  };
-  const saveP = () => {
-    if (!pf.lesson) return;
-    const isP = pf.att === "Present" || pf.att === "Late";
-    const sid = modal.data.id;
-    const _spNow = new Date();
-    const dt =
-      pf.date ||
-      _spNow.getFullYear() +
-        "-" +
-        String(_spNow.getMonth() + 1).padStart(2, "0") +
-        "-" +
-        String(_spNow.getDate()).padStart(2, "0");
-    // v64.5: logging the same day again corrects the counters (no double count)
-    const _cnt = llqaCountClass(
-      sts.find((s) => s.id === sid) || modal.data,
-      dailyProgress,
-      dt,
-      pf.att || "Present",
-    );
-    llqaAfterCount(sts.find((s) => s.id === sid) || modal.data, _cnt); // v65: trial done → fee message
-    setSts(
-      sts.map((s) =>
-        s.id === sid
-          ? {
-              ...s,
-              lastLesson: pf.lesson,
-              lastDate: dt,
-              page: pf.page ? parseInt(pf.page) : s.page,
-              qaida: s.qaida > 0 && pf.page ? parseInt(pf.page) : s.qaida,
-              attended: _cnt.attended,
-              totalClasses: _cnt.totalClasses,
-              attendance: _cnt.attendance,
-              lB: pf.beh,
-              lP: pf.perf,
-              lH: pf.hw,
-              lR: pf.rec,
-              lT: pf.taj,
-              notes: pf.notes
-                ? s.notes
-                  ? s.notes + " | " + pf.notes
-                  : pf.notes
-                : s.notes,
-            }
-          : s,
-      ),
-    );
-    if (typeof setDailyProgress === "function") {
-      setDailyProgress((prev) => {
-        const list = prev || [];
-        const idx = list.findIndex((p) => p.studentId === sid && p.date === dt);
-        const entry = {
-          id:
-            idx >= 0 ? list[idx].id : "dp_" + dt + "_" + sid + "_" + Date.now(),
-          studentId: sid,
-          date: dt,
-          attended: (pf.att || "Present").toLowerCase(),
-          lesson: pf.lesson || "",
-          pages: pf.page || "",
-          behavior: pf.beh || "",
-          performance: pf.perf || "",
-          homework: pf.hw || "",
-          recitation: pf.rec || "",
-          tajweed: pf.taj || "",
-          notes: pf.notes || "",
-          teacherName: modal.data.teacher || "",
-          source: "logprogress",
-          createdAt: new Date().toISOString(),
-        };
-        if (idx >= 0) {
-          const next = [...list];
-          next[idx] = {
-            ...next[idx],
-            ...entry,
-          };
-          return next;
-        }
-        return [...list, entry];
-      });
-    }
-    setModal(null);
   };
   const saveLv = () => {
     if (!pf.lvType || !pf.lvFrom) return;
@@ -233,92 +135,14 @@ const StudentsMod = ({
           : s,
       ),
     );
+  // v73: today's classes of the student marked (each its own record); with none booked, one extra class
   const mAtt = (id, st) => {
-    console.log(
-      "%c[mAtt] CALLED",
-      "color:#0af;font-weight:bold",
-      "id=",
-      id,
-      "(type:" + typeof id + ")",
-      "status=",
-      st,
-    );
-    const isP = st === "Present" || st === "Late";
-    // v64.5: Pakistan date (as Log Progress and the Timetable use), and a day
-    // marked again corrects the counters instead of counting twice
     const today = todayPK();
-    const _cnt = llqaCountClass(sts.find((s) => s.id === id) || { id }, dailyProgress, today, st);
-    llqaAfterCount(sts.find((s) => s.id === id), _cnt); // v65: trial done → fee message
-    setSts(
-      sts.map((s) =>
-        s.id === id
-          ? {
-              ...s,
-              totalClasses: _cnt.totalClasses,
-              attended: _cnt.attended,
-              attendance: _cnt.attendance,
-              lastDate: today,
-            }
-          : s,
-      ),
-    );
-    console.log("[mAtt] student counter updated");
-    if (typeof setDailyProgress !== "function") {
-      console.error(
-        "%c[mAtt] FATAL: setDailyProgress is not a function!",
-        "color:red;font-weight:bold",
-        "typeof=",
-        typeof setDailyProgress,
-        "value=",
-        setDailyProgress,
-      );
-      return;
-    }
-    console.log(
-      "[mAtt] setDailyProgress is callable, current dailyProgress count:",
-      (dailyProgress || []).length,
-    );
-    try {
-      setDailyProgress((prev) => {
-        const list = prev || [];
-        const idx = list.findIndex(
-          (p) => p.studentId === id && p.date === today,
-        );
-        const entry = {
-          id:
-            idx >= 0
-              ? list[idx].id
-              : "dp_" + today + "_" + id + "_" + Date.now(),
-          studentId: id,
-          date: today,
-          attended: st.toLowerCase(),
-          source: "quickmark",
-          createdAt: new Date().toISOString(),
-        };
-        console.log(
-          "%c[mAtt] WRITING ENTRY",
-          "color:#0f0;font-weight:bold",
-          entry,
-          "upsert?",
-          idx >= 0,
-        );
-        if (idx >= 0) {
-          const next = [...list];
-          next[idx] = {
-            ...next[idx],
-            ...entry,
-          };
-          return next;
-        }
-        return [...list, entry];
-      });
-      console.log(
-        "%c[mAtt] setDailyProgress invoked successfully",
-        "color:#0f0",
-      );
-    } catch (e) {
-      console.error("%c[mAtt] WRITE FAILED:", "color:red;font-weight:bold", e);
-    }
+    const day = llqaStuClassesOn(id, today);
+    const err = day.length
+      ? day.map((it) => llqaClassMark(it, String(st).toLowerCase(), today)).find(Boolean)
+      : llqaClassSave({ studentId: id, date: today, slot: "", attended: String(st).toLowerCase(), markOnly: true, source: "mark" });
+    if (err) llqaMarkErr(err);
   };
   const oAdd = () => {
     setPf({
@@ -743,10 +567,8 @@ const StudentsMod = ({
         : s === "quit"
           ? "danger"
           : "accent";
-  const pp = (s) =>
-    s.course.includes("Quaida")
-      ? Math.round((s.qaida / 30) * 100)
-      : Math.round((s.page / 604) * 100);
+  // v73: the page reached, in the student's own book (Qaida / Quran); null = not known yet
+  const pp = (s) => llqaProgressPct(s);
   const bc = (b) =>
     b === "Excellent"
       ? c.success
@@ -838,10 +660,8 @@ const StudentsMod = ({
       React.createElement(SC, {
         icon: TrendingUp,
         label: "Avg Attend",
-        value:
-          Math.round(
-            act.reduce((a, s) => a + s.attendance, 0) / (act.length || 1),
-          ) + "%",
+        value: llqaAvgAtt(act), // v73: the last 30 days, from the class records
+        sub: "last 30 days",
         color: c.purple,
       }),
     ),
@@ -1198,13 +1018,15 @@ const StudentsMod = ({
                         },
                       },
                       React.createElement(PBar, {
-                        value: pp(s),
+                        value: pp(s) || 0, // v73: "—" until a page is logged
                         color:
-                          pp(s) >= 80
-                            ? c.success
-                            : pp(s) >= 40
-                              ? c.accent
-                              : c.warn,
+                          pp(s) == null
+                            ? c.border
+                            : pp(s) >= 80
+                              ? c.success
+                              : pp(s) >= 40
+                                ? c.accent
+                                : c.warn,
                       }),
                       React.createElement(
                         "span",
@@ -1214,8 +1036,7 @@ const StudentsMod = ({
                             color: c.textSec,
                           },
                         },
-                        pp(s),
-                        "%",
+                        llqaPctText(pp(s)),
                       ),
                     ),
                   ),
@@ -1226,7 +1047,7 @@ const StudentsMod = ({
                         padding: "8px",
                       },
                     },
-                    s.lB
+                    s.lB && s.lastDate // v73: only once a class was logged (a new student is not "Good" yet)
                       ? React.createElement(
                           "span",
                           {
@@ -1366,294 +1187,7 @@ const StudentsMod = ({
         ),
       ),
     tab === "progress" &&
-      React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(
-          "h4",
-          {
-            style: {
-              color: c.text,
-              margin: "0 0 10px",
-              fontSize: 13,
-              fontWeight: 600,
-            },
-          },
-          "Today \u2014 ",
-          new Date().toLocaleDateString("en-US", {
-            weekday: "long",
-            month: "short",
-            day: "numeric",
-          }),
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill,minmax(300px,1fr))",
-              gap: 10,
-            },
-          },
-          act
-            .sort((a, b) => new Date(b.lastDate) - new Date(a.lastDate))
-            .map((s) =>
-              React.createElement(
-                "div",
-                {
-                  key: s.id,
-                  style: {
-                    background: c.bgCard,
-                    backdropFilter: "blur(16px)",
-                    boxShadow: c.shadow3d,
-                    borderRadius: 8,
-                    padding: "10px 12px",
-                    border:
-                      "1px solid " +
-                      (s.lastDate === todayPK() ? llqaAlpha(c.success, "66") : c.border),
-                  },
-                },
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                      marginBottom: 6,
-                    },
-                  },
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 6,
-                      },
-                    },
-                    React.createElement(
-                      "div",
-                      {
-                        style: {
-                          width: 28,
-                          height: 28,
-                          borderRadius: 6,
-                          background: c.accentBg,
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          fontSize: 11,
-                          fontWeight: 700,
-                          color: c.accent,
-                        },
-                      },
-                      s.name[0],
-                    ),
-                    React.createElement(
-                      "div",
-                      null,
-                      React.createElement(
-                        "div",
-                        {
-                          style: {
-                            color: c.text,
-                            fontSize: 11,
-                            fontWeight: 600,
-                          },
-                        },
-                        s.name,
-                        " (",
-                        s.age,
-                        ")",
-                      ),
-                      React.createElement(
-                        "div",
-                        {
-                          style: {
-                            color: c.textSec,
-                            fontSize: 9,
-                          },
-                        },
-                        s.teacher,
-                        " \xB7 ",
-                        s.course,
-                      ),
-                    ),
-                  ),
-                  React.createElement(
-                    "button",
-                    {
-                      onClick: () => oP(s),
-                      style: {
-                        background: c.successBg,
-                        border: "1px solid " + llqaAlpha(c.success, "44"),
-                        borderRadius: 5,
-                        cursor: "pointer",
-                        padding: "4px 8px",
-                        color: c.success,
-                        fontSize: 9,
-                        fontWeight: 600,
-                      },
-                    },
-                    "Log",
-                  ),
-                ),
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      display: "flex",
-                      justifyContent: "space-between",
-                      alignItems: "center",
-                    },
-                  },
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        flex: 1,
-                      },
-                    },
-                    React.createElement(
-                      "div",
-                      {
-                        style: {
-                          color: c.text,
-                          fontSize: 10,
-                          fontWeight: 500,
-                        },
-                      },
-                      s.lastLesson,
-                    ),
-                    React.createElement(
-                      "div",
-                      {
-                        style: {
-                          display: "flex",
-                          gap: 4,
-                          marginTop: 4,
-                          flexWrap: "wrap",
-                        },
-                      },
-                      s.lB &&
-                        React.createElement(
-                          "span",
-                          {
-                            style: {
-                              fontSize: 9,
-                              padding: "1px 5px",
-                              borderRadius: 3,
-                              background: llqaAlpha(bc(s.lB), "20"),
-                              color: bc(s.lB),
-                            },
-                          },
-                          s.lB,
-                        ),
-                      s.lP &&
-                        s.lP !== "Satisfactory" &&
-                        React.createElement(
-                          "span",
-                          {
-                            style: {
-                              fontSize: 9,
-                              padding: "1px 5px",
-                              borderRadius: 3,
-                              background: c.purpleBg,
-                              color: c.purple,
-                            },
-                          },
-                          s.lP,
-                        ),
-                      s.lH &&
-                        s.lH !== "Not Assigned" &&
-                        React.createElement(
-                          "span",
-                          {
-                            style: {
-                              fontSize: 9,
-                              padding: "1px 5px",
-                              borderRadius: 3,
-                              background:
-                                s.lH === "Completed" ? c.successBg : c.dangerBg,
-                              color:
-                                s.lH === "Completed" ? c.success : c.danger,
-                            },
-                          },
-                          "HW: ",
-                          s.lH,
-                        ),
-                    ),
-                  ),
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        textAlign: "right",
-                        marginLeft: 10,
-                      },
-                    },
-                    s.course.includes("Quaida")
-                      ? React.createElement(
-                          "div",
-                          null,
-                          React.createElement(
-                            "div",
-                            {
-                              style: {
-                                color: c.purple,
-                                fontSize: 14,
-                                fontWeight: 700,
-                              },
-                            },
-                            "P.",
-                            s.qaida,
-                          ),
-                          React.createElement(
-                            "div",
-                            {
-                              style: {
-                                color: c.textSec,
-                                fontSize: 9,
-                              },
-                            },
-                            "of 30",
-                          ),
-                        )
-                      : React.createElement(
-                          "div",
-                          null,
-                          React.createElement(
-                            "div",
-                            {
-                              style: {
-                                color: c.accent,
-                                fontSize: 14,
-                                fontWeight: 700,
-                              },
-                            },
-                            "J.",
-                            s.juz,
-                          ),
-                          React.createElement(
-                            "div",
-                            {
-                              style: {
-                                color: c.textSec,
-                                fontSize: 9,
-                              },
-                            },
-                            "Pg ",
-                            s.page,
-                            "/604",
-                          ),
-                        ),
-                  ),
-                ),
-              ),
-            ),
-        ),
-      ),
+      React.createElement(LLQADailyProgress, { students: act, bc: bc, onLog: oP }), // v73: today's classes and the latest lessons
     tab === "attendance" &&
       React.createElement(
         React.Fragment,
@@ -1690,7 +1224,7 @@ const StudentsMod = ({
                   fontWeight: 600,
                 },
               },
-              "Attendance Distribution",
+              "Attendance — last 30 days", // v73
             ),
             React.createElement(
               ResponsiveContainer,
@@ -1701,34 +1235,7 @@ const StudentsMod = ({
               React.createElement(
                 BarChart,
                 {
-                  data: [
-                    {
-                      r: "95-100%",
-                      n: act.filter((s) => s.attendance >= 95).length,
-                    },
-                    {
-                      r: "90-94%",
-                      n: act.filter(
-                        (s) => s.attendance >= 90 && s.attendance < 95,
-                      ).length,
-                    },
-                    {
-                      r: "85-89%",
-                      n: act.filter(
-                        (s) => s.attendance >= 85 && s.attendance < 90,
-                      ).length,
-                    },
-                    {
-                      r: "80-84%",
-                      n: act.filter(
-                        (s) => s.attendance >= 80 && s.attendance < 85,
-                      ).length,
-                    },
-                    {
-                      r: "<80%",
-                      n: act.filter((s) => s.attendance < 80).length,
-                    },
-                  ],
+                  data: llqaAttBuckets(act).data, // v73: each student's last 30 days, from the class records
                 },
                 React.createElement(CartesianGrid, {
                   strokeDasharray: "3 3",
@@ -1843,254 +1350,7 @@ const StudentsMod = ({
             ),
           ),
         ),
-        React.createElement(
-          "h4",
-          {
-            style: {
-              color: c.text,
-              fontSize: 13,
-              margin: "0 0 10px",
-              fontWeight: 600,
-            },
-          },
-          "Quick Mark \u2014 Today",
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              overflowX: "auto",
-              borderRadius: 10,
-              border: "1px solid " + c.border,
-            },
-          },
-          React.createElement(
-            "table",
-            {
-              style: {
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 11,
-              },
-            },
-            React.createElement(
-              "thead",
-              null,
-              React.createElement(
-                "tr",
-                null,
-                [
-                  "Student",
-                  "Teacher",
-                  "Total",
-                  "Attended",
-                  "Missed",
-                  "Rate",
-                  "Mark Today",
-                ].map((h) =>
-                  React.createElement(
-                    "th",
-                    {
-                      key: h,
-                      style: {
-                        padding: "9px 8px",
-                        textAlign: "left",
-                        color: c.textSec,
-                        fontWeight: 600,
-                        fontSize: 9,
-                        textTransform: "uppercase",
-                        borderBottom: "1px solid " + c.border,
-                        background: c.bgDeep,
-                      },
-                    },
-                    h,
-                  ),
-                ),
-              ),
-            ),
-            React.createElement(
-              "tbody",
-              null,
-              llqaEmptyRow("No active students yet", "Each active student\u2019s classes attended and missed show here."), // v70: shows only when the table is empty
-              act
-                .sort((a, b) => a.attendance - b.attendance)
-                .map((s, i) =>
-                  React.createElement(
-                    "tr",
-                    {
-                      key: s.id,
-                      style: {
-                        borderBottom: "1px solid " + c.border,
-                        background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
-                      },
-                    },
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "7px 8px",
-                          fontWeight: 600,
-                        },
-                      },
-                      s.name,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "7px 8px",
-                          color: c.textSec,
-                          fontSize: 10,
-                        },
-                      },
-                      s.teacher.split(" ").slice(-2).join(" "),
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "7px 8px",
-                          color: c.textSec,
-                        },
-                      },
-                      s.totalClasses,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "7px 8px",
-                          color: c.success,
-                          fontWeight: 600,
-                        },
-                      },
-                      s.attended,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "7px 8px",
-                          color:
-                            s.totalClasses - s.attended > 20
-                              ? c.danger
-                              : c.warn,
-                        },
-                      },
-                      s.totalClasses - s.attended,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "7px 8px",
-                        },
-                      },
-                      React.createElement(
-                        "div",
-                        {
-                          style: {
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 4,
-                          },
-                        },
-                        React.createElement(PBar, {
-                          value: s.attendance,
-                          color:
-                            s.attendance >= 95
-                              ? c.success
-                              : s.attendance >= 85
-                                ? c.warn
-                                : c.danger,
-                        }),
-                        React.createElement(
-                          "span",
-                          {
-                            style: {
-                              fontSize: 9,
-                              color: s.attendance >= 90 ? c.success : c.danger,
-                              fontWeight: 600,
-                            },
-                          },
-                          s.attendance,
-                          "%",
-                        ),
-                      ),
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "7px 8px",
-                        },
-                      },
-                      React.createElement(
-                        "div",
-                        {
-                          style: {
-                            display: "flex",
-                            gap: 3,
-                          },
-                        },
-                        React.createElement(
-                          "button",
-                          {
-                            onClick: () => mAtt(s.id, "Present"),
-                            style: {
-                              background: c.successBg,
-                              border: "1px solid " + llqaAlpha(c.success, "44"),
-                              borderRadius: 4,
-                              cursor: "pointer",
-                              padding: "3px 6px",
-                              color: c.success,
-                              fontSize: 9,
-                              fontWeight: 600,
-                            },
-                          },
-                          "Present",
-                        ),
-                        React.createElement(
-                          "button",
-                          {
-                            onClick: () => mAtt(s.id, "Absent"),
-                            style: {
-                              background: c.dangerBg,
-                              border: "1px solid " + llqaAlpha(c.danger, "44"),
-                              borderRadius: 4,
-                              cursor: "pointer",
-                              padding: "3px 6px",
-                              color: c.danger,
-                              fontSize: 9,
-                              fontWeight: 600,
-                            },
-                          },
-                          "Absent",
-                        ),
-                        React.createElement(
-                          "button",
-                          {
-                            onClick: () => mAtt(s.id, "Late"),
-                            style: {
-                              background: c.warnBg,
-                              border: "1px solid " + llqaAlpha(c.warn, "44"),
-                              borderRadius: 4,
-                              cursor: "pointer",
-                              padding: "3px 6px",
-                              color: c.warn,
-                              fontSize: 9,
-                              fontWeight: 600,
-                            },
-                          },
-                          "Late",
-                        ),
-                      ),
-                    ),
-                  ),
-                ),
-            ),
-          ),
-        ),
+        React.createElement(LLQAQuickMark, { students: act }), // v73: today's classes, each marked on its own
       ),
     tab === "monthlySheet" &&
       React.createElement(MonthlyAttendanceGrid, {
@@ -2543,308 +1803,6 @@ const StudentsMod = ({
         pp: pp,
         bc: bc,
       }),
-    modal &&
-      modal.type === "progress" &&
-      React.createElement(
-        "div",
-        {
-          style: {
-            position: "fixed",
-            inset: 0,
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,.65)",
-            backdropFilter: "blur(4px)",
-          },
-        },
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 14,
-              padding: 24,
-              width: 520,
-              maxHeight: "90vh",
-              overflowY: "auto",
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 14,
-              },
-            },
-            React.createElement(
-              "h3",
-              {
-                style: {
-                  color: c.text,
-                  fontSize: 16,
-                  margin: 0,
-                },
-              },
-              "Log Progress \u2014 ",
-              modal.data.name,
-            ),
-            React.createElement(
-              "button",
-              {
-                onClick: () => setModal(null),
-                style: {
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  color: c.textSec,
-                },
-              },
-              React.createElement(X, {
-                size: 18,
-              }),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgDeep,
-                borderRadius: 8,
-                padding: "8px 12px",
-                marginBottom: 10,
-                display: "flex",
-                justifyContent: "space-between",
-              },
-            },
-            React.createElement(
-              "span",
-              {
-                style: {
-                  color: c.textSec,
-                  fontSize: 11,
-                },
-              },
-              "Level",
-            ),
-            React.createElement(
-              "span",
-              {
-                style: {
-                  color: c.accent,
-                  fontWeight: 600,
-                  fontSize: 12,
-                },
-              },
-              modal.data.course.includes("Quaida")
-                ? "Qaida P." + modal.data.qaida + "/30"
-                : "Juz " + modal.data.juz + " · Pg " + modal.data.page + "/604",
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgDeep,
-                borderRadius: 8,
-                padding: "8px 12px",
-                marginBottom: 12,
-                display: "flex",
-                justifyContent: "space-between",
-              },
-            },
-            React.createElement(
-              "span",
-              {
-                style: {
-                  color: c.textSec,
-                  fontSize: 11,
-                },
-              },
-              "Last",
-            ),
-            React.createElement(
-              "span",
-              {
-                style: {
-                  color: c.text,
-                  fontSize: 11,
-                },
-              },
-              modal.data.lastLesson,
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "0 14px",
-              },
-            },
-            React.createElement(Inp, {
-              label: "Date",
-              value: pf.date || "",
-              onChange: (v) =>
-                setPf({
-                  ...pf,
-                  date: v,
-                }),
-              type: "date",
-            }),
-            React.createElement(Inp, {
-              label: "Attendance",
-              value: pf.att || "",
-              onChange: (v) =>
-                setPf({
-                  ...pf,
-                  att: v,
-                }),
-              options: ATT_OPTS,
-            }),
-          ),
-          React.createElement(Inp, {
-            label: "Today's Lesson *",
-            value: pf.lesson || "",
-            onChange: (v) =>
-              setPf({
-                ...pf,
-                lesson: v,
-              }),
-            placeholder: modal.data.course.includes("Quaida")
-              ? "e.g. Qaida Page 19 - Joined Letters"
-              : "e.g. Surah Al-Baqarah ayah 255-260",
-          }),
-          React.createElement(Inp, {
-            label: modal.data.course.includes("Quaida")
-              ? "Qaida Page"
-              : "Quran Page",
-            value: pf.page || "",
-            onChange: (v) =>
-              setPf({
-                ...pf,
-                page: v,
-              }),
-            type: "number",
-            placeholder: String((modal.data.qaida || modal.data.page || 0) + 1),
-          }),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "0 14px",
-              },
-            },
-            React.createElement(Inp, {
-              label: "Behavior",
-              value: pf.beh || "",
-              onChange: (v) =>
-                setPf({
-                  ...pf,
-                  beh: v,
-                }),
-              options: BEHAV_OPTS,
-            }),
-            React.createElement(Inp, {
-              label: "Performance",
-              value: pf.perf || "",
-              onChange: (v) =>
-                setPf({
-                  ...pf,
-                  perf: v,
-                }),
-              options: PERF_OPTS,
-            }),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "0 14px",
-              },
-            },
-            React.createElement(Inp, {
-              label: "Homework",
-              value: pf.hw || "",
-              onChange: (v) =>
-                setPf({
-                  ...pf,
-                  hw: v,
-                }),
-              options: HW_OPTS,
-            }),
-            React.createElement(Inp, {
-              label: "Recitation",
-              value: pf.rec || "",
-              onChange: (v) =>
-                setPf({
-                  ...pf,
-                  rec: v,
-                }),
-              options: RECIT_OPTS,
-            }),
-          ),
-          React.createElement(Inp, {
-            label: "Tajweed",
-            value: pf.taj || "",
-            onChange: (v) =>
-              setPf({
-                ...pf,
-                taj: v,
-              }),
-            options: TAJ_OPTS,
-          }),
-          React.createElement(Inp, {
-            label: "Notes",
-            value: pf.notes || "",
-            onChange: (v) =>
-              setPf({
-                ...pf,
-                notes: v,
-              }),
-            placeholder: "Teacher comments, homework assigned...",
-          }),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 8,
-                marginTop: 10,
-              },
-            },
-            React.createElement(
-              Btn,
-              {
-                variant: "outline",
-                onClick: () => setModal(null),
-              },
-              "Cancel",
-            ),
-            React.createElement(
-              Btn,
-              {
-                onClick: saveP,
-                icon: Check,
-              },
-              "Save Progress",
-            ),
-          ),
-        ),
-      ),
     modal &&
       modal.type === "applyLv" &&
       React.createElement(

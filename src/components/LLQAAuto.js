@@ -264,11 +264,12 @@ const llqaTrialInfo = (s, opt) => {
   const today = o.today || llqaToday();
   const inTrial = llqaInTrial(s);
   const target = llqaTrialTarget(s);
-  const done = Math.max(0, parseInt(s && s.attended, 10) || 0);
+  const done = llqaTrialDone(s); // v73: counted from the class records since the trial began
   const paid = llqaIsPaid(s, o.arPayments || LLQAApp.ctx.arPayments);
   const start = (s && (s.trialStart || s.dor)) || "";
   const days = start ? llqaDays(start, today) : null;
-  const sinceLast = s && s.lastDate ? llqaDays(s.lastDate, today) : null;
+  const lastDay = (llqaDpOf(LLQAApp.ctx.dailyProgress, s && s.id)[0] || {}).date || (s && s.lastDate) || ""; // v73
+  const sinceLast = lastDay ? llqaDays(lastDay, today) : null;
   const active = !!s && inTrial && !paid && s.status !== "quit";
   const stage = !active ? "none" : done >= target ? "complete" : done === 0 ? "new" : "active";
   // no class for a week, or still short of the target 10+ days in
@@ -286,7 +287,7 @@ const llqaTrialStage = (cell, students, arPayments) => {
       : list.find((x) => x.name === cell.s && llqaInTrial(x));
   if (!st || !llqaInTrial(st)) return null;
   if (llqaIsPaid(st, arPayments || LLQAApp.ctx.arPayments)) return null;
-  const done = parseInt(st.attended, 10) || 0;
+  const done = llqaTrialDone(st); // v73
   const target = llqaTrialTarget(st);
   return done >= target
     ? { bg: "color-mix(in srgb, var(--warn) 12%, transparent)", bd: c.warn, label: "Trial done " + done + "/" + target, stage: "complete" } // v68: pale fill + solid border
@@ -616,7 +617,7 @@ const llqaClassesOnRaw = (date, teachers, students, dailyProgress) => {
       cell.sid != null && cell.sid !== ""
         ? byId.get(String(cell.sid))
         : (students || []).find((s) => B.sameStudent(cell, s));
-    const entry = stu ? dpx.byKey.get(String(stu.id) + "|" + date) || null : null;
+    const entry = stu ? llqaClsEntry(dpx, stu.id, date, c.slot) : null; // v73: this class's own record
     // (v66: a scheduled leave counts on its dates before it starts)
     const onLeave =
       !!stu &&
@@ -1530,46 +1531,8 @@ const LLQAQuitModal = ({ studentId, onClose }) => {
 };
 
 /* ---------- log a class (from Today's classes) ---------- */
-const LLQALogHost = ({ info, onClose }) => {
-  const ctx = LLQAApp.ctx;
-  const s = llqaFindStudent(info.studentId);
-  const [form, setForm] = useState({
-    attended: "present",
-    lesson: (s && s.lastLesson) || "",
-    pages: "",
-    behavior: (s && s.lB) || "Good",
-    performance: (s && s.lP) || "Satisfactory",
-    homework: (s && s.lH) || "Not Assigned",
-    recitation: (s && s.lR) || "N/A",
-    tajweed: (s && s.lT) || "N/A",
-    notes: "",
-  });
-  return React.createElement(LLQALogClassModal, {
-    info,
-    form,
-    setForm,
-    students: ctx.students,
-    dailyProgress: ctx.dailyProgress,
-    onClose,
-    onSave: () => {
-      const err = llqaLogClass({
-        students: ctx.students,
-        setStudents: ctx.setStudents,
-        dailyProgress: ctx.dailyProgress,
-        setDailyProgress: ctx.setDailyProgress,
-        studentId: info.studentId,
-        teacherName: info.teacherName,
-        form,
-        date: info.date,
-      });
-      if (err) {
-        alert(err);
-        return;
-      }
-      onClose();
-    },
-  });
-};
+// v73: the one log window (date and class, the class's own record, quick save)
+const LLQALogHost = ({ info, onClose }) => React.createElement(LLQALogClassModal, { info, onClose });
 
 /* ---------- notices (bottom-right) ---------- */
 // v66: a new notice shows for 12 seconds, then folds into the "🔔 N notices"
@@ -3127,9 +3090,11 @@ const LLQATodayClasses = (props) => {
                         manage && future && !it.entry && !it.tLeave && !it.covered && !it.off && it.st.k !== "holiday" && pick !== it.key
                           ? llqaMini("🔁", () => setPick(it.key), { key: "pk", title: "Teacher can't take this class — choose a substitute" })
                           : null,
+                        // v73: one tap marks the class (P / L / A / E); the full log keeps the lesson, page and behaviour
+                        canLog && it.st.k !== "cover" ? llqaMarkBtns(it, date, it.entry ? it.entry.attended : "", "qm") : null,
                         canLog && it.st.k !== "cover"
                           ? llqaMini(it.entry ? "✍ Edit log" : "✍ Log", () =>
-                              llqaOpen("log", { studentId: s.id, studentName: it.cell.s, teacherName: it.by, cell: it.cell, day: it.rowDay, slot: it.slot, date }),
+                              llqaOpen("log", { studentId: s.id, studentName: it.cell.s, teacherName: it.by, teacherId: llqaClsWho(it).teacherId, cell: it.cell, day: it.rowDay, slot: it.slot, date, makeupId: it.makeup ? it.makeup.id : undefined }),
                             { key: "l", tone: it.st.k === "missing" ? "danger" : "accent", solid: it.st.k === "missing" })
                           : null,
                         manage && s ? llqaMini("💬", () => llqaOpen("message", { studentId: s.id, template: tplK, extra: { date: llqaDateLabel(date) } }), { key: "m", disabled: !digits, title: llqaTplName(tplK) }) : null,
@@ -3328,10 +3293,12 @@ const llqaToday = () => {
   }
   return llqaTodayMemo.v;
 };
-// Daily progress per student (newest first) and per "student|date".
+// Class records per student (newest first), per "student|date" (the first of the day) and — v73 — per
+// "student|date|time" (one record per class).
 const llqaDpIndex = llqaMemo((dp) => {
   const byStu = new Map();
   const byKey = new Map();
+  const bySlot = new Map();
   dp.forEach((p) => {
     if (!p || p.studentId == null) return;
     const k = String(p.studentId);
@@ -3339,9 +3306,11 @@ const llqaDpIndex = llqaMemo((dp) => {
     byStu.get(k).push(p);
     const kk = k + "|" + p.date;
     if (!byKey.has(kk)) byKey.set(kk, p);
+    const ks = kk + "|" + String(p.slot || "");
+    if (!bySlot.has(ks) || llqaIsClsKey(p.id)) bySlot.set(ks, p);
   });
-  byStu.forEach((a) => a.sort((x, y) => String(y.date).localeCompare(String(x.date))));
-  return { byStu, byKey };
+  byStu.forEach((a) => a.sort((x, y) => String(y.date).localeCompare(String(x.date)) || String(y.slot || "").localeCompare(String(x.slot || ""))));
+  return { byStu, byKey, bySlot };
 });
 const llqaDpOf = (dp, sid) => llqaDpIndex(dp).byStu.get(String(sid)) || [];
 // Message log per student, and every message key already used.
@@ -3382,6 +3351,7 @@ const llqaLoadOf = (t) => {
 const llqaReadyFor = (names) => {
   try {
     if (typeof LLQACloud !== "undefined" && LLQACloud.ready && names.some((n) => !LLQACloud.ready(n))) return false;
+    if (names.includes("dailyProgress") && typeof llqaClsReady === "function" && !llqaClsReady()) return false; // v73: the class records too
     const st = typeof LLQASync !== "undefined" && LLQASync.get ? LLQASync.get() : null;
     if (st && st.mode === "cloud" && (st.pending || st.sending)) return false;
     if (typeof navigator !== "undefined" && navigator.onLine === false) return false;
@@ -3901,6 +3871,7 @@ const llqaRecordPayment = (s, f) => {
 /* ---------- at-risk radar ---------- */
 const llqaRisk = (s, dp, today) => {
   if (!s || s.status === "quit" || s.status === "leave") return null;
+  if (llqaClsLoading(dp)) return null; // v73: not before this computer's class records have come from the cloud
   const t = today || llqaToday();
   const mine = llqaDpOf(dp, s.id).filter((p) => p.date <= t);
   const reasons = [];
@@ -3922,11 +3893,13 @@ const llqaRisk = (s, dp, today) => {
       reasons.push("no class logged for " + gap + " days");
     }
   }
-  const total = parseInt(s.totalClasses, 10) || 0;
-  const att = parseInt(s.attendance, 10);
+  // v73: the last 30 days, from the class records (was a running total kept on the student)
+  const m30 = llqaAttCount(mine.filter((p) => p.date > llqaAddDays(t, -30)));
+  const total = m30.classes;
+  const att = m30.pct == null ? NaN : m30.pct;
   if (total >= 5 && !isNaN(att) && att < 70) {
     score += 25;
-    reasons.push("attendance " + att + "%");
+    reasons.push("attendance " + att + "% in 30 days");
   }
   const info = llqaTrialInfo(s, { today: t });
   if (info.stalled) {
@@ -3964,8 +3937,8 @@ const llqaRiskList = (students, dp, today) => {
 const llqaMonthStats = (s, dp, today) => {
   const since = llqaAddDays(today, -30);
   const mine = llqaDpOf(dp, s.id).filter((p) => p.date > since && p.date <= today);
-  const present = mine.filter((p) => /^(present|late)/i.test(String(p.attended || ""))).length;
-  return { classes: mine.length, present, pct: mine.length ? Math.round((present / mine.length) * 100) : null };
+  const n = llqaAttCount(mine); // v73: an excused class is not held against the student
+  return { classes: mine.length, present: n.attended, pct: n.pct };
 };
 // Each item has a key; once a message with that key is in the log (sent or
 // marked done) it never comes back. One message per family at a time, most
@@ -4010,7 +3983,7 @@ const llqaAutopilotRaw = (opt) => {
     const old = llqaExisting(s);
     // welcome only for a new family (added in the last 2 weeks, at most one class so far);
     // a family that was with the academy before the CRM gets the Parent Portal intro instead
-    const isNew = !old && ((s.dor && llqaDays(s.dor, today) != null && llqaDays(s.dor, today) <= 14) || (parseInt(s.attended, 10) || 0) <= 1);
+    const isNew = !old && ((s.dor && llqaDays(s.dor, today) != null && llqaDays(s.dor, today) <= 14) || Math.max(mine.filter((p) => llqaIsAtt(p.attended)).length, parseInt(s.attended, 10) || 0) <= 1); // v73: the class records (and the count kept on the student, for classes older than the months loaded)
     if (!away && isNew && !last(s.id, "welcome")) add(s, "welcome", "welcome:" + s.id, "New family — class times and Parent ID", null, 1);
     if (!away && old && !last(s.id, "portalIntro") && !last(s.id, "welcome"))
       add(s, "portalIntro", "intro:" + s.id, "Family from before the CRM — Parent Portal and Parent ID", null, 4);
@@ -6160,7 +6133,7 @@ const llqaMakeupState = (m, today) => {
   if (!m) return "";
   if (m.status !== "booked") return m.status;
   const t = today || todayPK();
-  const logged = llqaDpIndex(LLQAApp.ctx.dailyProgress).byKey.get(String(m.sid) + "|" + m.date);
+  const logged = llqaClsEntry(llqaDpIndex(LLQAApp.ctx.dailyProgress), m.sid, m.date, m.slot); // v73: that class, not any class of the day
   if (logged) return String(logged.attended || "").toLowerCase() === "absent" ? "absent" : "done";
   return m.date < t ? "missing" : m.date === t ? "today" : "upcoming";
 };
@@ -6207,7 +6180,7 @@ const llqaMakeupItems = (date, tById, byId, dpx, holiday) =>
         tz: m.tz || "",
         famTime: m.famTime || "",
         stu,
-        entry: stu ? dpx.byKey.get(String(stu.id) + "|" + date) || null : null,
+        entry: stu ? llqaClsEntry(dpx, stu.id, date, m.slot) : null, // v73
         onLeave,
         quit: !!stu && stu.status === "quit",
         tLeave,
