@@ -5512,6 +5512,276 @@ const LLQASheetDayWin = ({ info, items, onClose }) => {
   );
 };
 
+/* ============================================================
+   v73.1: Students — a leave ends by itself; leave days stay leave days; classes not logged are chased
+   ============================================================ */
+// A student's leave as the record has it: { from, to, type, planned } (null = none). A fee hold has no end date.
+const llqaLvSpan = (s) =>
+  !s
+    ? null
+    : s.status === "leave"
+      ? { from: s.lvFrom || "", to: s.lvTo || "", type: s.lvType || "", planned: false }
+      : s.lvPlanned && s.lvFrom
+        ? { from: s.lvFrom, to: s.lvTo || "", type: s.lvType || "", planned: true }
+        : null;
+// The days of a leave that is over when the record changes from p to n: { from, to, type } or null.
+// (The same leave with other dates is a correction, not an end. A student back today was away until yesterday.)
+const llqaLvClosed = (p, n, today) => {
+  const a = llqaLvSpan(p);
+  if (!a || !a.from) return null;
+  const b = llqaLvSpan(n);
+  if (b && (b.from === a.from || b.type === a.type)) return null;
+  const y = llqaAddDays(today, -1);
+  const to = a.to && a.to < y ? a.to : y;
+  if (a.from > to) return null; // it never began
+  return { from: a.from, to, type: a.type };
+};
+// Every change to the students list keeps the leaves that are over (lvHist), so the Monthly Sheet, Today's classes
+// and the make-ups still see those days as leave after the student is back (before, they turned into "not logged").
+const llqaLvHistApply = (prev, next) => {
+  if (!Array.isArray(prev) || !Array.isArray(next) || prev === next) return next;
+  const byId = new Map(prev.map((p) => [String(p && p.id), p]));
+  const today = todayPK();
+  let changed = false;
+  const out = next.map((n) => {
+    if (!n) return n;
+    const p = byId.get(String(n.id));
+    if (!p || p === n) return n;
+    const h = llqaLvClosed(p, n, today);
+    if (!h) return n;
+    const base = Array.isArray(n.lvHist) ? n.lvHist : Array.isArray(p.lvHist) ? p.lvHist : [];
+    if (base.some((x) => x && x.from === h.from && x.to === h.to)) return n;
+    changed = true;
+    return { ...n, lvHist: [...base, h].slice(-24) };
+  });
+  return changed ? out : next;
+};
+const llqaLvHistOn = (s, date) => !!s && Array.isArray(s.lvHist) && s.lvHist.some((h) => h && h.from && h.from <= date && (h.to || h.from) >= date);
+// Away on that date: the leave on the record (a planned one counts on its dates), or one that is over.
+const llqaStuAwayOn = (stu, date) =>
+  !!stu &&
+  ((stu.status === "leave"
+    ? (!stu.lvFrom || stu.lvFrom <= date) && (!stu.lvTo || stu.lvTo >= date)
+    : !!stu.lvPlanned && !!stu.lvFrom && stu.lvFrom <= date && (!stu.lvTo || stu.lvTo >= date)) ||
+    llqaLvHistOn(stu, date));
+
+// A leave is over the day after its last day: the student is active again by itself (a fee hold waits for the payment).
+const llqaLeaveEndDue = (list, today) =>
+  (list || []).filter((s) => s && s.status === "leave" && !s.feeHold && s.lvType !== "Fee hold" && s.lvTo && s.lvTo < today);
+const llqaLeaveEndRun = () => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user || !llqaCanManage() || !llqaReadyFor(["students"]) || typeof ctx.setStudents !== "function") return null;
+  const today = todayPK();
+  const due = llqaLeaveEndDue(ctx.students, today);
+  if (!due.length) return null;
+  const ids = new Set(due.map((s) => String(s.id)));
+  const fields = { status: "active", lvType: "", lvFrom: "", lvTo: "", lvReason: "", lvPlanned: false, lvBackAt: today };
+  ctx.setStudents((prev) => (prev || []).map((x) => (x && ids.has(String(x.id)) && llqaLeaveEndDue([x], today).length ? { ...x, ...fields } : x)));
+  if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster(due.map((x) => ({ ...x, ...fields })));
+  return due;
+};
+// back from leave in the last 2 days (for the office's notice)
+const llqaBackFromLeave = (today) => {
+  const t = today || todayPK();
+  const y = llqaAddDays(t, -1);
+  return (LLQAApp.ctx.students || []).filter((s) => s && s.status === "active" && s.lvBackAt && s.lvBackAt >= y && s.lvBackAt <= t);
+};
+
+/* ---------- classes with nothing logged ---------- */
+const LLQA_UNLOG_DAYS = 7;
+const LLQA_UNLOG_NEEDS = ["teachers", "students", "leaves", "covers", "makeups", "dailyProgress", "doc:settings/calendar"];
+// who answers for a class: the substitute when one teaches it
+const llqaClassOwner = (it) => {
+  const w = llqaClsWho(it);
+  return String(w.teacherId == null ? "" : w.teacherId);
+};
+const llqaOwnerName = (it) => llqaClsWho(it).teacherName || "";
+// the classes a signed-in person looks after: a teacher their own (and the ones they cover), a team lead their
+// team's, the office all; parents none
+const llqaUnlogScope = (u, teachers) => {
+  if (!u || u.role === "parent") return null;
+  if (u.role === "teacher") {
+    const me = String(u.teacherId != null ? u.teacherId : u.id);
+    return (it) => llqaClassOwner(it) === me;
+  }
+  if (u.role === "teamlead") {
+    const nm = String(u.name || "").trim().toLowerCase();
+    const team = new Set((teachers || []).filter((t) => t && nm && String(t.teamLead || t.lead || "").trim().toLowerCase() === nm).map((t) => String(t.id)));
+    if (u.teacherId != null && u.teacherId !== "") team.add(String(u.teacherId));
+    return (it) => team.has(llqaClassOwner(it));
+  }
+  return llqaCanOpen("students") || llqaCanOpen("timetable") ? () => true : null;
+};
+// the lists the check needs, loaded from the cloud (changes still being sent don't matter here)
+const llqaUnlogReady = () => {
+  try {
+    if (typeof LLQACloud !== "undefined" && LLQACloud.ready && LLQA_UNLOG_NEEDS.some((n) => !LLQACloud.ready(n))) return false;
+    return typeof llqaClsReady !== "function" || llqaClsReady();
+  } catch (e) {
+    return false;
+  }
+};
+// Classes of the last 7 days, and today's from 40 minutes after they began, with nothing logged → [{ date, it, key }],
+// newest day first. Not: before the student joined, leave, holidays, classes off, a teacher on leave with no one
+// teaching. A class logged that day at a time not in today's Timetable (moved since) stands for one of that day's
+// classes, so a moved class is not asked for twice.
+const llqaUnlogged = (u, opt) => {
+  const ctx = LLQAApp.ctx || {};
+  const o = opt || {};
+  const today = o.today || todayPK();
+  const nowMin = o.nowMin == null ? llqaNowPkMin() : o.nowMin;
+  const mine = llqaUnlogScope(u, ctx.teachers);
+  if (!mine) return [];
+  const dp = ctx.dailyProgress || [];
+  const dpx = llqaDpIndex(dp);
+  const out = [];
+  llqaDatesIn(llqaAddDays(today, -LLQA_UNLOG_DAYS), today).forEach((date) => {
+    const per = new Map();
+    llqaClassesOn(date, ctx.teachers || [], ctx.students || [], dp).forEach((it) => {
+      if (!it || !it.stu) return;
+      const k = String(it.stu.id);
+      if (!per.has(k)) per.set(k, []);
+      per.get(k).push(it);
+    });
+    per.forEach((items, sid) => {
+      const from = llqaStuFrom(items[0].stu);
+      if (from && date < from) return;
+      const left = items.filter((it) => llqaClassState(it, date, nowMin).k === "missing");
+      if (!left.length) return;
+      const slots = new Set(items.map((it) => String(it.slot)));
+      (dpx.byStu.get(sid) || [])
+        .filter((p) => p && p.date === date && llqaIsClsKey(p.id) && p.slot && !slots.has(String(p.slot)))
+        .forEach((p) => {
+          if (!left.length) return;
+          const pm = llqaSlotMin(p.slot);
+          let bi = 0;
+          left.forEach((it, i) => {
+            if (Math.abs(it.min - pm) < Math.abs(left[bi].min - pm)) bi = i;
+          });
+          left.splice(bi, 1);
+        });
+      left.forEach((it) => {
+        if (mine(it)) out.push({ date, it, key: date + "|" + it.key });
+      });
+    });
+  });
+  return out.sort((a, b) => String(b.date).localeCompare(String(a.date)) || a.it.min - b.it.min);
+};
+// by teacher: [{ name, id, items }], most first
+const llqaUnlogByTeacher = (list) => {
+  const m = new Map();
+  (list || []).forEach((x) => {
+    const id = llqaClassOwner(x.it);
+    const k = id || llqaOwnerName(x.it);
+    if (!m.has(k)) m.set(k, { id, name: llqaOwnerName(x.it) || "—", items: [] });
+    m.get(k).items.push(x);
+  });
+  return [...m.values()].sort((a, b) => b.items.length - a.items.length || String(a.name).localeCompare(String(b.name)));
+};
+const llqaUnlogWhen = (x) => llqaDateLabel(x.date) + " " + llqaSlotText(x.it.slot);
+const llqaUnloggedToast = (list, u) => {
+  const isT = u && u.role === "teacher";
+  const n = list.length;
+  const cls = n + " class" + (n === 1 ? "" : "es");
+  const text = isT
+    ? "📝 " + cls + " not logged yet: " + list.slice(0, 3).map((x) => x.it.stu.name + " (" + llqaUnlogWhen(x) + ")").join(", ") + (n > 3 ? " and " + (n - 3) + " more" : "") + ". Attendance, progress and the parents' portal wait for them."
+    : (() => {
+        const g = llqaUnlogByTeacher(list);
+        return "📝 " + cls + " of the last " + LLQA_UNLOG_DAYS + " days not logged — " + g.slice(0, 4).map((t) => t.name + " " + t.items.length).join(", ") + (g.length > 4 ? " and " + (g.length - 4) + " more teachers" : "") + ".";
+      })();
+  return { kind: "unlogged", key: "unlogged", text, actions: [{ label: isT ? "Log them" : "See the list", run: () => llqaOpen("unlogged", {}) }] };
+};
+// the reminder to a teacher, on WhatsApp (their own number; nothing is sent by itself)
+const llqaUnlogWaText = (t, items) =>
+  "Assalamu alaikum " + String(t.name || "").replace(/^ZZ TEST /, "") + ", " + (items.length === 1 ? "this class is" : "these " + items.length + " classes are") + " not logged in the CRM yet:\n" +
+  items.slice(0, 20).map((x) => "• " + llqaUnlogWhen(x) + " — " + x.it.stu.name).join("\n") + (items.length > 20 ? "\n… and " + (items.length - 20) + " more" : "") +
+  "\nPlease log them today (attendance and lesson). JazakAllah khair.";
+const llqaUnlogWa = (g) => {
+  const t = (LLQAApp.ctx.teachers || []).find((x) => x && String(x.id) === String(g.id));
+  const digits = t && t.phone ? llqaPhone(t.phone, "Pakistan") : "";
+  if (!digits) return llqaToast({ kind: "info", ttl: 7000, text: "No phone number for " + g.name + " — add it in Teachers." });
+  try {
+    window.open("https://wa.me/" + digits + "?text=" + encodeURIComponent(llqaUnlogWaText(t, g.items)), "_blank", "noopener");
+  } catch (e) {}
+};
+// The list: one tap to mark (P / L / A / E), or the full log; by teacher for team leads and the office.
+const LLQAUnloggedWin = ({ onClose }) => {
+  const ctx = LLQAApp.ctx || {};
+  const u = ctx.user || {};
+  const isT = u.role === "teacher";
+  const [tf, setTf] = React.useState("all");
+  const ready = llqaUnlogReady();
+  const all = ready ? llqaUnlogged(u) : [];
+  const groups = llqaUnlogByTeacher(all);
+  const shown = tf === "all" ? groups : groups.filter((g) => g.name === tf);
+  const MAX = 150;
+  let rowsLeft = MAX;
+  const row = (x) => {
+    const it = x.it;
+    const w = llqaClsWho(it);
+    return React.createElement(
+      "div",
+      { key: x.key, style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", padding: "7px 0", borderTop: "1px solid " + llqaAlpha(c.border, "88") } },
+      React.createElement("b", { style: { color: c.text, fontSize: 12, minWidth: 128 } }, llqaUnlogWhen(x)),
+      React.createElement("span", { style: { color: c.textSec, fontSize: 12, flex: 1, minWidth: 120 } }, it.stu.name + (it.makeup ? " · make-up" : "")),
+      llqaMarkBtns(it, x.date, "", "mb"),
+      llqaMini("✍ Log", () => {
+        llqaOpen("log", { studentId: it.stu.id, studentName: it.stu.name, date: x.date, slot: it.slot, day: it.rowDay, teacherId: w.teacherId, teacherName: w.teacherName, cell: it.cell, makeupId: it.makeup ? it.makeup.id : undefined, back: "unlogged" });
+      }, { key: "lg" }),
+    );
+  };
+  return llqaShell(
+    "📝 Classes not logged",
+    !ready ? "Loading the classes…" : all.length ? "Last " + LLQA_UNLOG_DAYS + " days and today · " + all.length + " class" + (all.length === 1 ? "" : "es") + (isT ? "" : " · " + groups.length + " teacher" + (groups.length === 1 ? "" : "s")) : "Last " + LLQA_UNLOG_DAYS + " days and today",
+    React.createElement(
+      "div",
+      null,
+      !isT && groups.length > 1
+        ? React.createElement(
+            LLQASelect,
+            { value: tf, "aria-label": "Teacher", onChange: (e) => setTf(e.target.value), style: { padding: "7px 10px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 11, marginBottom: 8 } },
+            [React.createElement("option", { key: "all", value: "all" }, "All teachers (" + all.length + ")"), ...groups.map((g) => React.createElement("option", { key: g.name, value: g.name }, g.name + " (" + g.items.length + ")"))],
+          )
+        : null,
+      ready && !all.length ? React.createElement("div", { style: { color: c.success, fontSize: 13, padding: "10px 0", fontWeight: 700 } }, "✓ Every class is logged.") : null,
+      shown.map((g) =>
+        React.createElement(
+          "div",
+          { key: "g" + g.name, style: { marginBottom: 10 } },
+          isT
+            ? null
+            : React.createElement(
+                "div",
+                { style: { display: "flex", alignItems: "center", gap: 8, justifyContent: "space-between", padding: "6px 0" } },
+                React.createElement("b", { style: { color: c.text, fontSize: 13 } }, g.name + " · " + g.items.length + " not logged"),
+                llqaMini("WhatsApp reminder", () => llqaUnlogWa(g), { key: "wa", tone: "success" }),
+              ),
+          g.items.filter(() => rowsLeft-- > 0).map(row),
+        ),
+      ),
+      all.length > MAX ? React.createElement("div", { style: { color: c.textSec, fontSize: 11, paddingTop: 6 } }, "The first " + MAX + " are shown; the rest come up as these are logged.") : null,
+    ),
+    [llqaMini("Close", onClose, { key: "x", big: true, solid: true, tone: "accent" })],
+    { onClose, width: 640 },
+  );
+};
+// Today's classes: the classes of earlier days still to log
+const llqaUnlogBanner = (u) => {
+  if (!u || u.role === "parent" || !llqaUnlogReady()) return null;
+  const today = todayPK();
+  const n = llqaUnlogged(u).filter((x) => x.date < today).length;
+  if (!n) return null;
+  return llqaCard(
+    React.createElement(
+      "div",
+      { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+      React.createElement("div", { style: { color: c.text, fontSize: 13 } }, React.createElement("b", null, "📝 " + n + " class" + (n === 1 ? "" : "es") + " of earlier days not logged"), " · the last " + LLQA_UNLOG_DAYS + " days"),
+      llqaMini(u.role === "teacher" ? "Log them" : "See the list", () => llqaOpen("unlogged", {}), { key: "ul", tone: "accent" }),
+    ),
+    { key: "unlog", border: llqaAlpha(c.danger, "88") },
+  );
+};
+
 const CC = [
   "#4a7aff",
   "#10b981",

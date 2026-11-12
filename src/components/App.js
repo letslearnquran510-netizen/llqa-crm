@@ -55,10 +55,12 @@ function App() {
     "teachers",
     initTeachers,
   );
-  const [students, setStudents] = useFirestoreCollection(
+  const [students, setStudentsRaw] = useFirestoreCollection(
     "students",
     initStudents,
   );
+  // v73.1: a leave that is over is kept on the student (lvHist), so its days stay leave days
+  const setStudents = React.useCallback((v) => setStudentsRaw((prev) => llqaLvHistApply(prev, typeof v === "function" ? v(prev) : v)), [setStudentsRaw]);
   const [shifts, setShifts] = useFirestoreCollection("shifts", initShifts);
   const [customRoles, setCustomRoles] = useFirestoreCollection(
     "customRoles",

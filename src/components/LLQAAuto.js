@@ -619,11 +619,7 @@ const llqaClassesOnRaw = (date, teachers, students, dailyProgress) => {
         : (students || []).find((s) => B.sameStudent(cell, s));
     const entry = stu ? llqaClsEntry(dpx, stu.id, date, c.slot) : null; // v73: this class's own record
     // (v66: a scheduled leave counts on its dates before it starts)
-    const onLeave =
-      !!stu &&
-      (stu.status === "leave"
-        ? (!stu.lvFrom || stu.lvFrom <= date) && (!stu.lvTo || stu.lvTo >= date)
-        : !!stu.lvPlanned && !!stu.lvFrom && stu.lvFrom <= date && (!stu.lvTo || stu.lvTo >= date));
+    const onLeave = llqaStuAwayOn(stu, date); // v73.1: a leave that is over still counts on its days
     // v66: teacher on leave, a substitute (or class off) for this date, holidays.
     // A cover made for a leave that was later cancelled doesn't count; nor
     // does a substitute who is on leave that day too.
@@ -1532,7 +1528,7 @@ const LLQAQuitModal = ({ studentId, onClose }) => {
 
 /* ---------- log a class (from Today's classes) ---------- */
 // v73: the one log window (date and class, the class's own record, quick save)
-const LLQALogHost = ({ info, onClose }) => React.createElement(LLQALogClassModal, { info, onClose });
+const LLQALogHost = ({ info, onClose }) => React.createElement(LLQALogClassModal, { info, onClose: info && info.back ? () => llqaOpen(info.back, {}) : onClose });
 
 /* ---------- notices (bottom-right) ---------- */
 // v66: a new notice shows for 12 seconds, then folds into the "🔔 N notices"
@@ -1787,15 +1783,17 @@ const llqaClockTick = (state) => {
   // v66: read-only notices first (leave ended, today's follow-ups), then the
   // jobs that save: teacher leave → cover, fee cycle → Fee Status
   try {
-    if (!state.ended && llqaCanOpen("students")) {
-      const ended = llqaLeaveEnded();
-      if (ended.length) {
-        state.ended = true;
+    // v73.1: a leave that is over ends by itself (the job below); the office hears who is back
+    if (llqaCanOpen("students") && llqaCanManage() && LLQAApp.ctx.user && llqaReadyFor(["students"])) {
+      const back = llqaBackFromLeave();
+      const sig = back.map((s) => s.id).join(",");
+      if (back.length && state.lvback !== sig) {
+        state.lvback = sig;
         llqaToast({
-          kind: "leaveEnded",
-          key: "leaveEnded",
-          ids: ended.map((s) => s.id),
-          text: "🏖 Leave has ended for " + ended.length + " student" + (ended.length === 1 ? "" : "s") + ": " + ended.slice(0, 4).map((s) => s.name + " (to " + llqaDateLabel(s.lvTo) + ")").join(", ") + (ended.length > 4 ? "…" : "") + ". Back to active?",
+          kind: "info",
+          key: "lvback",
+          text: "🏖 Back from leave — classes start again: " + back.slice(0, 5).map((s) => s.name + " (leave to " + llqaDateLabel(llqaAddDays(s.lvBackAt, -1)) + ")").join(", ") + (back.length > 5 ? " and " + (back.length - 5) + " more" : "") + ".",
+          actions: [{ label: "Students", run: () => llqaGo("students") }],
         });
       }
     }
@@ -1806,8 +1804,24 @@ const llqaClockTick = (state) => {
         llqaToast({ kind: "pilot", key: "pilot", text: "🤖 " + due.length + " follow-up message" + (due.length === 1 ? " is" : "s are") + " due today (" + [...new Set(due.map((x) => llqaTplName(x.template)))].slice(0, 3).join(", ") + ")." });
     }
   } catch (e) {}
+  // v73.1: classes with nothing logged — a teacher hears of each one (when they sign in, and 40 minutes after a
+  // class began); team leads and the office get the list of the last days by teacher, once a day
+  try {
+    const u = LLQAApp.ctx.user;
+    if (u && !LLQA_RUNNER && u.role !== "parent" && llqaReadyFor(LLQA_UNLOG_NEEDS)) {
+      const list = llqaUnlogged(u);
+      const seen = state.unlog || (state.unlog = new Set());
+      const day = todayPK();
+      if (list.length && (u.role === "teacher" ? list.some((x) => !seen.has(x.key)) : state.unlogDay !== day)) {
+        state.unlogDay = day;
+        llqaToast(llqaUnloggedToast(list, u));
+      }
+      list.forEach((x) => seen.add(x.key));
+    }
+  } catch (e) {}
   if (!runnerUp) {
     if (llqaCanOpen("students")) job(llqaLeaveStartRun);
+    if (llqaCanOpen("students")) job(llqaLeaveEndRun); // v73.1
     if (llqaCanOpen("timetable")) job(llqaCoverRunAuto);
     if (sales) job(llqaFeeRunAuto);
   } else
@@ -1998,6 +2012,7 @@ const LLQAHost = () => {
     k === "convert" ? React.createElement(LLQAConvertModal, { key: m.key, ...d, onClose: llqaClose }) : null,
     k === "quit" ? React.createElement(LLQAQuitModal, { key: m.key, ...d, onClose: llqaClose }) : null,
     k === "log" ? React.createElement(LLQALogHost, { key: m.key, info: d, onClose: llqaClose }) : null,
+    k === "unlogged" ? React.createElement(LLQAUnloggedWin, { key: m.key, onClose: llqaClose }) : null,
     // v66
     k === "payment" ? React.createElement(LLQAPaymentModal, { key: m.key, ...d, onClose: llqaClose }) : null,
     k === "logRequest" ? React.createElement(LLQALogRequestModal, { key: m.key, ...d, onClose: llqaClose }) : null,
@@ -2989,6 +3004,7 @@ const LLQATodayClasses = (props) => {
           { border: llqaAlpha(((hol.kind || "holiday") === "holiday" ? c.warn : c.accent), "88") },
         )
       : null,
+    llqaUnlogBanner(u), // v73.1
     React.createElement(
       "div",
       { style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 } },
@@ -3996,6 +4012,9 @@ const llqaAutopilotRaw = (opt) => {
       if (sent && llqaDays(llqaAtDay(sent.at), today) >= 2)
         add(s, "feeDue", "trialfee2:" + s.id, "Fee message sent " + llqaAgo(sent.at) + ", not enrolled yet", null, 2);
     }
+    // v73.1: leave over — classes start again
+    if (!away && booked && s.lvBackAt && s.lvBackAt <= today && llqaDays(s.lvBackAt, today) <= 2)
+      add(s, "classReminder", "lvback:" + s.id + ":" + s.lvBackAt, "Back from leave — classes start again", null, 2);
     if (!away)
       mine
         .filter((p) => /^absent/i.test(String(p.attended || "")) && p.date <= today && llqaDays(p.date, today) <= 2)
@@ -6151,11 +6170,7 @@ const llqaMakeupItems = (date, tById, byId, dpx, holiday) =>
       const hasSub = !!(cover && cover.coverId != null && cover.coverId !== "");
       const subAway = hasSub && !!llqaLeaveOn(tById.get(String(cover.coverId)) || { id: cover.coverId, name: cover.cover }, date);
       const country = (stu && stu.country) || m.country || "";
-      const onLeave =
-        !!stu &&
-        (stu.status === "leave"
-          ? (!stu.lvFrom || stu.lvFrom <= date) && (!stu.lvTo || stu.lvTo >= date)
-          : !!stu.lvPlanned && !!stu.lvFrom && stu.lvFrom <= date && (!stu.lvTo || stu.lvTo >= date));
+      const onLeave = llqaStuAwayOn(stu, date); // v73.1
       return {
         key: "mk|" + m.id,
         teacherId: m.teacherId,
