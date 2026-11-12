@@ -551,7 +551,7 @@ const PayslipModal = ({ t, onClose, selectedMonth, appSettings }) => {
               "div",
               { style: { padding: "0 8px" } },
               React.createElement(Row, {
-                label: "Basic Salary",
+                label: "Basic Salary" + (t.pay.days && t.pay.monthDays && t.pay.days < t.pay.monthDays ? " (" + t.pay.days + " of " + t.pay.monthDays + " days)" : ""), // v75
                 value: "Rs " + t.pay.baseSalary.toLocaleString(),
               }),
               t.pay.bonusBreakdown &&

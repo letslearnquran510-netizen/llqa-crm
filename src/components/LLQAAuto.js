@@ -1839,9 +1839,30 @@ const llqaClockTick = (state) => {
       }
     }
   } catch (e) {}
+  // v75: payroll — the office hears once a day of salaries to approve or pay; a teacher, of their salary paid
+  try {
+    const u = LLQAApp.ctx.user;
+    if (u && !LLQA_RUNNER && u.role !== "parent" && llqaReadyFor(["teachers", "doc:data/payrollHistory"])) {
+      const day = todayPK();
+      if (u.role === "teacher") {
+        const fresh = llqaMyPayFresh(u, day);
+        const sig = fresh.map((r) => r.month + r.paidDate).join(",");
+        if (fresh.length && state.myPay !== sig) {
+          state.myPay = sig;
+          llqaToast(llqaMyPayToast(fresh));
+        }
+      } else if (llqaCanOpen("payroll") && state.payDay !== day) {
+        state.payDay = day;
+        const list = llqaPayChase(day);
+        if (list.length) llqaToast(llqaPayToast(list, day));
+      }
+    }
+  } catch (e) {}
   if (!runnerUp) {
     if (llqaCanOpen("students")) job(llqaLeaveStartRun);
     if (llqaCanOpen("students")) job(llqaLeaveEndRun); // v73.1
+    if (llqaCanOpen("payroll")) job(llqaSalaryDueRun); // v75
+    if (llqaCanOpen("payroll")) job(llqaPayCloseRun); // v75
     if (llqaCanOpen("timetable")) job(llqaCoverRunAuto);
     if (sales) job(llqaFeeRunAuto);
   } else
@@ -2035,6 +2056,7 @@ const LLQAHost = () => {
     k === "unlogged" ? React.createElement(LLQAUnloggedWin, { key: m.key, onClose: llqaClose }) : null,
     k === "shiftNew" ? React.createElement(LLQAShiftNewWin, { key: m.key, onClose: llqaClose }) : null,
     k === "handover" ? React.createElement(LLQAHandoverWin, { key: m.key, onClose: llqaClose }) : null,
+    k === "mypay" ? React.createElement(LLQAMyPayWin, { key: m.key, data: m.data, onClose: llqaClose }) : null,
     // v66
     k === "payment" ? React.createElement(LLQAPaymentModal, { key: m.key, ...d, onClose: llqaClose }) : null,
     k === "logRequest" ? React.createElement(LLQALogRequestModal, { key: m.key, ...d, onClose: llqaClose }) : null,

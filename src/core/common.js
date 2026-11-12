@@ -6323,6 +6323,563 @@ const llqaSubjLink = (f, setF) => {
   );
 };
 
+/* ---------- v75: Payroll that runs itself ---------- */
+// The first month the CRM runs payroll by itself (the months before were paid outside it: no reminders for them)
+const LLQA_PAY_FROM = "2026-11";
+const LLQA_MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const llqaYmName = (ym) => (LLQA_MONTHS[Number(String(ym).slice(5, 7)) - 1] || "") + " " + String(ym).slice(0, 4);
+const llqaDayMon = (d) => Number(String(d).slice(8, 10)) + " " + (LLQA_MONTHS[Number(String(d).slice(5, 7)) - 1] || "").slice(0, 3);
+const llqaYmDays = (ym) => new Date(Date.UTC(Number(String(ym).slice(0, 4)), Number(String(ym).slice(5, 7)), 0)).getUTCDate();
+const llqaIsDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ""));
+const llqaDayGap = (a, b) => Math.round((Date.parse(b) - Date.parse(a)) / 864e5);
+const llqaRs = (n) => "Rs " + Math.round(Number(n) || 0).toLocaleString("en-US");
+const llqaPayActor = () => {
+  const u = (LLQAApp.ctx && LLQAApp.ctx.user) || {};
+  return u.name || u.username || (u.role === "superadmin" ? "Super Admin" : u.role) || "Admin";
+};
+// the salary day of the month (Payroll → Pay day; the 5th when not set) and the day month ym's salaries are due
+const llqaPayDayOf = (set) => {
+  const n = Math.round(Number((set || {}).payDay));
+  return n >= 1 && n <= 28 ? n : 5;
+};
+const llqaPayDue = (ym, set) => llqaMonthAdd(ym, 1) + "-" + String(llqaPayDayOf(set)).padStart(2, "0");
+const llqaTeacherGone = (t) => !!t && (t.status === "resigned" || t.status === "terminated");
+
+// Every salary change is kept on the teacher (salHist: from, amount, prev, reason, by, at). A day's salary is the
+// last change in force that day; before the first change, the salary it replaced.
+const llqaSalHist = (t) =>
+  (Array.isArray(t && t.salHist) ? t.salHist : [])
+    .filter((h) => h && llqaIsDay(h.from) && Number(h.amount) > 0)
+    .slice()
+    .sort((a, b) => (a.from !== b.from ? (a.from < b.from ? -1 : 1) : String(a.at || "") < String(b.at || "") ? -1 : 1));
+const llqaSalaryOn = (t, day) => {
+  const h = llqaSalHist(t);
+  if (!h.length) return Number(t && t.salary) || 0;
+  let s = Number(h[0].prev) > 0 ? Number(h[0].prev) : Number(h[0].amount);
+  for (const x of h) if (x.from <= day) s = Number(x.amount);
+  return s;
+};
+// the days of month ym a teacher was with the academy: from the join date to the leaving date (kept by itself when
+// the status becomes resigned or terminated). Left with no date kept: not in the months the CRM pays (set the date
+// in Teachers if they worked part of one).
+const llqaPaySpan = (t, ym, today) => {
+  if (!t) return null;
+  const D = llqaYmDays(ym), first = ym + "-01", last = ym + "-" + String(D).padStart(2, "0");
+  const from = llqaIsDay(t.joinDate) && t.joinDate > first ? t.joinDate : first;
+  let to = last;
+  if (llqaTeacherGone(t)) {
+    if (llqaIsDay(t.leftOn)) {
+      if (t.leftOn < to) to = t.leftOn;
+    } else if (ym >= LLQA_PAY_FROM || ym >= String(today || todayPK()).slice(0, 7)) return null; // left before the CRM kept the date
+  }
+  if (from > to) return null;
+  const days = Number(to.slice(8, 10)) - Number(from.slice(8, 10)) + 1;
+  return { from, to, days, D, full: days === D };
+};
+// the salary for those days: each day at the salary in force that day (a full month at one salary is the salary)
+const llqaPayBase = (t, span) => {
+  if (!span) return 0;
+  if (!llqaSalHist(t).some((x) => x.from > span.from && x.from <= span.to)) return Math.round((llqaSalaryOn(t, span.from) * span.days) / span.D);
+  let sum = 0;
+  for (let d = Number(span.from.slice(8, 10)); d <= Number(span.to.slice(8, 10)); d++) sum += llqaSalaryOn(t, span.from.slice(0, 8) + String(d).padStart(2, "0"));
+  return Math.round(sum / span.D);
+};
+// how many students each teacher has booked in the Timetable now (each student once)
+const llqaPayCountMemo = new WeakMap();
+const llqaPayCounts = (teachers) => {
+  const list = teachers || [];
+  let m = llqaPayCountMemo.get(list);
+  if (!m) {
+    const sets = new Map();
+    try {
+      LLQABooking.eachBooked(list, (c) => {
+        const k = String(c.teacherId);
+        if (!sets.has(k)) sets.set(k, new Set());
+        const v = c.cell || {};
+        sets.get(k).add(v.sid != null && v.sid !== "" ? "i" + v.sid : "n" + String(v.s || "").trim().toLowerCase() + "|" + String(v.l || "").trim().toLowerCase());
+      });
+    } catch (e) {}
+    m = new Map();
+    sets.forEach((s, k) => m.set(k, s.size));
+    llqaPayCountMemo.set(list, m);
+  }
+  return m;
+};
+// the bonuses (the amounts as before): tenure on the month's last day with the academy, HR's performance rating,
+// the students booked; for part of a month, that part of each
+const llqaPayBonus = (t, ym, span, count) => {
+  const end = span ? span.to : ym + "-" + String(llqaYmDays(ym)).padStart(2, "0");
+  const yrs = llqaIsDay(t.joinDate) ? Math.floor((Date.parse(end) - Date.parse(t.joinDate)) / (365 * 864e5)) : 0;
+  const r = Number(t.perfRating) > 0 ? Number(t.perfRating) : Number(t.rating) || 0;
+  const n = Number(count) || 0;
+  const f = span ? span.days / span.D : 1;
+  const tenure = Math.round((yrs >= 3 ? 3000 : yrs >= 2 ? 2000 : yrs >= 1 ? 1000 : 0) * f);
+  const performance = Math.round((r >= 4.5 ? 3000 : r >= 4.2 ? 2000 : r >= 4.0 ? 1000 : 0) * f);
+  const students = Math.round((n >= 12 ? 2000 : n >= 8 ? 1000 : 0) * f);
+  return { tenure, performance, students, total: tenure + performance + students, count: n, rating: r, years: Math.max(0, yrs) };
+};
+const llqaPayBonusNow = (t, ym) => llqaPayBonus(t, ym, llqaPaySpan(t, ym, todayPK()), llqaPayCounts((LLQAApp.ctx && LLQAApp.ctx.teachers) || []).get(String(t.id)));
+// the month's fines: Quality Control (not waived or resolved; by teacher id, else by name) + attendance (v72)
+const llqaPayFines = (t, ym, qc, att) => {
+  const qcFine = (qc || [])
+    .filter((v) => v && String(v.date || "").startsWith(ym) && v.status !== "Waived" && v.status !== "Resolved" && (v.teacherId != null && v.teacherId !== "" ? String(v.teacherId) === String(t.id) : v.teacher === t.name))
+    .reduce((s, v) => s + (Number(v.fine) || 0), 0);
+  const days = ((att || {})[t.id] || []).filter((h) => h && String(h.date || "").startsWith(ym) && Number(h.fine) > 0);
+  const attFine = days.reduce((s, h) => s + (Number(h.fine) || 0), 0);
+  return { qcFine, attFine, attDays: days.length, fine: qcFine + attFine };
+};
+
+// Advances and loans (payrollHistory._loans): taken from the pay month by month, in installments, from the first
+// month; a month already approved or paid keeps what it took; the last month a teacher works takes what is left.
+const llqaLoans = (hist) => (Array.isArray(hist && hist._loans) ? hist._loans.filter((L) => L && L.id && Number(L.amount) > 0 && /^\d{4}-\d{2}$/.test(String(L.start || ""))) : []);
+const llqaLoanPer = (L) => Math.ceil(Number(L.amount) / Math.max(1, Math.round(Number(L.installments) || 1)));
+const llqaLoanPlan = (hist, t, upto, today) => {
+  const out = {};
+  const recs = (hist && hist[t.id]) || [];
+  llqaLoans(hist)
+    .filter((L) => String(L.teacherId) === String(t.id))
+    .forEach((L) => {
+      let left = Number(L.amount);
+      const per = llqaLoanPer(L);
+      for (let ym = L.start, i = 0; ym <= upto && left > 0 && i < 240; ym = llqaMonthAdd(ym, 1), i++) {
+        const r = recs.find((x) => x && x.month === ym);
+        let take;
+        if (r && (r.status === "approved" || r.status === "paid")) take = Number((r.inst || {})[L.id]) || 0;
+        else {
+          const span = llqaPaySpan(t, ym, today);
+          if (!span) {
+            if (llqaTeacherGone(t) && ym > String(t.leftOn || "")) break;
+            continue;
+          }
+          take = llqaTeacherGone(t) && llqaIsDay(t.leftOn) && t.leftOn.slice(0, 7) === ym ? left : Math.min(per, left);
+        }
+        if (take > 0) {
+          (out[ym] = out[ym] || {})[L.id] = take;
+          left -= take;
+        }
+      }
+    });
+  return out;
+};
+const llqaLoanState = (hist, L, teachers, today) => {
+  const t = (teachers || []).find((x) => x && String(x.id) === String(L.teacherId)) || { id: L.teacherId, name: L.teacher || "—" };
+  const recs = (hist && hist[L.teacherId]) || [];
+  let paid = 0, held = 0;
+  recs.forEach((r) => {
+    const v = Number(((r && r.inst) || {})[L.id]) || 0;
+    if (r && r.status === "paid") paid += v;
+    else if (r && r.status === "approved") held += v;
+  });
+  const plan = llqaLoanPlan(hist, t, llqaMonthAdd(String(today).slice(0, 7), 36), today);
+  const next = Object.keys(plan).filter((ym) => plan[ym][L.id] && !recs.some((r) => r && r.month === ym && (r.status === "approved" || r.status === "paid"))).sort()[0] || "";
+  return { t, paid, held, left: Math.max(0, Number(L.amount) - paid), next, nextAmt: next ? plan[next][L.id] : 0, done: paid >= Number(L.amount) };
+};
+
+// A teacher's pay for month ym: worked out from the rules while the month is pending; an approved or paid month keeps
+// its numbers (an approved one says when the fines have changed since). null: not with the academy that month.
+const llqaPayRec = (t, ym, o) => {
+  const today = o.today || todayPK();
+  const saved = ((o.hist || {})[t.id] || []).find((r) => r && r.month === ym);
+  const fines = llqaPayFines(t, ym, o.qc, o.att);
+  if (saved && saved.status && saved.status !== "pending") return saved.status === "approved" && Number(saved.fine || 0) !== fines.fine ? { ...saved, fineNow: fines.fine } : saved;
+  const span = llqaPaySpan(t, ym, today);
+  if (!span && !saved) return null;
+  const legacy = saved && saved.calc !== 75;
+  const inst = llqaLoanPlan(o.hist, t, ym, today)[ym] || {};
+  const advance = Object.keys(inst).reduce((s, k) => s + inst[k], 0) + (legacy ? Number(saved.advance) || 0 : 0);
+  const baseSalary = legacy ? Number(saved.baseSalary) || 0 : llqaPayBase(t, span);
+  const b = legacy ? saved.bonusBreakdown || { total: Number(saved.bonuses) || 0 } : saved && saved.bonusBreakdown ? saved.bonusBreakdown : llqaPayBonus(t, ym, span, (o.counts || new Map()).get(String(t.id)));
+  const bonuses = Number(b.total) || 0;
+  const tax = saved ? Number(saved.tax) || 0 : 0;
+  const gross = baseSalary + bonuses;
+  const deductions = fines.fine + advance + tax;
+  return {
+    ...(saved || {}),
+    id: t.id + "_" + ym,
+    month: ym,
+    calc: legacy ? saved.calc : 75,
+    baseSalary,
+    salary: span ? llqaSalaryOn(t, span.to) : Number(t.salary) || 0,
+    days: span ? span.days : 0,
+    monthDays: llqaYmDays(ym),
+    from: span ? span.from : "",
+    to: span ? span.to : "",
+    bonusBreakdown: b,
+    bonuses,
+    gross,
+    qcFine: fines.qcFine,
+    attFine: fines.attFine,
+    attDays: fines.attDays,
+    fine: fines.fine,
+    inst,
+    advance,
+    tax,
+    deductions,
+    net: gross - deductions,
+    status: "pending",
+  };
+};
+// where month ym stands, and what needs a look before it is paid (rows: [{ t, r }])
+const llqaPayStateOf = (ym, rows, set) => {
+  const pick = (f) => rows.filter(f);
+  return {
+    ym,
+    rows,
+    toApprove: pick((x) => x.r.status === "pending"),
+    toPay: pick((x) => x.r.status === "approved"),
+    paid: pick((x) => x.r.status === "paid"),
+    noSalary: pick((x) => x.r.status === "pending" && !(Number(x.r.baseSalary) > 0)),
+    noBank: pick((x) => x.r.status !== "paid" && !String(x.t.bank || "").trim() && !String(x.t.accountNo || "").trim()),
+    negative: pick((x) => x.r.status !== "paid" && Number(x.r.net) < 0),
+    changed: pick((x) => x.r.status === "approved" && x.r.fineNow != null),
+    due: llqaPayDue(ym, set),
+  };
+};
+const llqaPayMonthState = (ym, ctx) => {
+  const x = ctx || LLQAApp.ctx || {};
+  const o = { hist: x.payrollHistory || {}, qc: x.qcViolations, att: x.attendanceHistory, counts: llqaPayCounts(x.teachers), today: todayPK() };
+  const rows = (x.teachers || []).map((t) => ({ t, r: t ? llqaPayRec(t, ym, o) : null })).filter((y) => y.r);
+  return llqaPayStateOf(ym, rows, x.appSettings);
+};
+// the month Payroll opens on: one asked for (a reminder), else last month while its salaries aren't all paid
+const LLQAPay = { want: "" };
+const llqaPayStartYm = () => {
+  const w = LLQAPay.want;
+  LLQAPay.want = "";
+  if (/^\d{4}-\d{2}$/.test(w)) return w;
+  const cur = todayPK().slice(0, 7), prev = llqaPrevYm(cur);
+  try {
+    if (prev >= LLQA_PAY_FROM) {
+      const s = llqaPayMonthState(prev);
+      if (s.toApprove.length || s.toPay.length) return prev;
+    }
+  } catch (e) {}
+  return cur;
+};
+const llqaPayOpen = (ym) => {
+  LLQAPay.want = ym;
+  const ctx = LLQAApp.ctx || {};
+  if (typeof ctx.setPage === "function") ctx.setPage("payroll");
+};
+
+// Teachers: a salary changed anywhere is kept (Teachers form: from the 1st of this month, after any change already
+// in force); the leaving date is kept when the status becomes resigned or terminated, and cleared when they are back
+const llqaTeachersChanged = (prev, next) => {
+  if (!Array.isArray(prev) || !Array.isArray(next) || prev === next) return next;
+  const old = new Map(prev.filter(Boolean).map((t) => [String(t.id), t]));
+  const today = todayPK();
+  let changed = false;
+  const out = next.map((t) => {
+    const p = t && old.get(String(t.id));
+    if (!p) return t;
+    let x = t;
+    const ph = Array.isArray(p.salHist) ? p.salHist : [], nh = Array.isArray(x.salHist) ? x.salHist : [];
+    const lost = ph.filter((h) => h && !nh.some((k) => k && k.at === h.at && k.from === h.from));
+    if (lost.length) x = { ...x, salHist: [...nh, ...lost] };
+    const ns = Number(x.salary) || 0, os = Number(p.salary) || 0;
+    if (ns !== os && os > 0 && ns > 0 && !(llqaSalHist(x).length && llqaSalaryOn(x, today) === ns)) {
+      const last = llqaSalHist(x).filter((h) => h.from <= today).map((h) => h.from).pop() || "";
+      const from = last > today.slice(0, 7) + "-01" ? last : today.slice(0, 7) + "-01";
+      x = { ...x, salHist: [...(Array.isArray(x.salHist) ? x.salHist : []), { from, amount: ns, prev: os, reason: "Changed in Teachers", by: llqaPayActor(), at: new Date().toISOString() }] };
+    }
+    if (llqaTeacherGone(x) && !llqaTeacherGone(p) && !llqaIsDay(x.leftOn)) x = { ...x, leftOn: today };
+    else if (!llqaTeacherGone(x) && x.leftOn) x = { ...x, leftOn: "" };
+    if (x !== t) changed = true;
+    return x;
+  });
+  return changed ? out : next;
+};
+// Payroll → Revise salary: from a date (now or later), with the reason; the salary on the record follows on that day
+const llqaSalaryRevise = (t, f) => {
+  const amount = Math.round(Number(f.newSalary));
+  if (!(amount > 0)) return "Enter the new salary.";
+  if (!llqaIsDay(f.effective)) return "Choose the day it starts from.";
+  if (!String(f.reason || "").trim()) return "Write the reason.";
+  const ctx = LLQAApp.ctx || {};
+  if (typeof ctx.setTeachers !== "function") return "Not ready yet — try again in a moment.";
+  const today = todayPK();
+  const entry = { from: f.effective, amount, prev: llqaSalaryOn(t, llqaAddDays(f.effective, -1)), reason: String(f.reason).trim(), by: llqaPayActor(), at: new Date().toISOString() };
+  if (amount === llqaSalaryOn(t, f.effective)) return "That is already the salary from that day.";
+  ctx.setTeachers((prev) =>
+    (prev || []).map((x) => {
+      if (!x || String(x.id) !== String(t.id)) return x;
+      const y = { ...x, salHist: [...(Array.isArray(x.salHist) ? x.salHist : []), entry] };
+      const now = llqaSalaryOn(y, today);
+      return now !== (Number(x.salary) || 0) ? { ...y, salary: now } : y;
+    }),
+  );
+  return "";
+};
+// the clock: a salary change whose day has come is put on the teacher (Teachers, the Dashboard and new months use it)
+const llqaSalaryDueRun = () => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user || !llqaReadyFor(["teachers"]) || typeof ctx.setTeachers !== "function") return null;
+  const today = todayPK();
+  const due = (ctx.teachers || []).filter((t) => t && llqaSalHist(t).length && llqaSalaryOn(t, today) !== (Number(t.salary) || 0));
+  if (!due.length) return null;
+  const ids = new Set(due.map((t) => String(t.id)));
+  ctx.setTeachers((prev) => (prev || []).map((x) => (x && ids.has(String(x.id)) && llqaSalaryOn(x, today) !== (Number(x.salary) || 0) ? { ...x, salary: llqaSalaryOn(x, today) } : x)));
+  return due;
+};
+// the clock, from the 1st: last month's pay is written for each teacher with a salary (pending) — the bonuses as
+// they stood are kept; the fines and advance installments keep following until the month is approved
+const llqaPayCloseRun = () => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user || typeof ctx.setPayrollHistory !== "function") return null;
+  const ym = llqaPrevYm(todayPK().slice(0, 7));
+  if (ym < LLQA_PAY_FROM || !llqaReadyFor(["teachers", "qcViolations", "doc:data/payrollHistory"])) return null;
+  const ps = (LLQAAtt.paths || []).filter((p) => p.slice(11, 18) === ym);
+  if (!ps.length || !llqaAttReady(ps)) return null;
+  const hist = ctx.payrollHistory || {};
+  const add = llqaPayMonthState(ym, ctx).rows.filter((x) => !((hist[x.t.id] || []).some((r) => r && r.month === ym)) && Number(x.r.baseSalary) > 0);
+  if (!add.length) return null;
+  const at = new Date().toISOString();
+  ctx.setPayrollHistory((prev) => {
+    const next = { ...(prev || {}) };
+    add.forEach((x) => {
+      const arr = Array.isArray(next[x.t.id]) ? next[x.t.id] : [];
+      if (arr.some((r) => r && r.month === ym)) return;
+      const { fineNow, ...rec } = x.r;
+      next[x.t.id] = [...arr, { ...rec, closedAt: at, closedBy: "auto" }];
+    });
+    return next;
+  });
+  return add;
+};
+// the office's reminder (once a day): the months from LLQA_PAY_FROM with salaries to approve or pay
+const llqaPayChase = (today) => {
+  const out = [];
+  for (let ym = llqaPrevYm(String(today || todayPK()).slice(0, 7)), i = 0; ym >= LLQA_PAY_FROM && i < 3; ym = llqaPrevYm(ym), i++) {
+    const s = llqaPayMonthState(ym);
+    if (s.toApprove.length || s.toPay.length) out.push(s);
+  }
+  return out.reverse();
+};
+const llqaPayWhen = (due, today) => {
+  const g = llqaDayGap(today, due);
+  return g > 1 ? "in " + g + " days" : g === 1 ? "tomorrow" : g === 0 ? "today" : -g + " day" + (g === -1 ? "" : "s") + " late";
+};
+const llqaPayToast = (list, today) => {
+  const s = list[0];
+  const extra = [s.noSalary.length && s.noSalary.length + " without a salary", s.noBank.length && s.noBank.length + " without a bank account", s.negative.length && s.negative.length + " with pay below zero", s.changed.length && s.changed.length + " with fines changed since approval"].filter(Boolean);
+  return {
+    kind: "payroll",
+    key: "payroll",
+    text: "💰 " + llqaYmName(s.ym) + " salaries — " + [s.toApprove.length && s.toApprove.length + " to approve", s.toPay.length && s.toPay.length + " to pay"].filter(Boolean).join(", ") + ". Pay day " + llqaDayMon(s.due) + " (" + llqaPayWhen(s.due, today) + ")." + (extra.length ? " Check: " + extra.join(", ") + "." : "") + (list.length > 1 ? " Also " + list.slice(1).map((x) => llqaYmName(x.ym)).join(", ") + "." : ""),
+    actions: [{ label: "Open Payroll", run: () => llqaPayOpen(s.ym) }],
+  };
+};
+// a teacher's own months (approved or paid), newest first; a salary paid in the last 10 days is news
+const llqaTeacherIdOf = (u) => String(u && (u.teacherId != null ? u.teacherId : u.id));
+const llqaMyPay = (u) => {
+  const ctx = LLQAApp.ctx || {};
+  return (((ctx.payrollHistory || {})[llqaTeacherIdOf(u)]) || []).filter((r) => r && (r.status === "paid" || r.status === "approved")).sort((a, b) => (a.month < b.month ? 1 : -1));
+};
+const llqaMyPayFresh = (u, today) => llqaMyPay(u).filter((r) => r.status === "paid" && llqaIsDay(r.paidDate) && llqaDayGap(r.paidDate, today) <= 10 && llqaDayGap(r.paidDate, today) >= 0);
+const llqaMyPayToast = (fresh) => ({
+  kind: "mypay",
+  key: "mypay",
+  text: "💰 Your " + fresh.map((r) => llqaYmName(r.month) + " salary is paid: " + llqaRs(r.net) + " (" + llqaDayMon(r.paidDate) + ")").join("; ") + ".",
+  actions: [{ label: "See the payslip", run: () => llqaOpen("mypay", { month: fresh[0].month }) }],
+});
+const LLQAMyPayWin = ({ data, onClose }) => {
+  const ctx = LLQAApp.ctx || {};
+  const u = ctx.user || {};
+  const [open, setOpen] = React.useState((data && data.month) || "");
+  const mine = llqaMyPay(u);
+  const t = (ctx.teachers || []).find((x) => x && String(x.id) === llqaTeacherIdOf(u)) || { id: llqaTeacherIdOf(u), name: u.name || "Teacher", code: "" };
+  const rec = open ? mine.find((r) => r.month === open) : null;
+  if (rec) return React.createElement(PayslipModal, { t: { ...t, pay: rec }, onClose: () => setOpen(""), selectedMonth: rec.month, appSettings: ctx.appSettings || {} });
+  return llqaShell(
+    "💰 My pay",
+    "Your salary by month: what was added and taken off. A month shows here once the office has approved it.",
+    React.createElement(
+      "div",
+      null,
+      !mine.length ? React.createElement("div", { style: { color: c.textSec, fontSize: 13, padding: "10px 0" } }, "No month approved yet.") : null,
+      mine.slice(0, 24).map((r) =>
+        React.createElement(
+          "div",
+          { key: r.month, style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, borderTop: "1px solid " + llqaAlpha(c.border, "88"), padding: "9px 0", flexWrap: "wrap" } },
+          React.createElement("b", { style: { color: c.text, fontSize: 13 } }, llqaYmName(r.month) + " · " + llqaRs(r.net)),
+          React.createElement("span", { style: { color: r.status === "paid" ? c.success : c.warn, fontSize: 12, fontWeight: 700 } }, r.status === "paid" ? "Paid " + (llqaIsDay(r.paidDate) ? llqaDayMon(r.paidDate) : "") : "Approved — to be paid"),
+          llqaMini("Payslip", () => setOpen(r.month), { key: "p" }),
+        ),
+      ),
+    ),
+    [llqaMini("Close", onClose, { key: "x", big: true, solid: true, tone: "accent" })],
+    { onClose, width: 560 },
+  );
+};
+
+// Payroll → this month: where it stands, what to check, the pay day
+const LLQAPayChecks = ({ ym, recs, appSettings }) => {
+  const ctx = LLQAApp.ctx || {};
+  const rows = (recs || []).filter((t) => t && t.pay).map((t) => ({ t, r: t.pay }));
+  const s = llqaPayStateOf(ym, rows, appSettings);
+  const noDate = (recs || []).filter((t) => t && !t.pay && llqaTeacherGone(t) && !llqaIsDay(t.leftOn));
+  const today = todayPK();
+  const names = (l) => l.slice(0, 3).map((x) => x.t.name).join(", ") + (l.length > 3 ? " and " + (l.length - 3) + " more" : "");
+  const chip = (key, txt, col) => React.createElement("span", { key, style: { fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 10, background: llqaAlpha(col, "22"), color: col } }, txt);
+  const issues = [
+    s.noSalary.length ? chip("ns", "No salary: " + names(s.noSalary), c.danger) : null,
+    s.negative.length ? chip("ng", "Pay below zero: " + names(s.negative), c.danger) : null,
+    s.changed.length ? chip("ch", "Fines changed since approval: " + names(s.changed), c.warn) : null,
+    s.noBank.length ? chip("nb", "No bank account: " + names(s.noBank), c.warn) : null,
+    noDate.length ? chip("nd", "Left, no leaving date (set it in Teachers if they worked this month): " + noDate.slice(0, 3).map((t) => t.name).join(", ") + (noDate.length > 3 ? " and " + (noDate.length - 3) + " more" : ""), c.warn) : null,
+  ].filter(Boolean);
+  const canSet = (ctx.user || {}).role === "superadmin" && typeof ctx.setAppSettings === "function";
+  const g = llqaDayGap(today, s.due);
+  return React.createElement(
+    "div",
+    { "data-llqa": "pay-checks", style: { background: c.bgCard, border: "1px solid " + llqaAlpha(c.border, "aa"), borderRadius: 10, padding: "10px 12px", marginBottom: 12, display: "flex", flexDirection: "column", gap: 8 } },
+    React.createElement(
+      "div",
+      { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap" } },
+      React.createElement(
+        "div",
+        { style: { fontSize: 13, color: c.text, fontWeight: 700 } },
+        llqaYmName(ym) + " · pay day " + llqaDayMon(s.due),
+        React.createElement("span", { style: { fontWeight: 600, color: s.toApprove.length + s.toPay.length && g < 0 ? c.danger : c.textSec } }, " (" + llqaPayWhen(s.due, today) + ")"),
+      ),
+      React.createElement(
+        "div",
+        { style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } },
+        chip("a", s.toApprove.length + " to approve", s.toApprove.length ? c.warn : c.textSec),
+        chip("p", s.toPay.length + " to pay", s.toPay.length ? c.accent : c.textSec),
+        chip("d", s.paid.length + " paid", c.success),
+        canSet ? React.createElement("span", { key: "pd", style: { fontSize: 11, color: c.textSec, marginLeft: 4 } }, "Pay day ") : null,
+        canSet
+          ? React.createElement(
+              LLQASelect,
+              { key: "pds", value: String(llqaPayDayOf(appSettings)), title: "Pay day", onChange: (e) => ctx.setAppSettings((p) => ({ ...(p || {}), payDay: Number(e.target.value) })), style: { padding: "3px 6px", fontSize: 11 } },
+              Array.from({ length: 28 }, (_, i) => React.createElement("option", { key: i + 1, value: String(i + 1) }, String(i + 1))),
+            )
+          : null,
+      ),
+    ),
+    issues.length
+      ? React.createElement("div", { style: { display: "flex", gap: 6, flexWrap: "wrap" } }, issues)
+      : React.createElement("div", { style: { fontSize: 12, color: c.success, fontWeight: 600 } }, "✓ Nothing to check: every teacher has a salary and a bank account, and no pay is below zero."),
+  );
+};
+// under a teacher's name in the month table: part of a month, an installment, a change since approval
+const llqaPayRowNote = (t) => {
+  const p = t && t.pay;
+  if (!p) return null;
+  const out = [];
+  if (p.days && p.monthDays && p.days < p.monthDays) out.push([p.days + " of " + p.monthDays + " days" + (p.from && p.from.slice(8) !== "01" ? " · joined " + llqaDayMon(p.from) : "") + (p.to && Number(p.to.slice(8)) < p.monthDays ? " · left " + llqaDayMon(p.to) : ""), c.warn]);
+  const n = Object.keys(p.inst || {}).length;
+  if (n && p.status === "pending") out.push(["Advance installment " + llqaRs(p.advance), c.accent]);
+  if (p.fineNow != null) out.push(["Fines now " + llqaRs(p.fineNow) + " (approved with " + llqaRs(p.fine) + ")", c.warn]);
+  if (Number(p.net) < 0 && p.status !== "paid") out.push(["Pay below zero — check the advance", c.danger]);
+  if (!out.length) return null;
+  return React.createElement("div", { style: { fontSize: 10, fontWeight: 600, marginTop: 2, display: "flex", flexDirection: "column", gap: 1 } }, out.map(([txt, col], i) => React.createElement("span", { key: i, style: { color: col } }, txt)));
+};
+// Payroll → Advances & Loans: each advance with what is paid back, what is left, the next installment
+const LLQAPayLoans = ({ teachers, payHistory, setPayHistory, onNew }) => {
+  const today = todayPK();
+  const loans = llqaLoans(payHistory).slice().sort((a, b) => (String(a.given || "") < String(b.given || "") ? 1 : -1));
+  const rows = loans.map((L) => ({ L, s: llqaLoanState(payHistory, L, teachers, today) }));
+  const open = rows.filter((x) => !x.s.done);
+  const remove = (L) => {
+    if (!confirm("Remove the advance of " + llqaRs(L.amount) + " to " + (L.teacher || "this teacher") + "? Nothing has been taken back from a paid month yet.")) return;
+    setPayHistory((prev) => ({ ...(prev || {}), _loans: (Array.isArray((prev || {})._loans) ? prev._loans : []).filter((x) => !x || x.id !== L.id) }));
+  };
+  const th = (t) => React.createElement("th", { key: t, style: { textAlign: "left", padding: "6px 8px", fontSize: 10, color: c.textSec, fontWeight: 700, whiteSpace: "nowrap" } }, t);
+  const td = (k, v, st) => React.createElement("td", { key: k, style: { padding: "7px 8px", fontSize: 12, color: c.text, ...(st || {}) } }, v);
+  return React.createElement(
+    "div",
+    { style: { background: c.bgCard, border: "1px solid " + llqaAlpha(c.border, "aa"), borderRadius: 10, padding: 14 } },
+    React.createElement(
+      "div",
+      { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 8 } },
+      React.createElement(
+        "div",
+        null,
+        React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: c.text } }, "Advances & Loans"),
+        React.createElement("div", { style: { fontSize: 11, color: c.textSec } }, "Each advance is taken back from the pay by itself, in its installments, from its first month. " + open.length + " still being paid back: " + llqaRs(open.reduce((s, x) => s + x.s.left, 0)) + " left."),
+      ),
+      llqaMini("+ New advance", () => onNew(null), { key: "n", solid: true, tone: "accent", disabled: !(teachers || []).length }),
+    ),
+    !rows.length
+      ? React.createElement("div", { style: { fontSize: 12, color: c.textSec, padding: "12px 0" } }, "No advances or loans yet. Give one here or with + on a teacher's row; it is taken back from their pay by itself.")
+      : React.createElement(
+          "div",
+          { style: { overflowX: "auto" } },
+          React.createElement(
+            "table",
+            { style: { width: "100%", borderCollapse: "collapse" } },
+            React.createElement("thead", null, React.createElement("tr", null, ["Teacher", "Given", "Amount", "Installments", "Paid back", "Left", "Next", "Reason", ""].map(th))),
+            React.createElement(
+              "tbody",
+              null,
+              rows.map(({ L, s }) =>
+                React.createElement(
+                  "tr",
+                  { key: L.id, style: { borderTop: "1px solid " + llqaAlpha(c.border, "66") } },
+                  td("t", s.t.name || L.teacher || "—", { fontWeight: 600 }),
+                  td("g", llqaIsDay(L.given) ? llqaDayMon(L.given) + " " + L.given.slice(0, 4) : "—"),
+                  td("a", llqaRs(L.amount)),
+                  td("i", (Number(L.installments) || 1) + " × " + llqaRs(llqaLoanPer(L)) + " from " + llqaYmName(L.start)),
+                  td("p", llqaRs(s.paid) + (s.held ? " (+" + llqaRs(s.held) + " approved)" : "")),
+                  td("l", s.done ? "✓ Paid back" : llqaRs(s.left), { color: s.done ? c.success : c.warn, fontWeight: 700 }),
+                  td("n", s.done || !s.next ? "—" : llqaYmName(s.next) + ": " + llqaRs(s.nextAmt)),
+                  td("r", (L.reason || "—") + (L.by ? " · by " + L.by : ""), { color: c.textSec, fontSize: 11 }),
+                  td("x", !s.paid && !s.held ? llqaMini("Remove", () => remove(L), { key: "rm", tone: "danger" }) : null),
+                ),
+              ),
+            ),
+          ),
+        ),
+  );
+};
+// a new advance: the teacher, the amount, the installments, the first month it is taken from, the reason
+const LLQAPayAdvanceWin = ({ teachers, t, onSave, onClose }) => {
+  const list = (teachers || []).filter((x) => x && !llqaTeacherGone(x));
+  const [tid, setTid] = React.useState(t ? String(t.id) : "");
+  const [amount, setAmount] = React.useState("");
+  const [n, setN] = React.useState("1");
+  const [start, setStart] = React.useState(todayPK().slice(0, 7));
+  const [reason, setReason] = React.useState("");
+  const [err, setErr] = React.useState("");
+  const box = { padding: "7px 10px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 12, width: "100%", boxSizing: "border-box" };
+  const lab = (x) => React.createElement("div", { style: { color: c.textSec, fontSize: 11, fontWeight: 600, margin: "10px 0 4px" } }, x);
+  const cur = todayPK().slice(0, 7);
+  const months = [0, 1, 2, 3].map((i) => llqaMonthAdd(cur, i));
+  const amt = Math.round(Number(amount));
+  const per = amt > 0 ? Math.ceil(amt / Math.max(1, Number(n) || 1)) : 0;
+  const save = () => {
+    const who = list.find((x) => String(x.id) === tid);
+    if (!who) return setErr("Choose the teacher.");
+    if (!(amt > 0)) return setErr("Enter the amount.");
+    if (!String(reason).trim()) return setErr("Write the reason.");
+    onSave({ id: "ln" + Date.now().toString(36), teacherId: who.id, teacher: who.name, amount: amt, installments: Math.max(1, Number(n) || 1), start, given: todayPK(), reason: String(reason).trim(), by: llqaPayActor(), at: new Date().toISOString() });
+  };
+  return llqaShell(
+    "Give a salary advance",
+    "It is taken back from the teacher's pay by itself: the installments from the month you choose. If they leave, the rest is taken from their last pay.",
+    React.createElement(
+      "div",
+      null,
+      lab("Teacher"),
+      React.createElement(LLQASelect, { value: tid, title: "Teacher", onChange: (e) => setTid(e.target.value), style: box }, [React.createElement("option", { key: "", value: "" }, "Choose the teacher"), ...list.map((x) => React.createElement("option", { key: x.id, value: String(x.id) }, x.name + (x.code ? " (" + x.code + ")" : "")))]),
+      lab("Amount (Rs)"),
+      React.createElement("input", { type: "number", min: 0, value: amount, "aria-label": "Advance amount", placeholder: "e.g. 10000", onChange: (e) => setAmount(e.target.value), style: box }),
+      lab("Paid back in"),
+      React.createElement(LLQASelect, { value: n, title: "Installments", onChange: (e) => setN(e.target.value), style: box }, [1, 2, 3, 4, 5, 6, 8, 10, 12].map((k) => React.createElement("option", { key: k, value: String(k) }, k === 1 ? "1 month (all at once)" : k + " monthly installments"))),
+      lab("Taken from the pay of"),
+      React.createElement(LLQASelect, { value: start, title: "First month", onChange: (e) => setStart(e.target.value), style: box }, months.map((m) => React.createElement("option", { key: m, value: m }, llqaYmName(m) + (m === cur ? " (this month)" : "")))),
+      lab("Reason"),
+      React.createElement("input", { value: reason, "aria-label": "Reason", placeholder: "e.g. medical, family need", onChange: (e) => setReason(e.target.value), style: box }),
+      per ? React.createElement("div", { style: { marginTop: 10, fontSize: 12, color: c.textSec } }, Number(n) > 1 ? n + " × " + llqaRs(per) + " (the last one what is left), from " + llqaYmName(start) + "." : llqaRs(amt) + " from the " + llqaYmName(start) + " pay.") : null,
+      err ? React.createElement("div", { style: { marginTop: 8, fontSize: 12, color: c.danger, fontWeight: 700 } }, err) : null,
+    ),
+    [llqaMini("Cancel", onClose, { key: "c", big: true }), llqaMini("Give the advance", save, { key: "s", big: true, solid: true, tone: "accent" })],
+    { onClose, width: 520 },
+  );
+};
+
 const CC = [
   "#4a7aff",
   "#10b981",
