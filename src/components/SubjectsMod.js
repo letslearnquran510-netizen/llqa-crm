@@ -10,7 +10,7 @@ const SubjectsMod = ({
         sno: i + 1,
         subjects: t.subjects || ALL_SUBJECTS,
         grades: t.grades || "", // v70: a grade range is not set in HR
-        rating: Number(t.rating != null ? t.rating : t.perfRating) || 0, // v70: HR keeps it as perfRating
+        rating: Number(t.perfRating != null ? t.perfRating : t.rating) || 0, // v74: HR's rating first (an old copy was saved on the teacher) // v70: HR keeps it as perfRating
         mon: {},
         tue: {},
         wed: {},
@@ -91,7 +91,7 @@ const SubjectsMod = ({
             }
           }
         }
-        return { ...updated, _ttSchedule: newTt };
+        return { ...at, _ttSchedule: newTt }; // v74: only the Timetable is saved (the screen's own fields went into the teacher)
       }),
     );
   };
@@ -167,8 +167,8 @@ const SubjectsMod = ({
         }
       });
     });
-    const totalPossible = teachers.length * 7 * 48;
-    totalF = totalPossible - totalB;
+    const totalPossible = teachers.reduce((a, t) => a + llqaSubjCap(t).avail, 0); // v74
+    totalF = teachers.reduce((a, t) => a + llqaSubjCap(t).free, 0);
     return {
       booked: totalB,
       free: totalF,
@@ -182,34 +182,8 @@ const SubjectsMod = ({
         .slice(0, 8),
     };
   }, [teachers]);
-  const teacherLoad = (t) => {
-    let b = 0;
-    ["mon", "tue", "wed", "thu", "fri", "sat", "sun"].forEach((d) => {
-      for (let i = 4; i < 52; i++)
-        if (t[d] && t[d][i] && typeof t[d][i] === "object") b++;
-    });
-    return {
-      booked: b,
-      free: 336 - b,
-      util: Math.round((b / 336) * 100),
-    };
-  };
-  const freeSlotsForSubject = (subj, day = "mon") => {
-    const result = [];
-    teachers.forEach((t) => {
-      if (subj === "all" || t.subjects.includes(subj)) {
-        for (let i = 4; i < 52; i++)
-          if (!t[day][i])
-            result.push({
-              teacher: t.name,
-              code: t.code,
-              time: SUBJ_SLOTS[i - 4],
-              slotIdx: i,
-            });
-      }
-    });
-    return result.slice(0, 30);
-  };
+  const teacherLoad = (t) => llqaSubjCap(t); // v74: the teacher's office hours on working days (was 24 hours × 7 days)
+  const freeSlotsForSubject = (subj, day = "mon") => llqaSubjFree(teachers, subj, day); // v74: office hours, least busy first, family times
   const curT = teachers[teacherIdx];
   const [clipboard, setClipboard] = useState(null);
   const copyCell = (cell) => {
@@ -305,6 +279,17 @@ const SubjectsMod = ({
     });
   };
   const saveAssign = () => {
+    // v74: a student from Students is booked by the Timetable rules, so the class is theirs
+    if (f.sid && !f.editing) {
+      const err = llqaSubjBook(f);
+      if (err) {
+        alert(err);
+        return;
+      }
+      setModal(null);
+      setCellModal(null);
+      return;
+    }
     if (!f.s || !f.sub) return;
     setTeachers(
       teachers.map((t) =>
@@ -581,7 +566,7 @@ const SubjectsMod = ({
                 fontWeight: 600, // v68: readable (was faded to 0.7)
               },
             },
-            k === "weekday" ? "08:00-07:30" : "09:00-16:30",
+            k === "weekday" ? "Mon–Fri" : "Sat–Sun", // v74: each teacher's own hours apply
           ),
         ),
       ),
@@ -2148,6 +2133,7 @@ const SubjectsMod = ({
                   },
                 },
                 fs.time,
+                fs.fam ? React.createElement("div", { style: { color: c.textSec, fontSize: 10, fontWeight: 500, marginTop: 2 } }, fs.fam) : null,
               ),
               React.createElement(
                 "div",
@@ -2171,6 +2157,7 @@ const SubjectsMod = ({
                 },
                 "Code ",
                 fs.code,
+                fs.note ? " · " + fs.note : "",
               ),
               React.createElement(
                 "button",
@@ -3419,6 +3406,7 @@ const SubjectsMod = ({
                 gap: "0 14px",
               },
             },
+            !f.editing ? React.createElement("div", { style: { gridColumn: "1 / -1" } }, llqaSubjLink(f, setF)) : null, // v74
             React.createElement(Inp, {
               label: "Student Name *",
               value: f.s || "",

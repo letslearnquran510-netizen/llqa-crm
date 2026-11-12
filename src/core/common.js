@@ -5739,7 +5739,7 @@ const LLQAUnloggedWin = ({ onClose }) => {
       !isT && groups.length > 1
         ? React.createElement(
             LLQASelect,
-            { value: tf, "aria-label": "Teacher", onChange: (e) => setTf(e.target.value), style: { padding: "7px 10px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 11, marginBottom: 8 } },
+            { value: tf, "aria-label": "Teacher", title: "Teacher", onChange: (e) => setTf(e.target.value), style: { padding: "7px 10px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 11, marginBottom: 8 } },
             [React.createElement("option", { key: "all", value: "all" }, "All teachers (" + all.length + ")"), ...groups.map((g) => React.createElement("option", { key: g.name, value: g.name }, g.name + " (" + g.items.length + ")"))],
           )
         : null,
@@ -5779,6 +5779,547 @@ const llqaUnlogBanner = (u) => {
       llqaMini(u.role === "teacher" ? "Log them" : "See the list", () => llqaOpen("unlogged", {}), { key: "ul", tone: "accent" }),
     ),
     { key: "unlog", border: llqaAlpha(c.danger, "88") },
+  );
+};
+
+/* ============================================================
+   v74: Class Shifting — every move recorded by itself, past days as they were booked, moves through the booking
+   engine, handover (SPS) and feedback followed up; Subjects — office hours, ranked free slots, linked students
+   ============================================================ */
+// the reason (and SPS / feedback) chosen in Class Shifting for the next move of a student (kept 30 minutes)
+const LLQAShiftNext = (() => {
+  const m = new Map();
+  return {
+    set: (sid, v) => m.set(String(sid), { ...(v || {}), until: Date.now() + 30 * 60000 }),
+    take: (sid) => {
+      const k = String(sid);
+      const v = m.get(k);
+      if (!v) return null;
+      m.delete(k);
+      return v.until >= Date.now() ? v : null;
+    },
+    peek: (sid) => m.get(String(sid)) || null,
+  };
+})();
+const llqaRowsSafe = (s) => {
+  try {
+    return s ? llqaRowsOf(s) : [];
+  } catch (e) {
+    return [];
+  }
+};
+const llqaRowFam = (r) => String(r.teacher || "") + "|" + r.day + "|" + String(r.time || "");
+const llqaRowPk = (r) => llqaRowFam(r) + "|" + String(r.pktSlot || "");
+// a class of the student's list as a Timetable cell: { teacher, teacherId, day (the Timetable row), slot (Pakistan) }
+const llqaRowCell = (s, r, teachers) => {
+  let slot = r.pktSlot || "";
+  if (!slot) {
+    try {
+      const B = LLQABooking;
+      const tz = B.timezoneFor(s.country, s.state) || s.tz || "";
+      const o = tz ? B.pktOptions(r.day, r.time, tz) : [];
+      slot = o && o[0] ? o[0].slot : "";
+    } catch (e) {}
+  }
+  if (!slot || !r.day) return null;
+  const t = (teachers || []).find((x) => x && x.name === r.teacher);
+  return { teacher: r.teacher || "", teacherId: t ? String(t.id) : "", day: r.day, slot };
+};
+// the classes before a change, kept until yesterday (a first booking keeps nothing; the day's first change counts)
+const llqaClsHistOne = (p, n, until, teachers) => {
+  const a = llqaRowsSafe(p);
+  if (!a.length) return null;
+  const k = (rows) => rows.map(llqaRowPk).sort().join(",");
+  if (k(a) === k(llqaRowsSafe(n))) return null;
+  return { until, cells: a.map((r) => llqaRowCell(p, r, teachers)).filter(Boolean) };
+};
+// a move: classes gone and classes added (only added or only removed is not a shift)
+const llqaShiftFrom = (p, n) => {
+  const a = llqaRowsSafe(p), b = llqaRowsSafe(n);
+  if (!a.length || !b.length) return null;
+  const ka = new Set(a.map(llqaRowFam)), kb = new Set(b.map(llqaRowFam));
+  const gone = a.filter((r) => !kb.has(llqaRowFam(r))), added = b.filter((r) => !ka.has(llqaRowFam(r)));
+  if (!gone.length || !added.length) return null;
+  const tA = [...new Set(gone.map((r) => r.teacher || ""))], tB = [...new Set(added.map((r) => r.teacher || ""))];
+  const teacherCh = tA.length !== tB.length || tA.some((x) => !tB.includes(x));
+  const dt = (rows) => rows.map((r) => r.day + "|" + r.time).sort().join(",");
+  const timeCh = dt(gone) !== dt(added);
+  return { gone, added, tA, tB, reason: teacherCh && timeCh ? "Teacher and time change" : teacherCh ? "Teacher change" : "Time change" };
+};
+const llqaShiftSeen = new Map();
+const llqaShiftRec = (n, d, next, u, k) => {
+  const ctx = LLQAApp.ctx || {};
+  const T = (nm) => (ctx.teachers || []).find((t) => t && t.name === nm) || {};
+  const lbl = (rows) => rows.map((r) => r.day + "|" + r.time).join(", ");
+  const nx = next || {};
+  return {
+    id: Date.now() * 10 + k,
+    date: nx.date && nx.date <= todayPK() ? nx.date : todayPK(),
+    studentId: n.id,
+    student: n.name || "",
+    lead: n.parent || "",
+    fromT: d.tA.join(", "),
+    fromTime: lbl(d.gone),
+    fromLead: T(d.tA[0]).teamLead || "",
+    toT: d.tB.join(", "),
+    toTime: lbl(d.added),
+    toLead: T(d.tB[0]).teamLead || "",
+    reason: nx.reason || d.reason,
+    notes: nx.notes || "",
+    sps: nx.sps === "Conveyed" ? "yes" : nx.sps === "Not Required" ? "na" : "no",
+    feedback: nx.feedback && nx.feedback !== "" ? nx.feedback : "Pending",
+    auto: true,
+    by: (u && u.name) || "",
+    at: new Date().toISOString(),
+    from: d.gone.map((r) => ({ day: r.day, time: r.time, teacher: r.teacher || "" })),
+    to: d.added.map((r) => ({ day: r.day, time: r.time, teacher: r.teacher || "" })),
+    bulkId: nx.bulkId || "",
+  };
+};
+// Every change to the students list: leaves that are over (v73.1), the classes before a change (clsHist), and a shift
+// record for every move of a student's classes — from any screen (Change classes, the Timetable, Class Shifting, …).
+const llqaStuChanged = (prev, next) => {
+  const out = llqaLvHistApply(prev, next);
+  if (!Array.isArray(prev) || !Array.isArray(out) || prev === out) return out;
+  const byId = new Map(prev.map((p) => [String(p && p.id), p]));
+  const ctx = LLQAApp.ctx || {};
+  const until = llqaAddDays(todayPK(), -1);
+  const moves = [];
+  let changed = false;
+  const res = out.map((n) => {
+    if (!n) return n;
+    const p = byId.get(String(n.id));
+    if (!p || p === n) return n;
+    let x = n;
+    try {
+      const h = llqaClsHistOne(p, n, until, ctx.teachers);
+      if (h) {
+        const base = Array.isArray(n.clsHist) ? n.clsHist : Array.isArray(p.clsHist) ? p.clsHist : [];
+        if (!base.some((e) => e && e.until === until)) {
+          x = { ...n, clsHist: [...base.filter((e) => e && e.until >= llqaAddDays(until, -120)).slice(-11), h] };
+          changed = true;
+        }
+      }
+      const d = llqaShiftFrom(p, n);
+      if (d) moves.push({ n: x, d });
+    } catch (e) {}
+    return x;
+  });
+  if (moves.length && ctx.user && typeof ctx.setShifts === "function") {
+    const now = Date.now();
+    llqaShiftSeen.forEach((t, k) => {
+      if (now - t > 10000) llqaShiftSeen.delete(k);
+    });
+    const recs = [];
+    moves.forEach(({ n, d }, k) => {
+      const sig = n.id + "|" + d.gone.map(llqaRowFam).join(",") + ">" + d.added.map(llqaRowFam).join(",");
+      if (llqaShiftSeen.has(sig)) return;
+      llqaShiftSeen.set(sig, now);
+      recs.push(llqaShiftRec(n, d, LLQAShiftNext.take(n.id), ctx.user, k));
+    });
+    if (recs.length) ctx.setShifts((pv) => {
+      const list = pv || [];
+      return [...recs.map((r, i) => ({ ...r, sno: list.length + recs.length - i })), ...list];
+    });
+  }
+  return changed ? res : out;
+};
+// On a past day, a student whose classes changed since has the classes booked then: Map sid → { stu, cells }
+const llqaClsHistFor = (date, students, teachers) => {
+  const out = new Map();
+  let byKey = null;
+  (students || []).forEach((s) => {
+    const hs = s && Array.isArray(s.clsHist) ? s.clsHist : null;
+    if (!hs || !hs.length) return;
+    const h = hs.find((x) => x && x.until >= date);
+    if (!h) return;
+    const B = LLQABooking;
+    if (!byKey) {
+      byKey = new Map();
+      llqaBookedList(teachers).forEach((c) => byKey.set(c.teacherId + "|" + c.day + "|" + c.slot, c));
+    }
+    const tz = B.timezoneFor(s.country, s.state) || s.tz || "";
+    out.set(String(s.id), {
+      stu: s,
+      cells: (h.cells || []).map((x) => {
+        const t = x.teacherId ? null : (teachers || []).find((y) => y && y.name === x.teacher);
+        const tid = x.teacherId || (t ? String(t.id) : "");
+        const cur = byKey.get(tid + "|" + x.day + "|" + x.slot);
+        const same = !!cur && !!cur.cell && (String(cur.cell.sid) === String(s.id) || B.sameStudent(cur.cell, s));
+        return { teacherId: tid, teacher: x.teacher, day: x.day, slot: x.slot, cell: same ? cur.cell : { s: s.name, sid: s.id, country: s.country, state: s.state, c: s.course || "" }, tz: same ? cur.tz : tz };
+      }),
+    });
+  });
+  return out;
+};
+
+/* ---------- moves through the booking engine ---------- */
+const llqaFieldsOf = (items, s, tz) => ({
+  schedule: items.map((it) => ({ day: it.day, time: it.time, teacher: it.teacher, pktDay: it.pktDay, pktSlot: it.slot })),
+  time: items.map((it) => it.day + "|" + it.time).join(", "),
+  teacher: items.length ? items[0].teacher : s.teacher,
+  hoursPerWeek: items.length ? String(items.length * 0.5) : "",
+  tz: tz || s.tz || "",
+});
+// a student's classes with one teacher go to another at the family's same times → { teachers, fields } or { error }
+const llqaMoveTeacher = (s, fromName, to, teachers) => {
+  const B = LLQABooking;
+  const rows = llqaRowsSafe(s);
+  if (!rows.some((r) => r.teacher === fromName)) return { error: "no classes with " + fromName };
+  const isQ = s.course !== "Subject";
+  const want = rows.map((r) => ({ day: r.day, time: r.time, teacher: r.teacher === fromName ? to.name : r.teacher }));
+  const pl = B.plan({ rows: want, country: s.country, state: s.state, teachers, isQuran: isQ, master: isQ ? to.name : "", own: s });
+  if (pl.problems.length) return { error: pl.problems.join("; ") };
+  const res = B.rebook(teachers, B.studentCells(teachers, s), pl.items, { ...s, sub: isQ ? "" : llqaSubjects(s) || "Subject" });
+  if (!res.ok) return { error: res.problems.join("; ") };
+  return { teachers: res.teachers, fields: llqaFieldsOf(pl.items, s, pl.tz) };
+};
+// Bulk: every student of a teacher (a teacher leaving) — each through the booking engine, recorded with the reason.
+const llqaBulkMove = (fromName, toName, opt) => {
+  const ctx = LLQAApp.ctx;
+  const B = LLQABooking;
+  const o = opt || {};
+  const from = (ctx.teachers || []).find((t) => t && t.name === fromName);
+  const to = (ctx.teachers || []).find((t) => t && t.name === toName);
+  if (!from || !to) {
+    alert("Pick both teachers.");
+    return false;
+  }
+  const kids = new Map();
+  const loose = [];
+  B.eachBooked([from], (c) => {
+    const s = llqaCellStudent(c.cell);
+    if (s) kids.set(String(s.id), s);
+    else loose.push(c);
+  });
+  if (!kids.size) {
+    alert(fromName + " has no student classes to move." + (loose.length ? "\n\n" + loose.length + " booking(s) are names only (not a student in Students) — move them by hand." : ""));
+    return false;
+  }
+  if (
+    !confirm(
+      "Move the classes of " + kids.size + " student" + (kids.size === 1 ? "" : "s") + " from " + fromName + " to " + toName + ", at the families' same times?\n\n" +
+        "• Each student's classes are booked with " + toName + " by the Timetable rules (time zones, nothing double-booked).\n" +
+        "• A class " + toName + " can't take is listed — that student stays with " + fromName + " until moved with Change classes.\n" +
+        "• Every move is recorded in Class Shifting with the reason; " + toName + " gets each student's handover.",
+    )
+  )
+    return false;
+  const before = ctx.teachers || [];
+  let teachers = before;
+  const fields = new Map();
+  const moved = [], failed = [];
+  kids.forEach((s) => {
+    const r = llqaMoveTeacher(s, fromName, to, teachers);
+    if (r.error) failed.push({ s, why: r.error });
+    else {
+      teachers = r.teachers;
+      fields.set(String(s.id), r.fields);
+      moved.push(s);
+    }
+  });
+  if (moved.length) {
+    const bulkId = "bulk-" + Date.now();
+    moved.forEach((s) => LLQAShiftNext.set(s.id, { reason: o.reason, sps: o.sps, feedback: o.feedback, date: o.date, bulkId }));
+    const old = new Map(before.map((t) => [String(t.id), t]));
+    const ch = new Map(teachers.filter((t) => t && old.get(String(t.id)) !== t).map((t) => [String(t.id), t]));
+    ctx.setTeachers((prev) => (prev || []).map((t) => (t && ch.has(String(t.id)) ? ch.get(String(t.id)) : t)));
+    ctx.setStudents((prev) => (prev || []).map((x) => (x && fields.has(String(x.id)) ? { ...x, ...fields.get(String(x.id)) } : x)));
+    if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster(moved.map((s) => ({ ...s, ...fields.get(String(s.id)) })));
+    if (typeof llqaWaitCheck === "function") llqaWaitCheck(before, teachers);
+  }
+  alert(
+    (moved.length ? "✓ " + moved.length + " student" + (moved.length === 1 ? "" : "s") + " moved to " + toName + ": " + moved.map((s) => s.name).join(", ") + "." : "No student could be moved.") +
+      (failed.length ? "\n\n⚠ Still with " + fromName + " (" + failed.length + "):\n" + failed.map((x) => "• " + x.s.name + " — " + x.why).join("\n") + "\n\nMove them with Change classes (another teacher or time)." : "") +
+      (loose.length ? "\n\n" + loose.length + " booking(s) are names only — move them by hand." : ""),
+  );
+  return true;
+};
+// Class Shifting → New shift: the student and the reason, then Change classes (the booking engine) does the move
+const LLQAShiftNewWin = ({ onClose }) => {
+  const ctx = LLQAApp.ctx || {};
+  const all = (ctx.students || []).filter((s) => s && s.status !== "quit" && llqaRowsSafe(s).length).sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  const [q, setQ] = React.useState("");
+  const [sid, setSid] = React.useState("");
+  const [reason, setReason] = React.useState("");
+  const [notes, setNotes] = React.useState("");
+  const shown = (q ? all.filter((x) => String(x.name).toLowerCase().includes(q.toLowerCase())) : all).slice(0, 80);
+  const s = sid ? all.find((x) => String(x.id) === sid) : null;
+  const box = { padding: "7px 10px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 12, width: "100%", boxSizing: "border-box" };
+  const lab = (t) => React.createElement("div", { style: { color: c.textSec, fontSize: 11, fontWeight: 600, margin: "10px 0 4px" } }, t);
+  const go = () => {
+    if (!s || !reason) return;
+    LLQAShiftNext.set(s.id, { reason, notes });
+    llqaOpen("reschedule", { studentId: s.id });
+  };
+  return llqaShell(
+    "⇄ New shift",
+    "Pick the student and the reason. The next window moves their classes (teacher, day or time) by the Timetable rules — nothing is double-booked — and the move is recorded here by itself.",
+    React.createElement(
+      "div",
+      null,
+      lab("Student"),
+      React.createElement("input", { value: q, "aria-label": "Search students", placeholder: "Search by name…", onChange: (e) => setQ(e.target.value), style: { ...box, marginBottom: 6 } }),
+      React.createElement(
+        LLQASelect,
+        { value: sid, "aria-label": "Student", title: "Student", onChange: (e) => setSid(e.target.value), style: box },
+        [React.createElement("option", { key: "", value: "" }, shown.length ? "Choose a student (" + shown.length + ")" : "No student with classes"), ...shown.map((x) => React.createElement("option", { key: x.id, value: String(x.id) }, x.name + " — " + (x.teacher || "")))],
+      ),
+      s
+        ? React.createElement(
+            "div",
+            { style: { background: c.bgDeep, borderRadius: 8, padding: "8px 10px", fontSize: 11, color: c.textSec, marginTop: 8 } },
+            React.createElement("b", { style: { color: c.text } }, "Now: "),
+            llqaClasses(s).map((x) => x.day + " " + x.local + " (" + x.pkt + ") with " + x.teacher).join(" · ") || "—",
+          )
+        : null,
+      lab("Reason"),
+      React.createElement(
+        LLQASelect,
+        { value: reason, "aria-label": "Reason", title: "Reason", onChange: (e) => setReason(e.target.value), style: box },
+        [React.createElement("option", { key: "", value: "" }, "Choose the reason"), ...SHIFT_REASONS.map((r) => React.createElement("option", { key: r, value: r }, r))],
+      ),
+      lab("Note (optional)"),
+      React.createElement("input", { value: notes, "aria-label": "Note", placeholder: "e.g. the family asked for a female teacher", onChange: (e) => setNotes(e.target.value), style: box }),
+    ),
+    [llqaMini("Cancel", onClose, { key: "x", big: true }), llqaMini("Next: the new teacher / time →", go, { key: "go", big: true, solid: true, tone: "accent", disabled: !s || !reason })],
+    { onClose, width: 560 },
+  );
+};
+
+/* ---------- the handover (SPS) and the family's feedback ---------- */
+const llqaTeacherNameOf = (u) => {
+  const ctx = LLQAApp.ctx || {};
+  const id = String(u.teacherId != null ? u.teacherId : u.id);
+  const t = (ctx.teachers || []).find((x) => x && String(x.id) === id);
+  return t ? t.name : "";
+};
+// moves of the last 30 days whose handover hasn't been passed on: a teacher's own (they are the new teacher); the office's all
+const llqaHandovers = (u) => {
+  const ctx = LLQAApp.ctx || {};
+  if (!u || u.role === "parent") return [];
+  const isT = u.role === "teacher";
+  const me = isT ? llqaTeacherNameOf(u) : "";
+  if (isT && !me) return [];
+  if (!isT && !(llqaCanOpen("students") || llqaCanOpen("shifting"))) return [];
+  const since = llqaAddDays(todayPK(), -30);
+  return (ctx.shifts || [])
+    .filter((r) => r && r.studentId != null && r.sps !== "yes" && r.sps !== "na" && String(r.date || "") >= since && (!isT || String(r.toT || "").split(", ").includes(me)))
+    .map((r) => ({ r, stu: llqaFindStudent(r.studentId) }))
+    .filter((x) => x.stu && x.stu.status !== "quit")
+    .sort((a, b) => String(b.r.date).localeCompare(String(a.r.date)));
+};
+// what the new teacher needs: the classes, the page reached, the last lesson, attendance, notes
+const llqaHandoverText = (r, s) => {
+  const st = llqaStuStats(s);
+  const L = [];
+  L.push(s.name + (s.age ? " (" + s.age + ")" : "") + " — " + (s.course || "Quran") + (r.fromT ? ", until now with " + r.fromT : ""));
+  const cls = llqaClasses(s).map((x) => x.day + " " + x.pkt).join(", ");
+  if (cls) L.push("Classes (Pakistan time): " + cls);
+  if (st.reach) L.push("Reached: " + llqaReachText(st.reach));
+  const lf = st.lastFull;
+  if (lf) L.push("Last lesson (" + llqaDateLabel(lf.date) + "): " + String(lf.lesson).trim() + (lf.homework ? " · Homework: " + lf.homework : "") + (lf.behavior ? " · Behaviour: " + lf.behavior : ""));
+  L.push("Attendance (30 days): " + llqaPctText(st.last30.pct) + (st.last30.absent ? " · " + st.last30.absent + " absent" : ""));
+  if (r.reason) L.push("Why the move: " + r.reason + (r.notes ? " — " + r.notes : ""));
+  if (s.notes) L.push("Notes: " + String(s.notes).slice(0, 300));
+  return L.join("\n");
+};
+const llqaSpsSet = (id, val, how) => {
+  const ctx = LLQAApp.ctx || {};
+  const u = ctx.user || {};
+  if (typeof ctx.setShifts === "function")
+    ctx.setShifts((prev) => (prev || []).map((r) => (r && String(r.id) === String(id) ? { ...r, sps: val, spsAt: new Date().toISOString(), spsBy: u.name || "", spsHow: how || "" } : r)));
+};
+const llqaHandoverWa = (x) => {
+  const ctx = LLQAApp.ctx || {};
+  const nm = String(x.r.toT || "").split(", ")[0];
+  const t = (ctx.teachers || []).find((y) => y && y.name === nm);
+  const digits = t && t.phone ? llqaPhone(t.phone, "Pakistan") : "";
+  if (!digits) return llqaToast({ kind: "info", ttl: 7000, text: "No phone number for " + nm + " — add it in Teachers." });
+  try {
+    window.open("https://wa.me/" + digits + "?text=" + encodeURIComponent("Assalamu alaikum " + nm + ", " + x.stu.name + " is now in your classes.\n\n" + llqaHandoverText(x.r, x.stu) + "\n\nJazakAllah khair."), "_blank", "noopener");
+  } catch (e) {}
+  llqaSpsSet(x.r.id, "yes", "WhatsApp");
+};
+const llqaHandoverToast = (hs, u) => {
+  const isT = u && u.role === "teacher";
+  const n = hs.length;
+  return {
+    kind: "handover",
+    key: "handover",
+    text: isT
+      ? "📋 " + (n === 1 ? "A student is" : n + " students are") + " new in your classes: " + hs.slice(0, 3).map((x) => x.stu.name + " (from " + (x.r.fromT || "—") + ")").join(", ") + (n > 3 ? " and " + (n - 3) + " more" : "") + ". Read the handover before the class."
+      : "📋 " + n + " handover" + (n === 1 ? "" : "s") + " (SPS) not passed on to the new teacher yet — " + hs.slice(0, 3).map((x) => x.stu.name + " → " + x.r.toT).join(", ") + (n > 3 ? " …" : "") + ".",
+    actions: [{ label: isT ? "Read" : "See the list", run: () => llqaOpen("handover", {}) }],
+  };
+};
+const LLQAHandoverWin = ({ onClose }) => {
+  const ctx = LLQAApp.ctx || {};
+  const u = ctx.user || {};
+  const isT = u.role === "teacher";
+  const hs = llqaHandovers(u);
+  return llqaShell(
+    "📋 Handover (SPS)",
+    isT ? "Students who moved to your classes: what they have learnt so far. “Got it” tells the office." : "Moves whose handover isn't passed on to the new teacher yet (the last 30 days). The new teacher also sees it when they sign in.",
+    React.createElement(
+      "div",
+      null,
+      !hs.length ? React.createElement("div", { style: { color: c.success, fontSize: 13, padding: "10px 0", fontWeight: 700 } }, "✓ Every handover is passed on.") : null,
+      hs.slice(0, 40).map((x) =>
+        React.createElement(
+          "div",
+          { key: x.r.id, style: { borderTop: "1px solid " + llqaAlpha(c.border, "88"), padding: "10px 0" } },
+          React.createElement(
+            "div",
+            { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" } },
+            React.createElement("b", { style: { color: c.text, fontSize: 13 } }, x.stu.name + " · " + (x.r.fromT || "—") + " → " + (x.r.toT || "—") + " · " + llqaDateLabel(x.r.date)),
+            React.createElement(
+              "div",
+              { style: { display: "flex", gap: 6 } },
+              isT
+                ? llqaMini("✓ Got it", () => llqaSpsSet(x.r.id, "yes", "read"), { key: "ok", tone: "success" })
+                : [
+                    llqaMini("WhatsApp to " + String(x.r.toT || "").split(", ")[0], () => llqaHandoverWa(x), { key: "wa", tone: "success" }),
+                    llqaMini("✓ Passed on", () => llqaSpsSet(x.r.id, "yes", "office"), { key: "ok" }),
+                    llqaMini("Not needed", () => llqaSpsSet(x.r.id, "na", "office"), { key: "na" }),
+                  ],
+            ),
+          ),
+          React.createElement("div", { style: { whiteSpace: "pre-wrap", color: c.textSec, fontSize: 12, marginTop: 6, lineHeight: 1.5 } }, llqaHandoverText(x.r, x.stu)),
+        ),
+      ),
+    ),
+    [llqaMini("Close", onClose, { key: "x", big: true, solid: true, tone: "accent" })],
+    { onClose, width: 640 },
+  );
+};
+// a week after a move, the family is asked how the classes with the new teacher are going (7 – 21 days after)
+const llqaShiftFb = (s, today) => {
+  const list = ((LLQAApp.ctx && LLQAApp.ctx.shifts) || []).filter((r) => r && String(r.studentId) === String(s.id) && (!r.feedback || r.feedback === "Pending") && r.toT);
+  if (!list.length) return null;
+  const r = list.sort((a, b) => String(b.date).localeCompare(String(a.date)))[0];
+  const d = llqaDays(r.date, today);
+  return d >= 7 && d <= 21 ? r : null;
+};
+
+/* ---------- Subjects: office hours, ranked free slots, linked students ---------- */
+const LLQA_SUBJ_DAYS = { mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6, sun: 0 };
+const llqaSubjSet = () => (LLQAApp.ctx && LLQAApp.ctx.appSettings) || {};
+// the teacher's working days (Weekend shift: Saturday and Sunday; Settings decide Saturday / Sunday for the others)
+const llqaSubjDays = (t) => {
+  const s = llqaSubjSet();
+  return Object.keys(LLQA_SUBJ_DAYS).filter((d) => {
+    const wd = LLQA_SUBJ_DAYS[d];
+    if (llqaShiftOf(t) === "Weekend") return wd === 0 || wd === 6;
+    if (wd === 6) return s.workingSat !== false;
+    if (wd === 0) return s.workingSun !== false;
+    return true;
+  });
+};
+const llqaSubjInHours = (t) => {
+  const o = llqaOffice(t, llqaSubjSet());
+  const len = llqaShiftLen(o);
+  return (hm) => {
+    const d = llqaAfterStart(o, hm);
+    return d != null && d < len;
+  };
+};
+// a week of the teacher: half-hours in office hours on working days, booked, free, used %
+const llqaSubjCap = (t) => {
+  const days = llqaSubjDays(t);
+  const ok = llqaSubjInHours(t);
+  const hours = SUBJ_SLOTS.filter(ok).length;
+  const avail = days.length * hours;
+  let booked = 0, inside = 0;
+  Object.keys(LLQA_SUBJ_DAYS).forEach((d) => {
+    for (let i = 4; i < 52; i++) {
+      const cell = t[d] ? t[d][i] : null;
+      if (cell && typeof cell === "object") {
+        booked++;
+        if (days.includes(d) && ok(SUBJ_SLOTS[i - 4])) inside++;
+      }
+    }
+  });
+  return { avail, booked, free: Math.max(0, avail - inside), util: avail ? Math.round((booked / avail) * 100) : 0, days, hours };
+};
+// the family's time for a Pakistan half-hour on that weekday (New York and London)
+const llqaSubjFam = (day, hm) => {
+  const B = LLQABooking;
+  const wd = LLQA_SUBJ_DAYS[day];
+  let d = todayPK();
+  for (let k = 0; k < 7 && new Date(d + "T12:00:00Z").getUTCDay() !== wd; k++) d = llqaAddDays(d, 1);
+  const ref = new Date(d + "T07:00:00Z");
+  const pk = B.offsetAt("Asia/Karachi", ref);
+  const m = llqaHm2m(hm);
+  return [["America/New_York", "New York"], ["Europe/London", "London"]]
+    .map(([tz, nm]) => {
+      const v = m - (pk - B.offsetAt(tz, ref));
+      const mm = ((v % 1440) + 1440) % 1440;
+      return B.fmt12(llqaM2hm(mm)) + (v < 0 ? " (day before)" : v >= 1440 ? " (next day)" : "") + " " + nm;
+    })
+    .join(" · ");
+};
+// free half-hours in office hours on a working day, the least busy teachers first, then by the time of day
+const llqaSubjFree = (teachers, subj, day) => {
+  const B = LLQABooking;
+  const today = todayPK();
+  const out = [];
+  (teachers || []).forEach((t) => {
+    if (!(subj === "all" || (t.subjects || []).includes(subj))) return;
+    const cap = llqaSubjCap(t);
+    if (!cap.days.includes(day)) return;
+    const o = llqaOffice(t, llqaSubjSet());
+    const ok = llqaSubjInHours(t);
+    let lv = null;
+    try {
+      lv = typeof llqaLeaveOn === "function" ? llqaLeaveOn(t, today) : null;
+    } catch (e) {}
+    for (let i = 4; i < 52; i++) {
+      const hm = SUBJ_SLOTS[i - 4];
+      if (!ok(hm) || (t[day] && t[day][i])) continue;
+      out.push({ teacher: t.name, code: t.code, time: B.fmt12(hm) + " PKT", slotIdx: i, util: cap.util, ord: llqaAfterStart(o, hm), fam: llqaSubjFam(day, hm), note: cap.util + "% used" + (lv ? " · on leave now" : "") });
+    }
+  });
+  return out.sort((a, b) => a.util - b.util || String(a.teacher).localeCompare(String(b.teacher)) || a.ord - b.ord).slice(0, 60);
+};
+// Subjects → book a slot for a student of Students (course Subject): booked by the Timetable rules, so the class is
+// the student's (attendance, logs, fees, the parent portal)
+const llqaSubjBook = (f) => {
+  const ctx = LLQAApp.ctx;
+  const s = llqaFindStudent(f.sid);
+  if (!s) return "That student is no longer in the list.";
+  const at = (ctx.teachers || []).find((t) => t && String(t.id) === String(f.teacherId));
+  if (!at) return "This teacher isn't saved in the CRM.";
+  const rowDay = { mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" }[f.day];
+  const slot = SUBJ_SLOTS[f.slotIdx - 4];
+  const p = llqaPlanClassAt(ctx.teachers || [], s, llqaRowsSafe(s), at, rowDay, slot);
+  if (p.error) return p.error;
+  const fields = llqaClassFields(p.rows);
+  llqaSaveClasses(s, fields, p.teachers.filter((t) => String(t.id) === String(at.id)),
+    "✓ " + s.name + " now has " + rowDay + " " + LLQABooking.timeLabel(p.it.time) + " (" + (llqaSubjects(s) || "Subject") + ") with " + at.name + " — " + llqaWeekText(fields.schedule.length) + ". Tell the family?");
+  return "";
+};
+const llqaSubjLink = (f, setF) => {
+  const list = ((LLQAApp.ctx && LLQAApp.ctx.students) || []).filter((s) => s && s.course === "Subject" && s.status !== "quit").sort((a, b) => String(a.name).localeCompare(String(b.name)));
+  return React.createElement(
+    "div",
+    { style: { marginBottom: 10 } },
+    React.createElement("div", { style: { color: c.textSec, fontSize: 11, fontWeight: 600, marginBottom: 4 } }, "Student from Students (recommended)"),
+    React.createElement(
+      LLQASelect,
+      {
+        value: f.sid ? String(f.sid) : "",
+        "aria-label": "Student from Students",
+        title: "Student from Students",
+        onChange: (e) => {
+          const s = list.find((x) => String(x.id) === e.target.value);
+          setF(s ? { ...f, sid: s.id, s: s.name, a: s.age || "", p: s.parent || "", st: s.state || "", country: s.country || "USA", gender: s.gender || "Any", phone: s.phone || "", family: s.family || "", sub: f.sub || llqaSubjects(s) || "" } : { ...f, sid: "" });
+        },
+        style: { padding: "7px 10px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 12, width: "100%" },
+      },
+      [React.createElement("option", { key: "", value: "" }, "Name only — not linked (no attendance, logs or fees)"), ...list.map((s) => React.createElement("option", { key: s.id, value: String(s.id) }, s.name + (llqaSubjects(s) ? " — " + llqaSubjects(s) : "")))],
+    ),
+    f.sid ? React.createElement("div", { style: { color: c.success, fontSize: 11, marginTop: 4 } }, "✓ Booked as " + f.s + "'s class: attendance, class logs, fees and the parent portal follow.") : null,
   );
 };
 
