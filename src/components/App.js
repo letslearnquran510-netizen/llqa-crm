@@ -60,7 +60,7 @@ function App() {
     initStudents,
   );
   // v73.1: a leave that is over is kept on the student (lvHist), so its days stay leave days
-  const setStudents = React.useCallback((v) => setStudentsRaw((prev) => llqaLvHistApply(prev, typeof v === "function" ? v(prev) : v)), [setStudentsRaw]);
+  const setStudents = React.useCallback((v) => setStudentsRaw((prev) => llqaStuChanged(prev, typeof v === "function" ? v(prev) : v)), [setStudentsRaw]); // v74: + the classes before a change, shift records
   const [shifts, setShifts] = useFirestoreCollection("shifts", initShifts);
   const [customRoles, setCustomRoles] = useFirestoreCollection(
     "customRoles",
@@ -553,7 +553,7 @@ function App() {
         setStudents(_mb(students, typeof a === "function" ? a(scStudents) : a))
     : setStudents;
   // v65: what the automation screens and pop-ups read
-  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory, appSettings, attNeed, clsNeed }); // v73: clsNeed (older months of class records) // v72: attNeed (older months on request) // v71: appSettings (exchange rates for the Autopilot) // v68: Dashboard "Teachers in today"
+  LLQAApp.set({ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory, appSettings, attNeed, clsNeed, shifts, setShifts }); // v74: shifts (handover, feedback) // v73: clsNeed (older months of class records) // v72: attNeed (older months on request) // v71: appSettings (exchange rates for the Autopilot) // v68: Dashboard "Teachers in today"
   const render = () => {
     switch (page) {
       case "dashboard":

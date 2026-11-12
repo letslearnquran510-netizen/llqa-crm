@@ -30,7 +30,7 @@ const ShiftingMod = ({
         s.reason.toLowerCase().includes(fReason.toLowerCase()),
       );
     if (fSps !== "all")
-      d = d.filter((s) => (fSps === "yes" ? s.sps === "yes" : s.sps !== "yes"));
+      d = d.filter((s) => (fSps === "yes" ? s.sps === "yes" || s.sps === "na" : s.sps !== "yes" && s.sps !== "na")); // v74: Not Required is done
     if (fDate === "week")
       d = d.filter(
         (s) => (today - new Date(s.date)) / (1000 * 60 * 60 * 24) <= 7,
@@ -52,7 +52,7 @@ const ShiftingMod = ({
     const last7 = shifts.filter(
       (s) => (today - new Date(s.date)) / (1000 * 60 * 60 * 24) <= 7,
     );
-    const pendingSps = shifts.filter((s) => s.sps !== "yes").length;
+    const pendingSps = shifts.filter((s) => s.sps !== "yes" && s.sps !== "na").length; // v74
     const pendingFb = shifts.filter((s) => !s.feedback).length;
     return {
       total: shifts.length,
@@ -112,25 +112,8 @@ const ShiftingMod = ({
         count: n,
       }));
   }, [shifts]);
-  const oNew = () => {
-    setF({
-      date: todayPK(),
-      lead: "",
-      student: "",
-      fromT: "",
-      fromTime: "",
-      fromLead: "",
-      toT: "",
-      toTime: "",
-      toLead: "",
-      reason: "",
-      sps: "Pending",
-      feedback: "Pending",
-    });
-    setModal({
-      type: "new",
-    });
-  };
+  // v74: the move goes through Change classes (the booking engine); the record is written by itself with the reason
+  const oNew = () => llqaOpen("shiftNew", {});
   const oEdit = (s) => {
     setF({
       ...s,
@@ -373,7 +356,7 @@ const ShiftingMod = ({
       }
     } else {
       const old = modal.data;
-      const bookingChanged =
+      const bookingChanged = false && // v74: classes are moved with Change classes; this edits the record only
         old &&
         (old.fromT !== f.fromT ||
           old.toT !== f.toT ||
@@ -590,7 +573,8 @@ const ShiftingMod = ({
             ? {
                 ...s,
                 ...f,
-                sps: f.sps === "Conveyed" ? "yes" : "no",
+                ...(s.auto ? { student: s.student, fromT: s.fromT, toT: s.toT, fromTime: s.fromTime, toTime: s.toTime } : {}),
+                sps: f.sps === "Conveyed" ? "yes" : f.sps === "Not Required" ? "na" : "no",
               }
             : s,
         ),
@@ -600,7 +584,7 @@ const ShiftingMod = ({
   };
   const del = () => {
     const rec = modal.data;
-    if (rec && rec.fromT && rec.toT && rec.fromTime && rec.toTime) {
+    if (rec && rec.revertTimetable === true && rec.fromT && rec.toT && rec.fromTime && rec.toTime) { // v74: deleting a record never moves classes
       const fromT = (teachers || []).find((t) => t.name === rec.fromT);
       const toT = (teachers || []).find((t) => t.name === rec.toT);
       if (fromT && toT) {
@@ -1808,7 +1792,7 @@ const ShiftingMod = ({
               },
             },
             "SPS Pending (",
-            shifts.filter((s) => s.sps !== "yes").length,
+            shifts.filter((s) => s.sps !== "yes" && s.sps !== "na").length, // v74
             ")",
           ),
           React.createElement(
@@ -1821,7 +1805,7 @@ const ShiftingMod = ({
               },
             },
             shifts
-              .filter((s) => s.sps !== "yes")
+              .filter((s) => s.sps !== "yes" && s.sps !== "na") // v74
               .slice(0, 12)
               .map((s) =>
                 React.createElement(
@@ -2978,7 +2962,7 @@ const ShiftingMod = ({
             },
             React.createElement(Inp, {
               label: "SPS Status",
-              value: f.sps === "yes" ? "Conveyed" : f.sps || "",
+              value: f.sps === "yes" ? "Conveyed" : f.sps === "na" ? "Not Required" : f.sps === "no" ? "Pending" : f.sps || "", // v74
               onChange: (v) =>
                 setF({
                   ...f,
@@ -3394,7 +3378,7 @@ const ShiftingMod = ({
                 "SPS",
               ),
               React.createElement(Badge, {
-                text: modal.data.sps === "yes" ? "Conveyed" : "Pending",
+                text: modal.data.sps === "yes" ? "Conveyed" : modal.data.sps === "na" ? "Not Required" : "Pending", // v74
                 color: modal.data.sps === "yes" ? "success" : "warn",
               }),
             ),
@@ -3552,7 +3536,7 @@ const ShiftingMod = ({
               },
               modal.data.student,
             ),
-            "? This is a historical record and cannot be recovered.",
+            "? This is a historical record and cannot be recovered. The student's classes and the Timetable stay as they are.",
           ),
           React.createElement(
             "div",
@@ -3647,6 +3631,8 @@ const ShiftingMod = ({
           const effective = ovrVal !== undefined ? ovrVal : baseVal;
           return effective && typeof effective === "object" && effective.s;
         };
+        // v74: through the booking engine — each student's classes go to the new teacher at the family's same times,
+        // nothing is overwritten; a class the new teacher can't take is listed; every move is recorded with the reason
         const doBulkShift = () => {
           if (!f.bulkFromT || !f.bulkToT || !f.reason) {
             alert("Please fill From Teacher, To Teacher, and Reason.");
@@ -3656,164 +3642,7 @@ const ShiftingMod = ({
             alert("From Teacher and To Teacher must be different.");
             return;
           }
-          const fromT = (teachers || []).find((t) => t.name === f.bulkFromT);
-          const toT = (teachers || []).find((t) => t.name === f.bulkToT);
-          if (!fromT || !toT) return;
-          if (fromBookings.length === 0) {
-            alert(f.bulkFromT + " has no bookings to transfer.");
-            return;
-          }
-          const transfers = [];
-          const conflicts = [];
-          fromBookings.forEach((b) => {
-            if (checkConflict(toT, b.day, b.slot)) {
-              conflicts.push(b);
-            } else {
-              transfers.push(b);
-            }
-          });
-          if (transfers.length === 0) {
-            alert(
-              "\u2716 Cannot transfer any classes.\n\nAll " +
-                fromBookings.length +
-                " slots conflict with " +
-                f.bulkToT +
-                "\u0027s existing schedule.\n\nPick a different To Teacher.",
-            );
-            return;
-          }
-          const confirmMsg =
-            "Transfer " +
-            transfers.length +
-            " class" +
-            (transfers.length === 1 ? "" : "es") +
-            " from " +
-            f.bulkFromT +
-            " to " +
-            f.bulkToT +
-            "?" +
-            (conflicts.length > 0
-              ? "\n\n\u26A0 " +
-                conflicts.length +
-                " will be SKIPPED due to slot conflicts."
-              : "") +
-            "\n\nThis will:\n\u2022 Free " +
-            transfers.length +
-            " slot" +
-            (transfers.length === 1 ? "" : "s") +
-            " on " +
-            f.bulkFromT +
-            "\n\u2022 Book " +
-            transfers.length +
-            " slot" +
-            (transfers.length === 1 ? "" : "s") +
-            " on " +
-            f.bulkToT +
-            "\n\u2022 Update " +
-            transfers.length +
-            " student record" +
-            (transfers.length === 1 ? "" : "s") +
-            "\n\u2022 Add " +
-            transfers.length +
-            " registry entr" +
-            (transfers.length === 1 ? "y" : "ies");
-          if (!confirm(confirmMsg)) return;
-          const bulkId = "bulk-" + Date.now();
-          const newRegistryEntries = transfers.map((b, i) => ({
-            id: Date.now() + i,
-            bulkId: bulkId,
-            sno: shifts.length + i + 1,
-            date: f.date || todayPK(),
-            student: b.cell.s,
-            lead: b.cell.l || "",
-            fromT: f.bulkFromT,
-            fromTime: b.day + "|" + b.slot,
-            fromLead: fromT.teamLead || "",
-            toT: f.bulkToT,
-            toTime: b.day + "|" + b.slot,
-            toLead: toT.teamLead || "",
-            reason: f.reason,
-            sps: f.sps === "Conveyed" ? "yes" : "no",
-            feedback: f.feedback || "Pending",
-          }));
-          setShifts([...newRegistryEntries, ...shifts]);
-          setTeachers(
-            teachers.map((t) => {
-              if (t.id === fromT.id) {
-                const sch = t._ttSchedule
-                  ? JSON.parse(JSON.stringify(t._ttSchedule))
-                  : {};
-                transfers.forEach((b) => {
-                  if (!sch[b.day]) sch[b.day] = {};
-                  sch[b.day][b.slot] = "F";
-                });
-                return {
-                  ...t,
-                  _ttSchedule: sch,
-                };
-              }
-              if (t.id === toT.id) {
-                const sch = t._ttSchedule
-                  ? JSON.parse(JSON.stringify(t._ttSchedule))
-                  : {};
-                transfers.forEach((b) => {
-                  if (!sch[b.day]) sch[b.day] = {};
-                  sch[b.day][b.slot] = {
-                    ...b.cell,
-                  };
-                });
-                return {
-                  ...t,
-                  _ttSchedule: sch,
-                };
-              }
-              return t;
-            }),
-          );
-          if (setStudents) {
-            const transferredNames = new Set(
-              transfers.map((b) => (b.cell.s || "").trim().toLowerCase()),
-            );
-            setStudents(
-              students.map((s) => {
-                const sLower = (s.name || "").trim().toLowerCase();
-                return transferredNames.has(sLower)
-                  ? {
-                      ...s,
-                      teacher: f.bulkToT,
-                    }
-                  : s;
-              }),
-            );
-          }
-          setModal(null);
-          setTimeout(() => {
-            let msg =
-              "\u2705 Bulk shift completed.\n\n" +
-              transfers.length +
-              " class" +
-              (transfers.length === 1 ? "" : "es") +
-              " transferred from " +
-              f.bulkFromT +
-              " to " +
-              f.bulkToT +
-              ".";
-            if (conflicts.length > 0) {
-              msg +=
-                "\n\n\u26A0 " +
-                conflicts.length +
-                " SKIPPED due to conflicts:\n";
-              conflicts.forEach((b) => {
-                msg +=
-                  "\n\u2022 " + b.day + " " + b.slot + " \u2014 " + b.cell.s;
-              });
-              msg +=
-                "\n\nThese students remain with " +
-                f.bulkFromT +
-                ". Use New Shift to move them individually.";
-            }
-            alert(msg);
-          }, 100);
+          if (llqaBulkMove(f.bulkFromT, f.bulkToT, { reason: f.reason, sps: f.sps, feedback: f.feedback, date: f.date })) setModal(null);
         };
         return React.createElement(
           "div",

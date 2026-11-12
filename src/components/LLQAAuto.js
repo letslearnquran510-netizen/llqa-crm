@@ -362,6 +362,8 @@ const LLQA_TEMPLATES = [
     "Assalamu Alaikum {parent}, a gentle reminder that {student}'s fee ({fee}) is due. Please let us know once it's sent. JazakAllah Khair!"],
   ["missedClass", "Missed class",
     "Assalamu Alaikum {parent}, {student} missed the class on {date}. Is everything okay? We can arrange a make-up class."],
+  ["shiftFeedback", "New teacher — after a week",
+    "Assalamu Alaikum {parent}, {student} has now had a week of classes with {teacher}. How are the classes going? Your feedback helps us. JazakAllah Khair!"],
   ["clockChange", "Clock change",
     "Assalamu Alaikum {parent}, clocks change on {changeDate}. From then, {student}'s class will be at {newTime} your time (same teacher). Please tell us if that doesn't suit you."],
   ["clockChanged", "After a clock change",
@@ -604,7 +606,8 @@ const llqaClassesOnRaw = (date, teachers, students, dailyProgress) => {
   const diffs = new Map();
   const holiday = llqaHolidayOn(date, "holiday");
   const out = [];
-  llqaBookedList(teachers).forEach((c) => {
+  const hist = llqaClsHistFor(date, students, teachers); // v74: a student whose classes changed since had these that day
+  const add = (c, past) => {
     const cell = c.cell;
     const tz = c.tz;
     let pd = { pktDay: c.day, shift: 0, famTime: "" };
@@ -617,6 +620,7 @@ const llqaClassesOnRaw = (date, teachers, students, dailyProgress) => {
       cell.sid != null && cell.sid !== ""
         ? byId.get(String(cell.sid))
         : (students || []).find((s) => B.sameStudent(cell, s));
+    if (!past && stu && hist.has(String(stu.id))) return; // v74: that day this student had the classes kept in clsHist
     const entry = stu ? llqaClsEntry(dpx, stu.id, date, c.slot) : null; // v73: this class's own record
     // (v66: a scheduled leave counts on its dates before it starts)
     const onLeave = llqaStuAwayOn(stu, date); // v73.1: a leave that is over still counts on its days
@@ -631,7 +635,7 @@ const llqaClassesOnRaw = (date, teachers, students, dailyProgress) => {
     const hasSub = !!(cover && cover.coverId != null && cover.coverId !== "");
     const subAway = hasSub && !!llqaLeaveOn(tById.get(String(cover.coverId)) || { id: cover.coverId, name: cover.cover }, date);
     out.push({
-      key: c.teacherId + "|" + c.day + "|" + c.slot,
+      key: c.teacherId + "|" + c.day + "|" + c.slot + (past && stu && out.some((o) => o.key === c.teacherId + "|" + c.day + "|" + c.slot) ? "|h" + stu.id : ""),
       teacherId: c.teacherId,
       teacher: c.teacher,
       rowDay: c.day,
@@ -653,7 +657,9 @@ const llqaClassesOnRaw = (date, teachers, students, dailyProgress) => {
       holiday,
       by: hasSub && !subAway ? cover.cover : c.teacher,
     });
-  });
+  };
+  llqaBookedList(teachers).forEach((c) => add(c, false));
+  hist.forEach((h) => h.cells.forEach((c) => add(c, true)));
   // v67: make-up classes booked for this date
   if (typeof llqaMakeupItems === "function") llqaMakeupItems(date, tById, byId, dpx, holiday).forEach((x) => out.push(x));
   out.sort((a, b) => a.min - b.min || String(a.teacher).localeCompare(String(b.teacher)));
@@ -1819,6 +1825,20 @@ const llqaClockTick = (state) => {
       list.forEach((x) => seen.add(x.key));
     }
   } catch (e) {}
+  // v74: a moved student's handover (SPS) — the new teacher reads it when they sign in; the office, once a day
+  try {
+    const u = LLQAApp.ctx.user;
+    if (u && !LLQA_RUNNER && u.role !== "parent" && llqaReadyFor(["shifts", "students", "teachers"])) {
+      const hs = llqaHandovers(u);
+      const sig = hs.map((x) => x.r.id).join(",");
+      const day = todayPK();
+      if (hs.length && (u.role === "teacher" ? state.hand !== sig : state.handDay !== day)) {
+        state.hand = sig;
+        state.handDay = day;
+        llqaToast(llqaHandoverToast(hs, u));
+      }
+    }
+  } catch (e) {}
   if (!runnerUp) {
     if (llqaCanOpen("students")) job(llqaLeaveStartRun);
     if (llqaCanOpen("students")) job(llqaLeaveEndRun); // v73.1
@@ -2013,6 +2033,8 @@ const LLQAHost = () => {
     k === "quit" ? React.createElement(LLQAQuitModal, { key: m.key, ...d, onClose: llqaClose }) : null,
     k === "log" ? React.createElement(LLQALogHost, { key: m.key, info: d, onClose: llqaClose }) : null,
     k === "unlogged" ? React.createElement(LLQAUnloggedWin, { key: m.key, onClose: llqaClose }) : null,
+    k === "shiftNew" ? React.createElement(LLQAShiftNewWin, { key: m.key, onClose: llqaClose }) : null,
+    k === "handover" ? React.createElement(LLQAHandoverWin, { key: m.key, onClose: llqaClose }) : null,
     // v66
     k === "payment" ? React.createElement(LLQAPaymentModal, { key: m.key, ...d, onClose: llqaClose }) : null,
     k === "logRequest" ? React.createElement(LLQALogRequestModal, { key: m.key, ...d, onClose: llqaClose }) : null,
@@ -4015,6 +4037,11 @@ const llqaAutopilotRaw = (opt) => {
     // v73.1: leave over — classes start again
     if (!away && booked && s.lvBackAt && s.lvBackAt <= today && llqaDays(s.lvBackAt, today) <= 2)
       add(s, "classReminder", "lvback:" + s.id + ":" + s.lvBackAt, "Back from leave — classes start again", null, 2);
+    // v74: a week after a move to another teacher, ask the family how it is going
+    if (!away && booked) {
+      const sh = llqaShiftFb(s, today);
+      if (sh) add(s, "shiftFeedback", "shfb:" + sh.id, "With " + sh.toT + " since " + llqaDateLabel(sh.date) + " — ask how it is going", { teacher: sh.toT }, 3);
+    }
     if (!away)
       mine
         .filter((p) => /^absent/i.test(String(p.attended || "")) && p.date <= today && llqaDays(p.date, today) <= 2)
