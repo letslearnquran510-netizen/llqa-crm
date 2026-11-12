@@ -1951,6 +1951,13 @@ const TeachMod = ({
                 }),
               options: ["active", "new", "resigned", "terminated"],
             }),
+            (form.status === "resigned" || form.status === "terminated") &&
+              React.createElement(Inp, {
+                label: "Leaving date", // v75: their last day — the last month's pay counts up to it (kept by itself when left empty)
+                value: form.leftOn || "",
+                onChange: (v) => setForm({ ...form, leftOn: v }),
+                type: "date",
+              }),
             React.createElement(Inp, {
               label: "Join Date *",
               value: form.joinDate || "",

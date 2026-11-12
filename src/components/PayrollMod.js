@@ -18,9 +18,7 @@ const PayrollMod = ({
   const [search, setSearch] = useState("");
   const [fStatus, setFStatus] = useState("all");
   const [fShift, setFShift] = useState("all");
-  const [selectedMonth, setSelectedMonth] = useState(
-    new Date().toISOString().substring(0, 7),
-  );
+  const [selectedMonth, setSelectedMonth] = useState(() => llqaPayStartYm()); // v75: Pakistan time; last month while its salaries aren't all paid
   const [selected, setSelected] = useState([]);
   // v72: a month's attendance comes from the cloud when its payroll is looked at
   React.useEffect(() => {
@@ -30,66 +28,11 @@ const PayrollMod = ({
   const [modal, setModal] = useState(null);
   const [payForm, setPayForm] = useState({});
   const currentRecs = useMemo(() => {
-    return teachers.map((t) => {
-      let rec = payHistory[t.id]?.find((r) => r.month === selectedMonth);
-
-      const tViols = (qcViolations || []).filter(
-        (v) =>
-          v.teacher === t.name &&
-          v.date &&
-          v.date.startsWith(selectedMonth) &&
-          v.status !== "Waived" &&
-          v.status !== "Resolved",
-      );
-      const qcFine = tViols.reduce(
-        (sum, v) => sum + (Number(v.fine) || 0),
-        0,
-      );
-      // v72: this month's attendance fines (late / early / away by the minute, absent, half day) as worked out in Attendance
-      const attDays = ((attendanceHistory || {})[t.id] || []).filter((h) => h && String(h.date || "").startsWith(selectedMonth) && Number(h.fine) > 0);
-      const attFine = attDays.reduce((s, h) => s + (Number(h.fine) || 0), 0);
-      const autoFine = qcFine + attFine;
-
-      if (!rec) {
-        const b =
-          typeof calcBonuses === "function" ? calcBonuses(t) : { total: 0 };
-        rec = {
-          id: t.id + "_" + selectedMonth,
-          month: selectedMonth,
-          baseSalary: t.salary || 0,
-          bonusBreakdown: b,
-          gross: (t.salary || 0) + (b.total || 0),
-          net: (t.salary || 0) + (b.total || 0) - autoFine,
-          fine: autoFine,
-          qcFine, // v72
-          attFine,
-          attDays: attDays.length,
-          bonuses: b.total || 0,
-          advance: 0,
-          tax: 0,
-          deductions: autoFine,
-          status: "pending",
-        };
-      } else if (rec.status === "pending") {
-        if (rec.fine !== autoFine || rec.attFine !== attFine) {
-          const diff = autoFine - (rec.fine || 0);
-          rec = {
-            ...rec,
-            fine: autoFine,
-            qcFine, // v72
-            attFine,
-            attDays: attDays.length,
-            deductions: (rec.deductions || 0) + diff,
-            net: (rec.net || 0) - diff,
-          };
-        }
-      }
-      return {
-        ...t,
-        pay: rec,
-      };
-    });
-  }, [teachers, payHistory, selectedMonth, qcViolations, attendanceHistory]); // v72
+    // v75: the month's pay from the rules — the days with the academy, the salary changes, the bonuses, the fines (v72)
+    // and the advance installments; approved and paid months keep their numbers
+    const o = { hist: payHistory, qc: qcViolations, att: attendanceHistory, counts: llqaPayCounts(teachers), today: todayPK() };
+    return teachers.map((t) => ({ ...t, pay: llqaPayRec(t, selectedMonth, o) }));
+  }, [teachers, payHistory, selectedMonth, qcViolations, attendanceHistory]); // v72, v75
   const stats = useMemo(() => {
     const recs = currentRecs.filter((t) => t.pay);
     const totalGross = recs.reduce((s, t) => s + t.pay.gross, 0);
@@ -225,6 +168,12 @@ const PayrollMod = ({
       paidAt: new Date().toISOString(),
     }));
 
+  // v75: an approved month back to pending (worked out again: fines, advance installments)
+  const reopenPay = (id) =>
+    updateRec(id, (r) => {
+      const { approvedBy, approvedAt, fineNow, ...x } = r;
+      return { ...x, status: "pending", reopenedBy: actor, reopenedAt: new Date().toISOString() };
+    });
   const bulkApprove = () => {
     selected.forEach((id) =>
       updateRec(id, (r) =>
@@ -261,7 +210,7 @@ const PayrollMod = ({
     });
   const openAdvance = (t) => {
     setPayForm({
-      id: t.id,
+      id: t ? t.id : "", // v75: + New advance chooses the teacher in the window
       amount: "",
       reason: "",
       installments: 1,
@@ -276,7 +225,7 @@ const PayrollMod = ({
       id: t.id,
       newSalary: t.salary,
       reason: "",
-      effective: todayPK(),
+      effective: todayPK().slice(0, 7) + "-01", // v75: from the 1st of this month unless another day is chosen
     });
     setModal({
       type: "revision",
@@ -545,6 +494,7 @@ const PayrollMod = ({
         ),
       ),
     ),
+    tab === "current" && React.createElement(LLQAPayChecks, { ym: selectedMonth, recs: currentRecs, appSettings }), // v75: where the month stands, what to check
     tab === "current" &&
       React.createElement(
         React.Fragment,
@@ -900,6 +850,7 @@ const PayrollMod = ({
                       " \xB7 ",
                       t.bank ? String(t.bank).split(" - ")[0] : "Unspecified",
                     ),
+                    llqaPayRowNote(t), // v75: part of a month, an installment, fines changed since approval
                   ),
                   React.createElement(
                     "td",
@@ -1097,6 +1048,16 @@ const PayrollMod = ({
                         React.createElement(DollarSign, {
                           size: 13,
                         }),
+                      ),
+                    t.pay.status === "approved" &&
+                      React.createElement(
+                        "button",
+                        {
+                          onClick: () => reopenPay(t.id),
+                          title: "Back to pending",
+                          style: { background: "none", border: "none", cursor: "pointer", padding: 3, color: t.pay.fineNow != null ? c.danger : c.textSec },
+                        },
+                        React.createElement(llqaIcon("undo-2"), { size: 13 }),
                       ),
                     React.createElement(
                       "button",
@@ -1518,8 +1479,8 @@ const PayrollMod = ({
               "tbody",
               null,
               llqaEmptyRow("No teachers yet", "Tenure and performance bonuses for each teacher show here."), // v70: shows only when the table is empty
-              teachers.map((t, i) => {
-                const b = calcBonuses(t);
+              teachers.filter((t) => !llqaTeacherGone(t)).map((t, i) => {
+                const b = llqaPayBonusNow(t, selectedMonth); // v75: HR's rating, the students booked, tenure at the month's end
                 const yrs = tenureYears(t.joinDate);
                 return React.createElement(
                   "tr",
@@ -1618,7 +1579,7 @@ const PayrollMod = ({
                         fontWeight: 600,
                       },
                     },
-                    t.students,
+                    b.count, // v75: booked in the Timetable now
                   ),
                   React.createElement(
                     "td",
@@ -1651,248 +1612,7 @@ const PayrollMod = ({
         ),
       ),
     tab === "advances" &&
-      React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 10,
-              padding: 14,
-              marginBottom: 14,
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 10,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.text,
-                  margin: 0,
-                  fontSize: 13,
-                  fontWeight: 600,
-                },
-              },
-              "Active Advances & Loans",
-            ),
-            React.createElement(
-              Btn,
-              {
-                icon: Plus,
-                disabled: !teachers.length, // v70: no teacher to give an advance to yet (the button threw an error)
-                onClick: () => teachers.length && openAdvance(teachers[0]),
-              },
-              "New Advance",
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                color: c.textSec,
-                fontSize: 11,
-              },
-            },
-            "Track salary advances and loan installments. Auto-deducted from monthly payroll.",
-          ),
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              overflowX: "auto",
-              borderRadius: 10,
-              border: "1px solid " + c.border,
-            },
-          },
-          React.createElement(
-            "table",
-            {
-              style: {
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 11,
-              },
-            },
-            React.createElement(
-              "thead",
-              null,
-              React.createElement(
-                "tr",
-                null,
-                [
-                  "Teacher",
-                  "Type",
-                  "Amount",
-                  "Installments",
-                  "Per Month",
-                  "Balance",
-                  "Start Month",
-                  "Status",
-                ].map((h) =>
-                  React.createElement(
-                    "th",
-                    {
-                      key: h,
-                      style: {
-                        padding: "9px 8px",
-                        textAlign: "left",
-                        color: c.textSec,
-                        fontWeight: 600,
-                        fontSize: 9,
-                        textTransform: "uppercase",
-                        borderBottom: "1px solid " + c.border,
-                        background: c.bgDeep,
-                      },
-                    },
-                    h,
-                  ),
-                ),
-              ),
-            ),
-            React.createElement(
-              "tbody",
-              null,
-              llqaEmptyRow("No advances or loans this month", "Advances and loans given to teachers show here with their instalments."), // v70: shows only when the table is empty
-              teachers
-                .filter(
-                  (t) =>
-                    payHistory[t.id]?.find((r) => r.month === selectedMonth)
-                      ?.advance > 0,
-                )
-                .map((t, i) => {
-                  const rec = payHistory[t.id].find(
-                    (r) => r.month === selectedMonth,
-                  );
-                  return React.createElement(
-                    "tr",
-                    {
-                      key: t.id,
-                      style: {
-                        borderBottom: "1px solid " + c.border,
-                        background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
-                      },
-                    },
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          fontWeight: 600,
-                        },
-                      },
-                      t.name,
-                      React.createElement(
-                        "div",
-                        {
-                          style: {
-                            fontSize: 9,
-                            color: c.textSec,
-                          },
-                        },
-                        t.code,
-                      ),
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                        },
-                      },
-                      React.createElement(Badge, {
-                        text: "Salary Advance",
-                        color: "warn",
-                      }),
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          color: c.warn,
-                          fontWeight: 700,
-                        },
-                      },
-                      "Rs ",
-                      rec.advance.toLocaleString(),
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          color: c.textSec,
-                        },
-                      },
-                      "1 installment",
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          color: c.warn,
-                          fontWeight: 600,
-                        },
-                      },
-                      "Rs ",
-                      rec.advance.toLocaleString(),
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          color: c.danger,
-                          fontWeight: 600,
-                        },
-                      },
-                      "Rs 0",
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          color: c.textSec,
-                          fontSize: 10,
-                        },
-                      },
-                      selectedMonth,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                        },
-                      },
-                      React.createElement(Badge, {
-                        text: "Active",
-                        color: "warn",
-                      }),
-                    ),
-                  );
-                }),
-            ),
-          ),
-        ),
-      ),
+      React.createElement(LLQAPayLoans, { teachers, payHistory, setPayHistory, onNew: (t) => openAdvance(t || null) }), // v75: each advance with its installments
     tab === "analytics" &&
       React.createElement(
         React.Fragment,
@@ -2412,172 +2132,16 @@ const PayrollMod = ({
       }),
     modal &&
       modal.type === "advance" &&
-      React.createElement(
-        "div",
-        {
-          style: {
-            position: "fixed",
-            inset: 0,
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,.65)",
-            backdropFilter: "blur(4px)",
-          },
+      React.createElement(LLQAPayAdvanceWin, {
+        teachers,
+        t: modal.data,
+        onClose: () => setModal(null),
+        onSave: (loan) => {
+          // v75: an advance is kept with its installments and taken back from the pay by itself
+          setPayHistory((prev) => ({ ...(prev || {}), _loans: [...(Array.isArray((prev || {})._loans) ? prev._loans : []), loan] }));
+          setModal(null);
         },
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 14,
-              padding: 24,
-              width: 440,
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 14,
-              },
-            },
-            React.createElement(
-              "h3",
-              {
-                style: {
-                  color: c.text,
-                  fontSize: 16,
-                  margin: 0,
-                },
-              },
-              "Give Salary Advance",
-            ),
-            React.createElement(
-              "button",
-              {
-                onClick: () => setModal(null),
-                style: {
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  color: c.textSec,
-                },
-              },
-              React.createElement(X, {
-                size: 18,
-              }),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.warnBg,
-                borderRadius: 8,
-                padding: "8px 12px",
-                marginBottom: 12,
-                color: c.warn,
-                fontSize: 11,
-              },
-            },
-            "Teacher: ",
-            modal.data.name,
-            " \xB7 Salary Rs ",
-            modal.data.salary.toLocaleString(),
-          ),
-          React.createElement(Inp, {
-            label: "Advance Amount (PKR) *",
-            value: payForm.amount || "",
-            onChange: (v) =>
-              setPayForm({
-                ...payForm,
-                amount: v,
-              }),
-            type: "number",
-            placeholder: "e.g. 5000",
-          }),
-          React.createElement(Inp, {
-            label: "Repayment Installments",
-            value: payForm.installments || "",
-            onChange: (v) =>
-              setPayForm({
-                ...payForm,
-                installments: v,
-              }),
-            type: "number",
-            placeholder: "1 = full next month",
-          }),
-          React.createElement(Inp, {
-            label: "Reason *",
-            value: payForm.reason || "",
-            onChange: (v) =>
-              setPayForm({
-                ...payForm,
-                reason: v,
-              }),
-            placeholder: "Medical / Family emergency / etc.",
-          }),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgDeep,
-                borderRadius: 8,
-                padding: "8px 12px",
-                marginBottom: 10,
-                fontSize: 10,
-                color: c.textSec,
-              },
-            },
-            "This will auto-deduct from next ",
-            payForm.installments || 1,
-            " month(s) payroll.",
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 8,
-              },
-            },
-            React.createElement(
-              Btn,
-              {
-                variant: "outline",
-                onClick: () => setModal(null),
-              },
-              "Cancel",
-            ),
-            React.createElement(
-              Btn,
-              {
-                onClick: () => {
-                  if (!payForm.amount) return;
-                  updateRec(modal.data.id, (r) => ({
-                    ...r,
-                    advance: (r.advance || 0) + Number(payForm.amount),
-                    deductions: (r.deductions || 0) + Number(payForm.amount),
-                    net: (r.net || 0) - Number(payForm.amount),
-                  }));
-                  setModal(null);
-                },
-                icon: DollarSign,
-              },
-              "Approve Advance",
-            ),
-          ),
-        ),
-      ),
+      }),
     modal &&
       modal.type === "revision" &&
       React.createElement(
@@ -2722,7 +2286,7 @@ const PayrollMod = ({
             " (",
             Math.round(
               ((Number(payForm.newSalary) - modal.data.salary) /
-                modal.data.salary) *
+                (modal.data.salary || Number(payForm.newSalary) || 1)) *
                 100,
             ),
             "%)",
@@ -2747,7 +2311,11 @@ const PayrollMod = ({
             React.createElement(
               Btn,
               {
-                onClick: () => setModal(null),
+                onClick: () => {
+                  const err = llqaSalaryRevise(modal.data, payForm); // v75: kept on the teacher, from its day (it did nothing)
+                  if (err) return alert(err);
+                  setModal(null);
+                },
                 icon: Award,
               },
               "Approve Revision",
