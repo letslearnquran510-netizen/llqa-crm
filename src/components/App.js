@@ -455,6 +455,7 @@ function App() {
             const wd = isT ? llqaWorkDay(t, od.date, set) : { ok: true };
             const lateMin = isT && wd.ok && od.after > 0 ? Math.min(od.after, od.len) : 0;
             const status = lateMin > rules.grace ? "Late" : "Present";
+            const missed = isT && wd.ok && rules.autoAbsent && od.date >= LLQA_ABS_FROM && od.after >= od.len; // v76: signed in after the exit time — absent (unpaid)
             if (!(autoAttendance || []).some((a) => String(a.userId) === uid && a.date === od.date))
               setAutoAttendance([
                 ...(autoAttendance || []),
@@ -483,10 +484,12 @@ function App() {
                       ...prev,
                       [uid]: list.concat([
                         llqaWithFine(
-                          { date: od.date, status, checkIn: timeIn, checkOut: "?", lateMin, earlyMin: 0, officeStart: off.start, officeEnd: off.end, offDay: wd.ok ? "" : wd.why, device: "Teacher Portal", via: "portal", approved: true },
+                          missed
+                            ? { date: od.date, status: "Absent", paid: false, auto: true, autoAt: new Date(nowMs).toISOString(), checkIn: "—", checkOut: "—", lateIn: timeIn, lateMin: 0, earlyMin: 0, awayMin: 0, officeStart: off.start, officeEnd: off.end, offDay: "", dayPay: llqaDayPay(t, od.date), device: "Teacher Portal", via: "portal", approved: true }
+                            : { date: od.date, status, checkIn: timeIn, checkOut: "?", lateMin, earlyMin: 0, officeStart: off.start, officeEnd: off.end, offDay: wd.ok ? "" : wd.why, device: "Teacher Portal", via: "portal", approved: true },
                           set,
                           "CRM",
-                          !wd.ok ? "signed in on a day off (" + wd.why + ")" : lateMin ? "signed in " + llqaHm12(timeIn) + ", " + lateMin + " min after " + llqaHm12(off.start) : "signed in on time",
+                          missed ? "signed in " + llqaHm12(timeIn) + ", after the exit time " + llqaHm12(off.end) + " — absent (unpaid)" : !wd.ok ? "signed in on a day off (" + wd.why + ")" : lateMin ? "signed in " + llqaHm12(timeIn) + ", " + lateMin + " min after " + llqaHm12(off.start) : "signed in on time",
                         ),
                       ]),
                     };

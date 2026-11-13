@@ -2707,6 +2707,9 @@ const llqaFineRules = (settings) => {
     grace: Math.max(0, Math.floor(num(s.fineGraceMin, 0))),
     absent: num(s.absentFine, 1500),
     halfDay: num(s.halfDayFine, 750),
+    absMode: s.absentMode === "salary" ? "salary" : "fixed", // v76: the absent amount — fixed, or one day's salary
+    autoAbsent: s.autoAbsent !== false, // v76: absent (unpaid) at closing time with no sign-in
+    paidLimit: Math.max(0, Math.floor(num(s.paidLeaveLimit, 0))), // v76: paid leave days a month (0 = no limit)
     missedClass: num(s.missedClassFine, 500),
     autoOutMin: Math.max(0, Math.floor(num(s.autoSignOutMin, 5))),
     silenceMin: Math.max(5, Math.floor(num(s.earlySilenceMin, 15))),
@@ -2909,12 +2912,12 @@ const llqaReopenDay = (rec) => ({ ...rec, checkOut: "?", earlyMin: 0, awayMin: 0
 // later changes the days that begin after it, never days already worked out
 const llqaFineSnap = (settings) => {
   const r = llqaFineRules(settings);
-  return { m: r.rateMin, a: r.rateAmt, g: r.grace, ab: r.absent, hd: r.halfDay, mc: r.missedClass, aw: r.away };
+  return { m: r.rateMin, a: r.rateAmt, g: r.grace, ab: r.absent, hd: r.halfDay, mc: r.missedClass, aw: r.away, abm: r.absMode };
 };
 const llqaRecRules = (rec, settings) => {
   const f = rec && rec.fineSet;
   if (!f || typeof f !== "object") return settings;
-  return { ...(settings || {}), fineLateMinutes: f.m, fineLateAmount: f.a, fineGraceMin: f.g, absentFine: f.ab, halfDayFine: f.hd, missedClassFine: f.mc, fineAway: f.aw !== false };
+  return { ...(settings || {}), fineLateMinutes: f.m, fineLateAmount: f.a, fineGraceMin: f.g, absentFine: f.ab, halfDayFine: f.hd, missedClassFine: f.mc, fineAway: f.aw !== false, absentMode: f.abm || "fixed" };
 };
 // one day's fine, worked out from the record — nothing here is guessed
 const llqaDayFine = (rec, settings) => {
@@ -2924,7 +2927,15 @@ const llqaDayFine = (rec, settings) => {
   const st = String((rec && rec.status) || "");
   const out = { late: null, early: null, away: null, day: null, total: 0, rule: llqaRuleText(r), off: rec && rec.offDay ? String(rec.offDay) : "" };
   if (out.off) return out; // a day off (not a working day / holiday): never fined
-  if (st === "Absent") out.day = { kind: "Absent", amount: waived("day") ? 0 : r.absent, full: r.absent, waived: waived("day") };
+  if (st === "Absent") {
+    // v76: the absent amount, or one day's salary; the CRM's own mark says why
+    const full = llqaAbsAmt(rec, r, false);
+    out.day = { kind: rec.auto ? "Absent (no sign-in by " + llqaHm12(rec.officeEnd) + ")" : "Absent", amount: waived("day") ? 0 : full, full, waived: waived("day") };
+  } else if (st === "On Leave" && rec.paid === false) {
+    // v76: unpaid leave costs what an absence costs (a half day, half)
+    const full = llqaAbsAmt(rec, r, !!rec.halfDay);
+    out.day = { kind: "Unpaid leave" + (rec.halfDay ? " (half day)" : ""), amount: waived("day") ? 0 : full, full, waived: waived("day") };
+  }
   else if (st === "Half Day") out.day = { kind: "Half Day", amount: waived("day") ? 0 : r.halfDay, full: r.halfDay, waived: waived("day") };
   else if (st === "Missed Class") out.day = { kind: "Missed Class", amount: waived("day") ? 0 : r.missedClass, full: r.missedClass, waived: waived("day") };
   // minutes count on a working day only (a half day's fine already covers the hours not worked)
@@ -3460,9 +3471,59 @@ const LLQAOfficeCard = ({ settings, update, teachers, setTeachers }) => {
       "rate",
     ),
     row("Free minutes before a late fine starts", "0 = every minute counts", llqaNumInput(r.grace, (v) => update("fineGraceMin", v), "Free minutes", 70), "grace"),
-    row("Absent (a day)", "", llqaNumInput(r.absent, (v) => update("absentFine", v), "Absent fine", 90), "abs"),
+    row(
+      "Absent or unpaid leave (a day)",
+      r.absMode === "salary" ? "one day's salary: the teacher's salary ÷ the days in that month" : "the same amount for everyone",
+      React.createElement(
+        "div",
+        { style: { display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
+        React.createElement(
+          LLQASelect,
+          { key: "m", value: r.absMode, title: "Absent amount", onChange: (e) => update("absentMode", e.target.value), style: { padding: "5px 8px", fontSize: 12 } },
+          React.createElement("option", { value: "fixed" }, "Fixed amount"),
+          React.createElement("option", { value: "salary" }, "One day's salary"),
+        ),
+        r.absMode === "salary" ? null : llqaNumInput(r.absent, (v) => update("absentFine", v), "Absent fine", 90, "a"),
+      ),
+      "abs",
+    ), // v76: a fixed amount, or one day's salary
     row("Half Day", "", llqaNumInput(r.halfDay, (v) => update("halfDayFine", v), "Half day fine", 90), "half"),
     row("Missed Class", "", llqaNumInput(r.missedClass, (v) => update("missedClassFine", v), "Missed class fine", 90), "miss"),
+    head("Absent and leave"), // v76
+    row(
+      "Mark absent when there's no sign-in by closing time",
+      r.autoAbsent
+        ? "on: at each teacher's exit time on a working day, unless leave is marked — unpaid until their team lead, a manager or an admin marks paid leave"
+        : "off: the CRM marks nobody absent",
+      React.createElement(Toggle, { value: r.autoAbsent, onChange: () => update("autoAbsent", r.autoAbsent ? false : todayPK()) }), // turned on: from today (never the days before)
+      "auto",
+    ),
+    row(
+      "Paid leave days a month",
+      r.paidLimit ? "over " + r.paidLimit + ", only an admin gives more paid leave" : "no limit — every day marked paid is paid",
+      React.createElement(
+        LLQASelect,
+        { value: String(r.paidLimit), title: "Paid leave days a month", onChange: (e) => update("paidLeaveLimit", Number(e.target.value) || 0), style: { padding: "5px 8px", fontSize: 12 } },
+        [React.createElement("option", { key: "0", value: "0" }, "No limit")].concat([1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 15].map((n) => React.createElement("option", { key: n, value: String(n) }, String(n)))),
+      ),
+      "plim",
+    ),
+    settings.workingSat !== false || settings.workingSun !== false
+      ? React.createElement(
+          "p",
+          { style: { ...hint, color: c.warn, margin: "6px 0 0" } },
+          (settings.workingSat !== false && settings.workingSun !== false ? "Saturday and Sunday are" : settings.workingSat !== false ? "Saturday is" : "Sunday is") +
+            " a working day (Settings → HR & Attendance → Working Days & Hours): the CRM marks absences on " + (settings.workingSat !== false && settings.workingSun !== false ? "them" : "it") + " too. Turn it off there if it is a day off.",
+        )
+      : null,
+    head("Extra classes (PKR a class)"), // v76
+    React.createElement(
+      "p",
+      { style: hint },
+      "A class marked Extra in the Timetable (Saturday and Sunday boxes start as Extra), a make-up marked Extra, or a class taken on a holiday — paid once the teacher logs it (present or late).",
+    ),
+    row("Extra class", "a Quran class", llqaNumInput(settings.extraClassRate == null ? 0 : settings.extraClassRate, (v) => update("extraClassRate", v), "Extra class pay", 90), "xr"),
+    row("Subject extra class", "a Subject class", llqaNumInput(settings.subjectExtraRate == null ? 0 : settings.subjectExtraRate, (v) => update("subjectExtraRate", v), "Subject extra class pay", 90), "xs"),
     head("Signing out, leaving and time away"),
     row("Sign a teacher out after their exit time", "minutes after the exit time", llqaNumInput(r.autoOutMin, (v) => update("autoSignOutMin", v), "Minutes after exit", 70), "out"),
     row("A teacher is gone when their CRM is closed for", "minutes (at least 5)", llqaNumInput(r.silenceMin, (v) => update("earlySilenceMin", v), "Minutes closed", 70), "sil"),
@@ -3541,7 +3602,7 @@ const llqaFineWhy = (rec, settings) => {
   // a day keeps the rate it began with: say so when it is not today's rate
   const then = llqaFineRules(llqaRecRules(rec, settings)), now = llqaFineRules(settings);
   if (rec && rec.fineSet && bits.length && (then.perMin !== now.perMin || then.grace !== now.grace)) bits.push("rate that day: " + llqaRuleText(then));
-  return bits.join(" · ");
+  return bits.length ? bits.join(" · ") : rec && rec.status === "On Leave" ? llqaLeaveDayText(rec) + " — nothing cut" : ""; // v76: paid leave says so
 };
 const LLQAFineRecords = ({ teachers, history, setHistory, user, settings, month }) => {
   const [win, setWin] = React.useState(null); // { kind: "reason"|"edit"|"log", tid, date }
@@ -3552,7 +3613,7 @@ const LLQAFineRecords = ({ teachers, history, setHistory, user, settings, month 
     ((history || {})[t.id] || []).forEach((h) => {
       if (!h || String(h.date || "").slice(0, 7) !== month) return;
       const d = llqaDayFine(h, settings);
-      if (!(d.day || d.late || d.early || d.away || h.unknownOut || Number(h.fine) > 0 || (h.fineOverride != null && h.fineOverride !== ""))) return;
+      if (!(d.day || d.late || d.early || d.away || h.unknownOut || Number(h.fine) > 0 || (h.fineOverride != null && h.fineOverride !== "") || llqaIsLeaveDay(h))) return; // v76: leave days too (paid ones cost nothing)
       rows.push({ t, h, d });
     }),
   );
@@ -3592,6 +3653,7 @@ const LLQAFineRecords = ({ teachers, history, setHistory, user, settings, month 
     { style: { marginTop: 14 } },
     React.createElement("h4", { style: { color: c.text, margin: "0 0 4px", fontSize: 13, fontWeight: 600 } }, "Every fine this month, and how it was worked out"),
     React.createElement("p", { style: { color: c.textSec, fontSize: 11, margin: "0 0 8px" } }, "Rule: " + llqaRuleText(llqaFineRules(settings)) + ". A reason is marked once (with Deduct or Don't deduct); after that only an admin can change it."),
+    llqaCanMarkLeaveAny(user) ? React.createElement("div", { style: { margin: "0 0 8px" } }, React.createElement(Btn, { variant: "outline", onClick: () => llqaOpen("leaveday", {}) }, "+ Leave or absence")) : null, // v76: any day, before or after
     React.createElement(
       "div",
       { style: { overflowX: "auto", border: "1px solid " + c.border, borderRadius: 10 } },
@@ -3620,6 +3682,7 @@ const LLQAFineRecords = ({ teachers, history, setHistory, user, settings, month 
                   React.createElement(
                     "td",
                     { style: { ...td, whiteSpace: "nowrap" } },
+                    llqaIsLeaveDay(h) && llqaCanMarkLeave(user, t, h) ? mini("Leave", () => llqaOpen("leaveday", { tid: t.id, date: h.date }), "lv") : null, // v76: paid / unpaid leave or absent
                     may && open.length ? mini("Reason", () => { setForm({ kind: open[0][0], text: "", decision: "deduct" }); setWin({ kind: "reason", tid: t.id, date: h.date }); }, "r") : null,
                     canEdit ? mini("Edit", () => { setForm({ amount: h.fineOverride != null && h.fineOverride !== "" ? String(h.fineOverride) : "", why: "", kinds: Object.fromEntries(Object.entries(h.reasons || {}).map(([k, r]) => [k, r.decision])) }); setWin({ kind: "edit", tid: t.id, date: h.date }); }, "e") : null,
                     (h.fineLog || []).length ? mini("History", () => setWin({ kind: "log", tid: t.id, date: h.date }), "l") : null,
@@ -6481,7 +6544,12 @@ const llqaPayRec = (t, ym, o) => {
   const today = o.today || todayPK();
   const saved = ((o.hist || {})[t.id] || []).find((r) => r && r.month === ym);
   const fines = llqaPayFines(t, ym, o.qc, o.att);
-  if (saved && saved.status && saved.status !== "pending") return saved.status === "approved" && Number(saved.fine || 0) !== fines.fine ? { ...saved, fineNow: fines.fine } : saved;
+  if (saved && saved.status && saved.status !== "pending") {
+    if (saved.status !== "approved") return saved;
+    const out = Number(saved.fine || 0) !== fines.fine ? { ...saved, fineNow: fines.fine } : saved;
+    const xn = llqaExtraFor(t, ym, o); // v76: extra classes changed since approval
+    return xn && Number(saved.extraPay || 0) !== xn.total ? { ...out, extraNow: xn.total } : out;
+  }
   const span = llqaPaySpan(t, ym, today);
   if (!span && !saved) return null;
   const legacy = saved && saved.calc !== 75;
@@ -6491,7 +6559,8 @@ const llqaPayRec = (t, ym, o) => {
   const b = legacy ? saved.bonusBreakdown || { total: Number(saved.bonuses) || 0 } : saved && saved.bonusBreakdown ? saved.bonusBreakdown : llqaPayBonus(t, ym, span, (o.counts || new Map()).get(String(t.id)));
   const bonuses = Number(b.total) || 0;
   const tax = saved ? Number(saved.tax) || 0 : 0;
-  const gross = baseSalary + bonuses;
+  const xp = llqaExtraFor(t, ym, o); // v76: the extra classes taken
+  const gross = baseSalary + bonuses + (xp ? xp.total : 0);
   const deductions = fines.fine + advance + tax;
   return {
     ...(saved || {}),
@@ -6506,6 +6575,8 @@ const llqaPayRec = (t, ym, o) => {
     to: span ? span.to : "",
     bonusBreakdown: b,
     bonuses,
+    extraClasses: xp,
+    extraPay: xp ? xp.total : 0,
     gross,
     qcFine: fines.qcFine,
     attFine: fines.attFine,
@@ -6532,12 +6603,13 @@ const llqaPayStateOf = (ym, rows, set) => {
     noBank: pick((x) => x.r.status !== "paid" && !String(x.t.bank || "").trim() && !String(x.t.accountNo || "").trim()),
     negative: pick((x) => x.r.status !== "paid" && Number(x.r.net) < 0),
     changed: pick((x) => x.r.status === "approved" && x.r.fineNow != null),
+    xchanged: pick((x) => x.r.status === "approved" && x.r.extraNow != null), // v76
     due: llqaPayDue(ym, set),
   };
 };
 const llqaPayMonthState = (ym, ctx) => {
   const x = ctx || LLQAApp.ctx || {};
-  const o = { hist: x.payrollHistory || {}, qc: x.qcViolations, att: x.attendanceHistory, counts: llqaPayCounts(x.teachers), today: todayPK() };
+  const o = { hist: x.payrollHistory || {}, qc: x.qcViolations, att: x.attendanceHistory, counts: llqaPayCounts(x.teachers), today: todayPK(), xi: ym >= LLQA_PAY_FROM ? llqaExtraIndex(ym, x) : null, set: x.appSettings }; // v76: extra classes
   const rows = (x.teachers || []).map((t) => ({ t, r: t ? llqaPayRec(t, ym, o) : null })).filter((y) => y.r);
   return llqaPayStateOf(ym, rows, x.appSettings);
 };
@@ -6571,7 +6643,15 @@ const llqaTeachersChanged = (prev, next) => {
   let changed = false;
   const out = next.map((t) => {
     const p = t && old.get(String(t.id));
-    if (!p) return t;
+    if (!p) {
+      // v76: the day a teacher came into the CRM (a teacher brought in later, with an old join date, isn't marked absent
+      // for the days before)
+      if (t && t.id != null && !llqaIsDay(t.addedAt)) {
+        changed = true;
+        return { ...t, addedAt: today };
+      }
+      return t;
+    }
     let x = t;
     const ph = Array.isArray(p.salHist) ? p.salHist : [], nh = Array.isArray(x.salHist) ? x.salHist : [];
     const lost = ph.filter((h) => h && !nh.some((k) => k && k.at === h.at && k.from === h.from));
@@ -6639,7 +6719,7 @@ const llqaPayCloseRun = () => {
     add.forEach((x) => {
       const arr = Array.isArray(next[x.t.id]) ? next[x.t.id] : [];
       if (arr.some((r) => r && r.month === ym)) return;
-      const { fineNow, ...rec } = x.r;
+      const { fineNow, extraNow, ...rec } = x.r;
       next[x.t.id] = [...arr, { ...rec, closedAt: at, closedBy: "auto" }];
     });
     return next;
@@ -6718,6 +6798,8 @@ const LLQAPayChecks = ({ ym, recs, appSettings }) => {
   const rows = (recs || []).filter((t) => t && t.pay).map((t) => ({ t, r: t.pay }));
   const s = llqaPayStateOf(ym, rows, appSettings);
   const noDate = (recs || []).filter((t) => t && !t.pay && llqaTeacherGone(t) && !llqaIsDay(t.leftOn));
+  const noRate = rows.filter((x) => x.r.status !== "paid" && x.r.extraClasses && ((x.r.extraClasses.n && !x.r.extraClasses.rate) || (x.r.extraClasses.ns && !x.r.extraClasses.rateS))); // v76
+  const wkx = rows.filter((x) => x.r.status !== "paid" && llqaShiftOf(x.t) === "Weekend" && x.r.extraClasses && x.r.extraClasses.n + x.r.extraClasses.ns > 0); // v76: their classes are all at the weekend
   const today = todayPK();
   const names = (l) => l.slice(0, 3).map((x) => x.t.name).join(", ") + (l.length > 3 ? " and " + (l.length - 3) + " more" : "");
   const chip = (key, txt, col) => React.createElement("span", { key, style: { fontSize: 11, fontWeight: 700, padding: "3px 9px", borderRadius: 10, background: llqaAlpha(col, "22"), color: col } }, txt);
@@ -6727,6 +6809,9 @@ const LLQAPayChecks = ({ ym, recs, appSettings }) => {
     s.changed.length ? chip("ch", "Fines changed since approval: " + names(s.changed), c.warn) : null,
     s.noBank.length ? chip("nb", "No bank account: " + names(s.noBank), c.warn) : null,
     noDate.length ? chip("nd", "Left, no leaving date (set it in Teachers if they worked this month): " + noDate.slice(0, 3).map((t) => t.name).join(", ") + (noDate.length > 3 ? " and " + (noDate.length - 3) + " more" : ""), c.warn) : null,
+    s.xchanged.length ? chip("xc", "Extra classes changed since approval: " + names(s.xchanged), c.warn) : null, // v76
+    noRate.length ? chip("xr", "Extra classes with no rate (Settings → HR & Attendance): " + names(noRate), c.warn) : null,
+    wkx.length ? chip("xw", "Weekend shift — their Saturday and Sunday classes count as extra unless the boxes are marked Regular: " + names(wkx), c.warn) : null,
   ].filter(Boolean);
   const canSet = (ctx.user || {}).role === "superadmin" && typeof ctx.setAppSettings === "function";
   const g = llqaDayGap(today, s.due);
@@ -6772,6 +6857,9 @@ const llqaPayRowNote = (t) => {
   const n = Object.keys(p.inst || {}).length;
   if (n && p.status === "pending") out.push(["Advance installment " + llqaRs(p.advance), c.accent]);
   if (p.fineNow != null) out.push(["Fines now " + llqaRs(p.fineNow) + " (approved with " + llqaRs(p.fine) + ")", c.warn]);
+  const xt = p.status !== "paid" ? llqaExtraText(p.extraClasses) : ""; // v76: extra classes taken
+  if (xt) out.push([xt, p.extraClasses && p.extraClasses.total ? c.success : c.warn]);
+  if (p.extraNow != null) out.push(["Extra classes now " + llqaRs(p.extraNow) + " (approved with " + llqaRs(p.extraPay || 0) + ")", c.warn]);
   if (Number(p.net) < 0 && p.status !== "paid") out.push(["Pay below zero — check the advance", c.danger]);
   if (!out.length) return null;
   return React.createElement("div", { style: { fontSize: 10, fontWeight: 600, marginTop: 2, display: "flex", flexDirection: "column", gap: 1 } }, out.map(([txt, col], i) => React.createElement("span", { key: i, style: { color: col } }, txt)));
@@ -6877,6 +6965,673 @@ const LLQAPayAdvanceWin = ({ teachers, t, onSave, onClose }) => {
     ),
     [llqaMini("Cancel", onClose, { key: "c", big: true }), llqaMini("Give the advance", save, { key: "s", big: true, solid: true, tone: "accent" })],
     { onClose, width: 520 },
+  );
+};
+/* ============================================================
+   v76: absences and leave decided by what is marked; extra classes from the Timetable; holidays editable
+   - At a teacher's closing time (their exit time + the sign-out minutes) on a working day with no sign-in and
+     nothing marked, the CRM marks them Absent (unpaid). A leave request that covers the day makes it leave instead:
+     approved → paid or unpaid as approved; still waiting → unpaid until someone marks it paid. Signing in after the
+     exit time is the same: the office day was missed.
+   - A team lead (their own teachers), a manager (Approve Leaves) or an admin (Mark Attendance) marks a day without a
+     sign-in as Paid leave / Unpaid leave / Absent, before or after, until that month's pay is approved. Paid leave
+     costs nothing; unpaid leave and absence cost the absent amount (Settings: a fixed amount, or one day's salary).
+     Settings can limit paid leave a month: over it only an admin gives more.
+   - A class is extra when its Timetable box is marked Extra (Saturday and Sunday boxes start as Extra), it falls on
+     a holiday, or a make-up is marked Extra. It is paid once the teacher logs it (present or late) at the Extra class
+     or Subject extra class rate (Settings). A class moved to another box starts with that box's default.
+   ============================================================ */
+const LLQA_ABS_FROM = "2026-11-14"; // the CRM marks absences for office days from here (none before v76)
+
+/* ---------- absent and leave ---------- */
+// one day's salary (the absent amount when Settings say "One day's salary"): the salary that day ÷ the days of its month
+const llqaDayPay = (t, date) => {
+  const s = Number(llqaSalaryOn(t, date)) || 0;
+  return s > 0 ? Math.round(s / llqaYmDays(String(date).slice(0, 7))) : 0;
+};
+// what one absence / unpaid leave day costs (the day keeps its dayPay and the rule it began with)
+const llqaAbsAmt = (rec, r, half) => {
+  const dp = Number(rec && rec.dayPay) || 0;
+  if (r.absMode === "salary" && dp > 0) return half ? Math.round(dp / 2) : dp;
+  return half ? r.halfDay : r.absent;
+};
+// a day without a sign-in: leave (paid / unpaid) or absent
+const llqaIsLeaveDay = (h) => !!h && (h.status === "On Leave" || (h.status === "Absent" && llqaHm2m(h.checkIn) == null));
+const llqaLeaveDayText = (h) => {
+  if (!h) return "";
+  if (h.status === "On Leave") return (h.paid === false ? "Unpaid leave" : "Paid leave") + (h.halfDay ? " (half day)" : "") + (h.pending ? " · request waiting for approval" : "");
+  if (h.status === "Absent") return "Absent" + (h.auto ? " — no sign-in by " + llqaHm12(h.officeEnd) : "") + " (unpaid)";
+  return String(h.status || "");
+};
+// a team lead's own teacher (the teacher's Team Lead is them)
+const llqaIsLeadOf = (user, t) => {
+  if (!user || user.role !== "teamlead" || !t) return false;
+  const lead = String(t.teamLead || t.lead || "").trim().toLowerCase();
+  return !!lead && lead === String(user.name || "").trim().toLowerCase();
+};
+// mark a day without a sign-in as paid leave, unpaid leave or absent: an admin (Mark Attendance), a manager
+// (Approve Leaves), or the teacher's team lead. A day they signed in is corrected by an admin in Attendance.
+const llqaCanMarkLeave = (user, t, rec) => {
+  if (!user || !t) return false;
+  if (rec && !llqaIsLeaveDay(rec)) return false;
+  return llqaCanMarkAll(user) || llqaUserCan(user, "Approve Leaves") || llqaIsLeadOf(user, t);
+};
+const llqaCanMarkLeaveAny = (user) => !!user && (llqaCanMarkAll(user) || llqaUserCan(user, "Approve Leaves") || user.role === "teamlead");
+// a month whose pay is approved or paid keeps its days
+const llqaPayLock = (tid, date) => {
+  const r = ((((LLQAApp.ctx || {}).payrollHistory || {})[tid]) || []).find((x) => x && x.month === String(date).slice(0, 7));
+  return r && (r.status === "approved" || r.status === "paid") ? r.status : "";
+};
+const llqaPayLockText = (st, date) => {
+  const m = llqaYmName(String(date).slice(0, 7));
+  return st === "paid" ? m + " is already paid — this day can't change now." : m + "'s pay is approved — put it back to pending in Payroll first.";
+};
+// paid leave days in a month: days marked paid leave (a half day is ½) and approved paid leave not marked yet
+const llqaPaidUsed = (t, ym, skip) => {
+  const ctx = LLQAApp.ctx || {};
+  const set = ctx.appSettings || {};
+  const not = new Set(skip || []);
+  const recs = (llqaAttView()[String(t.id)] || []).filter((h) => h && String(h.date || "").startsWith(ym) && !not.has(h.date));
+  const have = new Set(recs.map((h) => h.date));
+  let n = recs.filter((h) => h.status === "On Leave" && h.paid !== false).reduce((s, h) => s + (h.halfDay ? 0.5 : 1), 0);
+  (ctx.leaves || []).forEach((l) => {
+    if (!l || l.status !== "approved" || l.pay === "unpaid" || String(l.teacherId) !== String(t.id) || !llqaIsDay(l.from)) return;
+    llqaDatesIn(l.from, l.to || l.from, 62).forEach((d) => {
+      if (d.startsWith(ym) && !have.has(d) && !not.has(d) && llqaWorkDay(t, d, set).ok) n += l.halfDay ? 0.5 : 1;
+    });
+  });
+  return n;
+};
+// paid leave over the monthly limit (Settings): {} when within it; { block } for all but an admin; { warn } for an admin
+const llqaPaidCheck = (user, t, dates, half) => {
+  const lim = llqaFineRules((LLQAApp.ctx || {}).appSettings).paidLimit;
+  if (!lim || !t) return {};
+  const byYm = {};
+  (dates || []).forEach((d) => {
+    const ym = String(d).slice(0, 7);
+    byYm[ym] = (byYm[ym] || 0) + (half ? 0.5 : 1);
+  });
+  for (const ym of Object.keys(byYm)) {
+    const used = llqaPaidUsed(t, ym, dates);
+    if (used + byYm[ym] > lim) {
+      const txt = (t.name || "This teacher") + " already has " + used + " paid leave day" + (used === 1 ? "" : "s") + " in " + llqaYmName(ym) + " (limit " + lim + " a month)";
+      return llqaCanMarkAll(user) ? { warn: txt + ". Give paid leave anyway?" } : { block: txt + ". Only an admin can give more paid leave — mark it unpaid, or ask an admin." };
+    }
+  }
+  return {};
+};
+// a teacher's day (no sign-in) as paid leave, unpaid leave or absent. "" when saved, "cancel", or why not.
+const llqaSetLeaveDay = (t, date, kind, note, force) => {
+  const ctx = LLQAApp.ctx || {};
+  const user = ctx.user;
+  const set = ctx.appSettings || {};
+  if (!t || !llqaIsDay(date)) return "Choose the teacher and the day.";
+  if (!llqaAttReady()) return "Attendance is still loading — try again in a moment.";
+  const uid = String(t.id);
+  const h = (llqaAttView()[uid] || []).find((x) => x && x.date === date) || null;
+  if (h && !llqaIsLeaveDay(h)) return "They signed in that day — an admin corrects it in Attendance.";
+  if (!llqaCanMarkLeave(user, t, h)) return "Only their team lead, a manager or an admin marks this.";
+  const lock = llqaPayLock(uid, date);
+  if (lock) return llqaPayLockText(lock, date);
+  if (kind === "paid" && !force) {
+    const ck = llqaPaidCheck(user, t, [date], !!(h && h.halfDay));
+    if (ck.block) return ck.block;
+    if (ck.warn && !confirm(ck.warn)) return "cancel";
+  }
+  const who = llqaPayActor();
+  const off = llqaOffice(t, set);
+  const wd = llqaWorkDay(t, date, set);
+  const label = kind === "paid" ? "paid leave" : kind === "unpaid" ? "unpaid leave" : "absent";
+  const why = String(note || "").trim();
+  llqaAttWrite((prev) => {
+    const list = prev[uid] || [];
+    const cur = list.find((x) => x && x.date === date);
+    if (cur && !llqaIsLeaveDay(cur)) return prev;
+    const reasons = { ...((cur && cur.reasons) || {}) };
+    delete reasons.day;
+    const rec = llqaWithFine(
+      {
+        ...(cur || {}),
+        date,
+        status: kind === "absent" ? "Absent" : "On Leave",
+        paid: kind === "paid",
+        pending: false,
+        auto: false,
+        halfDay: kind === "absent" ? false : !!(cur && cur.halfDay),
+        checkIn: "—",
+        checkOut: "—",
+        lateMin: 0,
+        earlyMin: 0,
+        awayMin: 0,
+        officeStart: (cur && cur.officeStart) || off.start,
+        officeEnd: (cur && cur.officeEnd) || off.end,
+        offDay: wd.ok ? "" : wd.why,
+        dayPay: llqaDayPay(t, date),
+        reasons,
+        fineOverride: null,
+        device: (cur && cur.device) || "Admin Panel",
+        markedBy: who,
+        leaveBy: who,
+        leaveAt: new Date(llqaNowMs()).toISOString(),
+        leaveNote: why,
+        approved: true,
+      },
+      set,
+      who,
+      "marked " + label + " by " + who + (why ? ": " + why : ""),
+    );
+    return { ...prev, [uid]: list.filter((x) => !x || x.date !== date).concat([rec]) };
+  });
+  return "";
+};
+// the first office day the CRM may mark for a teacher: v76's start, the attendance it has (last month on), their join
+// date and the day after they were added to the CRM — or, with neither, their first day in attendance (a teacher
+// brought in later isn't marked for the days before, nor for the day they were added: they may have had no sign-in yet)
+const llqaAbsFirst = (t, recs, today, set) => {
+  const base = [LLQA_ABS_FROM, llqaIsDay(set.autoAbsent) ? set.autoAbsent : "", llqaPrevYm(today.slice(0, 7)) + "-01"]; // turned on again: from that day
+  const own = [t.joinDate, llqaIsDay(t.addedAt) ? llqaAddDays(t.addedAt, 1) : ""].filter(llqaIsDay);
+  if (own.length) return base.concat(own).sort().pop();
+  const seen = (recs || []).map((h) => h && h.date).filter(llqaIsDay).sort()[0];
+  return seen ? base.concat([seen]).sort().pop() : "";
+};
+// office days whose closing time has passed with nothing in attendance: [{ t, date, o, lv }]
+const llqaAbsentDue = (nowMs) => {
+  const ctx = LLQAApp.ctx || {};
+  const set = ctx.appSettings || {};
+  const rules = llqaFineRules(set);
+  if (!rules.autoAbsent) return [];
+  const view = llqaAttView();
+  const today = llqaPkDate(nowMs);
+  const out = [];
+  (ctx.teachers || []).forEach((t) => {
+    if (!t || t.id == null) return;
+    const gone = llqaTeacherGone(t) || t.status === "quit"; // "quit": an older way of saying they left (Timetable)
+    if (gone && !llqaIsDay(t.leftOn)) return;
+    const recs = view[String(t.id)] || [];
+    const first = llqaAbsFirst(t, recs, today, set);
+    if (!first) return;
+    const o = llqaOffice(t, set);
+    const len = llqaShiftLen(o);
+    const have = new Set(recs.map((h) => h && h.date));
+    for (let d = first, i = 0; d <= today && i < 70; d = llqaAddDays(d, 1), i++) {
+      if (gone && d > t.leftOn) break;
+      if (have.has(d)) continue;
+      if (nowMs < llqaPkMs(d, o.start) + len * 60000 + rules.autoOutMin * 60000) continue;
+      if (!llqaWorkDay(t, d, set).ok || llqaPayLock(t.id, d)) continue;
+      out.push({ t, date: d, o, lv: llqaLeaveOn(t, d) });
+    }
+  });
+  return out;
+};
+// the clock's job (an admin's screen: the Super Admin, or a role given "Mark Attendance")
+const llqaAbsentRun = () => {
+  const ctx = LLQAApp.ctx || {};
+  const u = ctx.user;
+  if (!u || u.role === "teacher" || u.role === "parent" || !(u.role === "superadmin" || llqaCanMarkAll(u))) return false;
+  // the settings (working days, hours, the switch) and the holidays too: never on a first copy that isn't the cloud's
+  if (!llqaReadyFor(["teachers", "leaves", "doc:data/payrollHistory", "doc:settings/preferences", "doc:settings/calendar"]) || !llqaAttReady()) return false;
+  const nowMs = llqaNowMs();
+  const due = llqaAbsentDue(nowMs);
+  if (!due.length) return false;
+  const set = ctx.appSettings || {};
+  const at = new Date(nowMs).toISOString();
+  llqaAttWrite((prev) => {
+    const next = { ...prev };
+    due.forEach(({ t, date, o, lv }) => {
+      const uid = String(t.id);
+      const list = next[uid] || [];
+      if (list.some((h) => h && h.date === date)) return;
+      const ok = !!lv && lv.status === "approved";
+      const base = { date, checkIn: "—", checkOut: "—", lateMin: 0, earlyMin: 0, awayMin: 0, officeStart: o.start, officeEnd: o.end, offDay: "", dayPay: llqaDayPay(t, date), device: "CRM", auto: true, autoAt: at, approved: true };
+      const rec = lv
+        ? { ...base, status: "On Leave", paid: ok ? lv.pay !== "unpaid" : false, pending: !ok, halfDay: !!lv.halfDay, leaveId: lv.id, leaveType: lv.type || "" }
+        : { ...base, status: "Absent", paid: false };
+      const why = lv
+        ? ok
+          ? (lv.pay === "unpaid" ? "unpaid" : "paid") + " leave (" + (lv.type || "leave") + ", approved)"
+          : "leave request waiting for approval — unpaid until marked paid"
+        : "no sign-in by " + llqaHm12(o.end) + " — absent (unpaid)";
+      next[uid] = list.concat([llqaWithFine(rec, set, "CRM", why)]);
+    });
+    return next;
+  });
+  const abs = due.filter((x) => !x.lv);
+  if (abs.length) llqaToast(llqaAbsentToast(abs));
+  return true;
+};
+const llqaAbsentNames = (list) => list.slice(0, 4).map((x) => x.t.name + " (" + llqaDayMon(x.date) + ")").join(", ") + (list.length > 4 ? " and " + (list.length - 4) + " more" : "");
+const llqaAbsentToast = (abs) => ({
+  kind: "absent",
+  key: "absent",
+  text: "🚫 Marked absent — no sign-in by closing time: " + llqaAbsentNames(abs) + ". Unpaid unless their team lead, a manager or an admin marks paid leave.",
+  actions: [{ label: "Attendance", run: () => llqaGo("attendance", "fines") }],
+});
+// a team lead's own teachers marked absent by the CRM, today or yesterday
+const llqaLeadAbsents = (u, today) => {
+  const ctx = LLQAApp.ctx || {};
+  const view = llqaAttView();
+  const y = llqaAddDays(today, -1);
+  const out = [];
+  (ctx.teachers || []).forEach((t) => {
+    if (!llqaIsLeadOf(u, t)) return;
+    (view[String(t.id)] || []).forEach((h) => {
+      if (h && h.auto && h.status === "Absent" && (h.date === today || h.date === y)) out.push({ t, date: h.date });
+    });
+  });
+  return out;
+};
+const llqaLeadAbsentToast = (list) => ({
+  kind: "absent",
+  key: "absent-lead",
+  text: "🚫 Your team — marked absent, no sign-in by closing time: " + llqaAbsentNames(list) + ". Unpaid; if they told you, mark it paid leave.",
+  actions: [{ label: "Attendance", run: () => llqaGo("attendance", "fines") }],
+});
+// a teacher's own unpaid days this week (absent, or unpaid leave)
+const llqaMyAbsents = (u, today) => {
+  const uid = String(llqaTeacherIdOf(u));
+  const from = llqaAddDays(today, -6);
+  return (llqaAttView()[uid] || []).filter((h) => h && h.date >= from && h.date <= today && ((h.status === "Absent" && h.auto) || (h.status === "On Leave" && h.paid === false))).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+};
+const llqaMyAbsentToast = (list) => {
+  const sum = list.reduce((s, h) => s + (Number(h.fine) || 0), 0);
+  const one = list.length === 1 ? list[0] : null;
+  return {
+    kind: "absent",
+    key: "absent-mine",
+    text: one
+      ? "📅 " + llqaDayMon(one.date) + ": " + llqaLeaveDayText(one) + " — " + llqaRs(one.fine) + " off your pay. If you told your team lead, ask them to mark it paid leave."
+      : "📅 " + list.length + " unpaid days this week (" + list.map((h) => llqaDayMon(h.date)).join(", ") + ") — " + llqaRs(sum) + " off your pay. If you told your team lead, ask them to mark paid leave.",
+  };
+};
+// a leave request approved as paid or unpaid, or rejected; the days already marked follow it. "" when done.
+const llqaLeaveDecide = (id, status, pay) => {
+  const ctx = LLQAApp.ctx || {};
+  const l = (ctx.leaves || []).find((x) => x && String(x.id) === String(id));
+  if (!l || typeof ctx.setLeaves !== "function") return "That request isn't there any more.";
+  const t = (ctx.teachers || []).find((x) => String(x.id) === String(l.teacherId)) || { id: l.teacherId, name: l.teacherName || "The teacher" };
+  if (status === "approved" && pay !== "unpaid") {
+    const set = ctx.appSettings || {};
+    const days = llqaIsDay(l.from) ? llqaDatesIn(l.from, l.to || l.from, 62).filter((d) => llqaWorkDay(t, d, set).ok) : [];
+    const ck = llqaPaidCheck(ctx.user, t, days, !!l.halfDay);
+    if (ck.block) return ck.block;
+    if (ck.warn && !confirm(ck.warn)) return "cancel";
+  }
+  const who = llqaPayActor();
+  const at = new Date().toISOString();
+  const next = status === "approved" ? { ...l, status, pay: pay === "unpaid" ? "unpaid" : "paid", payBy: who, payAt: at } : { ...l, status, decidedBy: who, decidedAt: at };
+  ctx.setLeaves((prev) => (prev || []).map((x) => (x && String(x.id) === String(id) ? next : x)));
+  if (status === "approved" && typeof llqaLeaveApproved === "function") llqaLeaveApproved(next);
+  llqaLeaveSync(next, t);
+  return "";
+};
+const llqaLeaveAct = (id, status, pay) => {
+  const e = llqaLeaveDecide(id, status, pay);
+  if (e && e !== "cancel") alert(e);
+};
+// the days of a leave already in attendance (marked by the CRM at closing time, or as this leave) follow its
+// decision; a month whose pay is approved keeps its days
+const llqaLeaveSync = (l, t) => {
+  if (!l || !t || !llqaIsDay(l.from) || !llqaAttReady()) return;
+  const set = (LLQAApp.ctx || {}).appSettings || {};
+  const uid = String(t.id);
+  const days = new Set(llqaDatesIn(l.from, l.to || l.from, 62));
+  const who = llqaPayActor();
+  llqaAttWrite((prev) => {
+    const list = prev[uid] || [];
+    let changed = false;
+    const out = list.map((h) => {
+      if (!h || !days.has(h.date) || !llqaIsLeaveDay(h) || llqaPayLock(uid, h.date)) return h;
+      if (!(String(h.leaveId || "") === String(l.id) || (h.auto && !h.leaveId))) return h;
+      if (l.status === "rejected") {
+        changed = true;
+        return llqaWithFine({ ...h, status: "Absent", paid: false, pending: false, halfDay: false, leaveId: "", leaveType: "" }, set, who, "leave request rejected by " + who + " — absent (unpaid)");
+      }
+      if (l.status === "approved") {
+        changed = true;
+        return llqaWithFine({ ...h, status: "On Leave", paid: l.pay !== "unpaid", pending: false, halfDay: !!l.halfDay, leaveId: l.id, leaveType: l.type || "" }, set, who, (l.pay === "unpaid" ? "unpaid" : "paid") + " leave approved by " + who);
+      }
+      return h;
+    });
+    return changed ? { ...prev, [uid]: out } : prev;
+  });
+};
+// Attendance → a day as paid leave, unpaid leave or absent (any day from last month to a month ahead)
+const LLQALeaveDayWin = ({ data, onClose }) => {
+  const ctx = LLQAApp.ctx || {};
+  const u = ctx.user;
+  const today = todayPK();
+  const d0 = data || {};
+  const mine = (ctx.teachers || []).filter((t) => t && !llqaTeacherGone(t) && llqaCanMarkLeave(u, t, null));
+  const [tid, setTid] = React.useState(d0.tid != null ? String(d0.tid) : "");
+  const [date, setDate] = React.useState(d0.date || today);
+  const t = (ctx.teachers || []).find((x) => String(x.id) === String(tid)) || null;
+  const h = t ? (llqaAttView()[String(t.id)] || []).find((x) => x && x.date === date) || null : null;
+  const [kind, setKind] = React.useState(d0.kind || (h && h.status === "On Leave" && h.paid !== false ? "unpaid" : "paid"));
+  const [note, setNote] = React.useState("");
+  const [err, setErr] = React.useState("");
+  const min = llqaPrevYm(today.slice(0, 7)) + "-01";
+  const max = llqaAddDays(today, 31);
+  const r = llqaFineRules(ctx.appSettings);
+  const amt = t ? llqaAbsAmt({ dayPay: llqaDayPay(t, date) }, r, !!(h && h.halfDay)) : 0;
+  const save = () => {
+    if (!t) return setErr("Choose the teacher.");
+    if (!llqaIsDay(date) || date < min || date > max) return setErr("Choose a day from " + llqaDayMon(min) + " to " + llqaDayMon(max) + ".");
+    const e = llqaSetLeaveDay(t, date, kind, note);
+    if (e === "cancel") return;
+    if (e) return setErr(e);
+    llqaToast({ kind: "info", ttl: 6000, text: "✓ " + t.name + " · " + llqaDayMon(date) + ": " + (kind === "paid" ? "paid leave" : kind === "unpaid" ? "unpaid leave" : "absent") + "." });
+    onClose();
+  };
+  const sel = (title, value, onChange, opts) =>
+    React.createElement(
+      "div",
+      { style: { marginBottom: 10 } },
+      React.createElement("div", { style: { fontSize: 12, color: c.textSec, marginBottom: 4 } }, title),
+      React.createElement(LLQASelect, { value, title, onChange: (e) => onChange(e.target.value), style: { width: "100%" } }, opts.map(([v, l]) => React.createElement("option", { key: v, value: v }, l))),
+    );
+  return llqaShell(
+    "Leave or absence",
+    "Paid leave costs nothing. Unpaid leave and absence cost the absent amount" + (t ? " (" + llqaRs(amt) + " for " + t.name + ")" : "") + ".",
+    React.createElement(
+      "div",
+      null,
+      d0.tid != null ? null : sel("Teacher", tid, setTid, [["", "Choose the teacher…"]].concat(mine.map((x) => [String(x.id), x.name]))),
+      React.createElement(Inp, { label: "Day", type: "date", value: date, onChange: (v) => setDate(v) }),
+      t ? React.createElement("div", { style: { fontSize: 12, color: c.textSec, margin: "-4px 0 10px" } }, h ? "Now: " + (llqaIsLeaveDay(h) ? llqaLeaveDayText(h) : "signed in (" + (h.status || "") + ")") + (Number(h.fine) > 0 ? " · " + llqaRs(h.fine) : "") : "Nothing marked for this day yet.") : null,
+      t && llqaIsDay(date) && !llqaWorkDay(t, date, ctx.appSettings || {}).ok ? React.createElement("div", { style: { fontSize: 12, color: c.warn, margin: "-6px 0 10px" } }, "A day off for " + t.name + " (" + llqaWorkDay(t, date, ctx.appSettings || {}).why + ") — nothing is cut that day.") : null,
+      sel("Mark as", kind, setKind, [
+        ["paid", "Paid leave — nothing cut"],
+        ["unpaid", "Unpaid leave — the absent amount is cut"],
+        ["absent", "Absent — the absent amount is cut"],
+      ]),
+      React.createElement(Inp, { label: "Note (optional)", value: note, onChange: (v) => setNote(v), placeholder: "e.g. told the team lead in the morning" }),
+      err ? React.createElement("div", { style: { color: c.danger, fontSize: 12, marginTop: 4 } }, err) : null,
+    ),
+    [llqaMini("Cancel", onClose, { key: "x", big: true }), llqaMini("Save", save, { key: "ok", big: true, solid: true, tone: "accent" })],
+    { onClose, width: 480 },
+  );
+};
+
+/* ---------- extra classes ---------- */
+const llqaCanMarkExtra = (user) => llqaUserCan(user || (LLQAApp.ctx || {}).user, "Mark Extra Classes");
+const llqaIsWeekendRow = (day) => day === "Sat" || day === "Sun";
+const llqaExtraRates = (s) => ({ rate: Math.max(0, Number((s || {}).extraClassRate) || 0), rateS: Math.max(0, Number((s || {}).subjectExtraRate) || 0) });
+// a box's marks: [{ tid, day, from, on, by, at }] — each for the teacher and day it was set on (a moved class
+// starts with its new box's default)
+const llqaCellMarks = (cell, tid, day) =>
+  (Array.isArray(cell && cell.x) ? cell.x : [])
+    .filter((m) => m && String(m.tid) === String(tid) && m.day === day && llqaIsDay(m.from))
+    .sort((a, b) => String(a.from).localeCompare(String(b.from)) || String(a.at || "").localeCompare(String(b.at || "")));
+const llqaCellExtraOn = (cell, tid, day, date) => {
+  const ms = llqaCellMarks(cell, tid, day).filter((m) => m.from <= date);
+  return ms.length ? { on: !!ms[ms.length - 1].on, set: ms[ms.length - 1] } : { on: llqaIsWeekendRow(day), set: null };
+};
+// a make-up: its own mark, else extra on a Saturday or Sunday
+const llqaMakeupIsExtra = (m) => !!m && (m.extra === true || (m.extra !== false && llqaIsDay(m.date) && llqaIsWeekendRow(llqaWeekday(m.date))));
+const llqaMakeupExtraBtn = (m) => {
+  if (!m || !llqaCanMarkExtra()) return null;
+  const on = llqaMakeupIsExtra(m);
+  return llqaMini(on ? "Extra ✓" : "Mark as Extra", () => llqaSetMakeup(m.id, { extra: !on, extraBy: llqaPayActor(), extraAt: new Date().toISOString() }), {
+    key: "xe",
+    tone: on ? "accent" : undefined,
+    title: on ? "Counts as an extra class — tap to make it regular" : "Make it an extra class (paid at the extra class rate once logged)",
+  });
+};
+// is a class extra for the teacher who took it? A holiday: always. A make-up: as above. A class taken for a teacher
+// on leave: regular, unless it is a weekend class.
+const llqaClsExtra = (it, date) => {
+  if (!it) return false;
+  if (it.holiday) return true;
+  if (it.makeup) return llqaMakeupIsExtra(it.makeup);
+  if (it.covered) return llqaIsWeekendRow(it.rowDay);
+  return llqaCellExtraOn(it.cell, it.teacherId, it.rowDay, date).on;
+};
+const llqaClsSubject = (it) => /^subject$/i.test(String((it && it.stu && it.stu.course) || (it && it.cell && it.cell.c) || "").trim());
+// taken: the teacher logged it, the student present or late
+const llqaClsHeld = (it) => {
+  const a = String((it && it.entry && it.entry.attended) || "").toLowerCase();
+  return !!(it && it.entry) && (a === "present" || a === "late");
+};
+// every extra class taken in month ym (up to today), by teacher id: { n, ns, list }
+const LLQAXi = new Map();
+const llqaExtraIndex = (ym, x) => {
+  const ctx = x || LLQAApp.ctx || {};
+  const today = todayPK();
+  const deps = [ctx.teachers, ctx.students, ctx.dailyProgress, ctx.makeups, ctx.covers, ctx.leaves, ctx.calendar, today];
+  const hit = LLQAXi.get(ym);
+  if (hit && hit.deps.length === deps.length && hit.deps.every((d, i) => d === deps[i])) return hit.v;
+  const out = new Map();
+  const last = ym + "-" + String(llqaYmDays(ym)).padStart(2, "0");
+  const end = last < today ? last : today;
+  for (let d = ym + "-01", i = 0; d <= end && i < 31; d = llqaAddDays(d, 1), i++) {
+    let items = [];
+    try {
+      items = llqaClassesOn(d, ctx.teachers || [], ctx.students || [], ctx.dailyProgress || []);
+    } catch (e) {
+      items = [];
+    }
+    items.forEach((it) => {
+      if (!llqaClsHeld(it) || !llqaClsExtra(it, d)) return;
+      const who = String(llqaClsWho(it).teacherId);
+      const sub = llqaClsSubject(it);
+      const o = out.get(who) || { n: 0, ns: 0, list: [] };
+      if (sub) o.ns++;
+      else o.n++;
+      if (o.list.length < 300) o.list.push({ date: d, slot: it.slot, student: (it.cell && it.cell.s) || "", sub, why: it.holiday ? "holiday" : it.makeup ? "make-up" : it.covered ? "weekend cover" : llqaIsWeekendRow(it.rowDay) ? "weekend" : "marked extra" });
+      out.set(who, o);
+    });
+  }
+  if (LLQAXi.size > 24) LLQAXi.clear();
+  LLQAXi.set(ym, { deps, v: out });
+  return out;
+};
+const llqaExtraPay = (t, ym, xi, set) => {
+  const r = llqaExtraRates(set);
+  const o = (xi && xi.get(String(t.id))) || { n: 0, ns: 0, list: [] };
+  const amount = o.n * r.rate;
+  const amountS = o.ns * r.rateS;
+  return { n: o.n, ns: o.ns, rate: r.rate, rateS: r.rateS, amount, amountS, total: amount + amountS };
+};
+// extra classes count in the pay from November 2026
+const llqaExtraFor = (t, ym, o) => (ym >= LLQA_PAY_FROM ? llqaExtraPay(t, ym, (o && o.xi) || llqaExtraIndex(ym), (o && o.set) || (LLQAApp.ctx || {}).appSettings) : null);
+const llqaExtraText = (x) => {
+  if (!x || !(x.n + x.ns)) return "";
+  const parts = [x.n ? x.n + (x.rate ? " × " + llqaRs(x.rate) : "") : "", x.ns ? x.ns + " subject" + (x.rateS ? " × " + llqaRs(x.rateS) : "") : ""].filter(Boolean);
+  return "Extra classes: " + parts.join(" + ") + (x.total ? " = " + llqaRs(x.total) : " (no rate set in Settings)");
+};
+// write a box's Extra / Regular mark from a day (the box comes into the teacher's own Timetable copy if needed)
+const llqaSetCellMark = (tid, day, slot, on, from) => {
+  const ctx = LLQAApp.ctx || {};
+  const u = ctx.user || {};
+  if (!llqaCanMarkExtra(u)) return 'Only an admin, or a role given "Mark Extra Classes", marks extra classes.';
+  if (typeof ctx.setTeachers !== "function") return "The Timetable can't be saved here.";
+  if (!llqaIsDay(from)) return "Choose the day it starts.";
+  const t0 = (ctx.teachers || []).find((x) => x && String(x.id) === String(tid));
+  const cur0 = t0 ? LLQABooking.rawCell(t0, day, slot) : null;
+  if (!cur0 || typeof cur0 !== "object" || !cur0.s) return "That class isn't in the Timetable any more.";
+  const by = u.name || (u.role === "superadmin" ? "Super Admin" : u.role) || "";
+  const at = new Date().toISOString();
+  ctx.setTeachers((prev) =>
+    (prev || []).map((t) => {
+      if (!t || String(t.id) !== String(tid)) return t;
+      const cur = LLQABooking.rawCell(t, day, slot);
+      if (!cur || typeof cur !== "object" || !cur.s) return t;
+      const sch = t._ttSchedule ? JSON.parse(JSON.stringify(t._ttSchedule)) : {};
+      if (!sch[day]) sch[day] = {};
+      const marks = (Array.isArray(cur.x) ? cur.x : []).filter((m) => !(m && String(m.tid) === String(t.id) && m.day === day && m.from === from));
+      sch[day][slot] = { ...cur, x: marks.concat([{ tid: t.id, day, from, on: !!on, by, at }]).slice(-20) };
+      return { ...t, _ttSchedule: sch };
+    }),
+  );
+  return "";
+};
+// the app's id of a Timetable / Subjects teacher (the screens keep their own copies)
+const llqaAppTid = (t) => {
+  if (!t) return null;
+  const id = t._appId != null ? t._appId : t._overlayAppId != null ? t._overlayAppId : t.id;
+  return id != null && ((LLQAApp.ctx || {}).teachers || []).some((x) => x && String(x.id) === String(id)) ? id : null;
+};
+const llqaSubjDayKey = (d) => ({ mon: "Mon", tue: "Tue", wed: "Wed", thu: "Thu", fri: "Fri", sat: "Sat", sun: "Sun" })[String(d || "").toLowerCase()] || d;
+// the box window: what this class counts as, with "Mark as Extra" / "Mark as Regular" next to Mark as Free
+const LLQAExtraBtn = ({ t, day, slot, cell, onDone }) => {
+  const tid = llqaAppTid(t);
+  if (tid == null || !cell || typeof cell !== "object" || !cell.s || !day || !slot) return null;
+  const st = llqaCellExtraOn(cell, tid, day, todayPK());
+  const why = st.set ? "marked by " + (st.set.by || "someone") + " from " + llqaDayMon(st.set.from) : llqaIsWeekendRow(day) ? "Saturday / Sunday" : "";
+  return React.createElement(
+    "span",
+    { "data-llqa": "extra-mark", style: { display: "inline-flex", alignItems: "center", gap: 6, flexWrap: "wrap" } },
+    React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: st.on ? c.accent : c.textSec } }, (st.on ? "Extra class" : "Regular class") + (why ? " (" + why + ")" : "")),
+    llqaCanMarkExtra()
+      ? React.createElement(
+          Btn,
+          {
+            variant: "outline",
+            onClick: () => {
+              if (onDone) onDone();
+              llqaOpen("extramark", { tid, day, slot, on: !st.on, student: cell.s });
+            },
+          },
+          st.on ? "Mark as Regular" : "Mark as Extra",
+        )
+      : null,
+  );
+};
+// the Timetable box: a small EXTRA tag on a class that counts as extra today
+const llqaCellBadge = (t, day, cell) => {
+  if (!cell || typeof cell !== "object" || !cell.s) return null;
+  const tid = llqaAppTid(t);
+  if (tid == null || !llqaCellExtraOn(cell, tid, day, todayPK()).on) return null;
+  return React.createElement("div", { style: { display: "inline-block", fontSize: 9, fontWeight: 800, letterSpacing: 0.4, color: c.accent, border: "1px solid " + llqaAlpha(c.accent, "66"), borderRadius: 4, padding: "0 4px", marginBottom: 2 } }, "EXTRA");
+};
+const LLQAExtraMarkWin = ({ data, onClose }) => {
+  const ctx = LLQAApp.ctx || {};
+  const today = todayPK();
+  const first = today.slice(0, 7) + "-01";
+  const d = data || {};
+  const [from, setFrom] = React.useState(today);
+  const [err, setErr] = React.useState("");
+  const t = (ctx.teachers || []).find((x) => x && String(x.id) === String(d.tid)) || { name: "" };
+  const r = llqaExtraRates(ctx.appSettings);
+  const where = (d.student || "This class") + " with " + (t.name || "the teacher") + " · " + d.day + " " + LLQABooking.fmt12(d.slot) + " (Pakistan time)";
+  const save = () => {
+    const e = llqaSetCellMark(d.tid, d.day, d.slot, !!d.on, from);
+    if (e) return setErr(e);
+    llqaToast({ kind: "info", ttl: 7000, text: "✓ " + (d.student || "The class") + " with " + (t.name || "the teacher") + " counts as " + (d.on ? "an extra class" : "a regular class") + " from " + llqaDayMon(from) + "." });
+    onClose();
+  };
+  return llqaShell(
+    d.on ? "Mark as Extra" : "Mark as Regular",
+    where,
+    React.createElement(
+      "div",
+      null,
+      React.createElement(
+        "div",
+        { style: { fontSize: 12, color: c.text, lineHeight: 1.5, marginBottom: 10 } },
+        d.on
+          ? "From that day each class taught is paid at the extra class rate (" + (r.rate ? llqaRs(r.rate) : "not set yet") + "; a Subject class " + (r.rateS ? llqaRs(r.rateS) : "not set yet") + "), once the teacher logs it in Today's Classes."
+          : "From that day this class is part of the salary — not paid as extra.",
+      ),
+      React.createElement("div", { style: { fontSize: 12, color: c.textSec, marginBottom: 4 } }, "From"),
+      React.createElement(
+        LLQASelect,
+        { value: from, title: "From", onChange: (e) => setFrom(e.target.value), style: { width: "100%" } },
+        [React.createElement("option", { key: "t", value: today }, "Today (" + llqaDayMon(today) + ")")].concat(first < today ? [React.createElement("option", { key: "f", value: first }, llqaDayMon(first) + " — the start of this month")] : []),
+      ),
+      err ? React.createElement("div", { style: { color: c.danger, fontSize: 12, marginTop: 8 } }, err) : null,
+    ),
+    [llqaMini("Cancel", onClose, { key: "x", big: true }), llqaMini("Save", save, { key: "ok", big: true, solid: true, tone: "accent" })],
+    { onClose, width: 460 },
+  );
+};
+
+/* ---------- holidays: every entry can be changed or deleted ---------- */
+const LLQAHolidayList = () => {
+  const ctx = LLQAApp.ctx || {};
+  const today = todayPK();
+  const [old, setOld] = React.useState(false);
+  const all = llqaCalendar().slice().sort((a, b) => String(a.from).localeCompare(String(b.from)));
+  const list = old ? all : all.filter((d) => (d.to || d.from) >= today);
+  const manage = llqaCanManage() && typeof ctx.setCalendar === "function";
+  const kindText = (d) => (LLQA_DAY_KINDS.find((k) => k[0] === (d.kind || "holiday")) || LLQA_DAY_KINDS[0])[1];
+  const del = (d) => {
+    if (!confirm("Delete " + (d.name || "this entry") + " (" + llqaRangeLabel(d.from, d.to) + ")?")) return;
+    ctx.setCalendar((prev) => ({ ...(prev || {}), days: ((prev && prev.days) || []).filter((x) => x.id !== d.id) }));
+  };
+  return React.createElement(
+    "div",
+    { "data-llqa": "holiday-list" },
+    list.length
+      ? list.map((d, i) =>
+          React.createElement(
+            "div",
+            { key: d.id || i, style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "8px 0", borderBottom: "1px solid " + c.border } },
+            React.createElement(
+              "div",
+              null,
+              React.createElement("div", { style: { color: c.text, fontSize: 12, fontWeight: 600 } }, d.name || "Holiday"),
+              React.createElement("div", { style: { color: c.textSec, fontSize: 10 } }, llqaRangeLabel(d.from, d.to) + " · " + kindText(d)),
+            ),
+            manage && d.id
+              ? React.createElement(
+                  "div",
+                  { style: { display: "flex", gap: 4 } },
+                  llqaMini("Edit", () => llqaOpen("holiday", { id: d.id }), { key: "e" }),
+                  llqaMini("Delete", () => del(d), { key: "x", tone: "danger" }),
+                )
+              : null,
+          ),
+        )
+      : React.createElement("div", { style: { color: c.textSec, fontSize: 11, padding: "6px 0" } }, old ? "No holidays in the calendar yet." : "No holidays coming up."),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" } },
+      manage ? llqaMini("+ Add Holiday", () => llqaOpen("holiday", {}), { key: "a", tone: "accent" }) : null,
+      all.length > list.length || old ? llqaMini(old ? "Coming up only" : "Show past ones too", () => setOld(!old), { key: "o" }) : null,
+    ),
+  );
+};
+const LLQAHolidayWin = ({ data, onClose }) => {
+  const ctx = LLQAApp.ctx || {};
+  const today = todayPK();
+  const cur = data && data.id ? llqaCalendar().find((d) => d.id === data.id) || null : null;
+  const [f, setF] = React.useState(() => (cur ? { name: cur.name || "", from: cur.from, to: cur.to || cur.from, kind: cur.kind || "holiday", note: cur.note || "" } : { name: "", from: today, to: today, kind: "holiday", note: "" }));
+  const [err, setErr] = React.useState("");
+  const save = () => {
+    if (!String(f.name || "").trim()) return setErr("Give it a name (e.g. Eid ul Fitr).");
+    if (!llqaIsDay(f.from) || (f.to && (!llqaIsDay(f.to) || f.to < f.from))) return setErr("Check the dates — the last day can't be before the first.");
+    if (typeof ctx.setCalendar !== "function" || !llqaCanManage()) return setErr("The calendar can't be changed here.");
+    const u = ctx.user || {};
+    const by = u.name || u.role || "";
+    const at = new Date().toISOString();
+    const rec = { name: String(f.name).trim(), from: f.from, to: f.to || f.from, kind: f.kind || "holiday", note: String(f.note || "").trim() };
+    ctx.setCalendar((prev) => {
+      const days = (prev && prev.days) || [];
+      return { ...(prev || {}), days: cur ? days.map((x) => (x.id === cur.id ? { ...x, ...rec, changedBy: by, changedAt: at } : x)) : days.concat([{ id: llqaUid("h"), ...rec, at, by }]) };
+    });
+    llqaToast({ kind: "info", ttl: 6000, text: "✓ " + (cur ? "Changed " : "Added ") + rec.name + " (" + llqaRangeLabel(rec.from, rec.to) + ")." });
+    onClose();
+  };
+  return llqaShell(
+    cur ? "Edit " + (cur.name || "holiday") : "Add a holiday",
+    "Holiday = academy closed: no classes, nobody is marked absent, and a class taken counts as extra. Ramadan / notice = classes run.",
+    React.createElement(
+      "div",
+      null,
+      React.createElement(Inp, { label: "Name", value: f.name, onChange: (v) => setF({ ...f, name: v }), placeholder: "e.g. Eid ul Fitr" }),
+      React.createElement(
+        "div",
+        { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0 10px" } },
+        React.createElement(Inp, { label: "First day", type: "date", value: f.from, onChange: (v) => setF({ ...f, from: v, to: !f.to || f.to < v ? v : f.to }) }),
+        React.createElement(Inp, { label: "Last day", type: "date", value: f.to, onChange: (v) => setF({ ...f, to: v }) }),
+      ),
+      React.createElement(Inp, { label: "Type", value: f.kind, onChange: (v) => setF({ ...f, kind: v }), options: LLQA_DAY_KINDS.map(([k, l]) => ({ value: k, label: l })) }),
+      React.createElement(Inp, { label: "Note for the team (optional)", value: f.note, onChange: (v) => setF({ ...f, note: v }) }),
+      err ? React.createElement("div", { style: { color: c.danger, fontSize: 12, marginTop: 4 } }, err) : null,
+    ),
+    [llqaMini("Cancel", onClose, { key: "x", big: true }), llqaMini(cur ? "Save changes" : "Add to calendar", save, { key: "ok", big: true, solid: true, tone: "accent" })],
+    { onClose, width: 480 },
   );
 };
 
@@ -7955,6 +8710,7 @@ const PERMISSION_TO_MODULE = {
   "Edit Fines": ["attendance"], // v72: change any fine or reason afterwards (always kept in the fine's history)
   "Set Office Times & Fines": ["attendance"], // v72: office times, the per-minute rate and the other fines
   "Mark Attendance": ["attendance"], // v72: mark days by hand, check out, correct a day (a teacher never marks their own)
+  "Mark Extra Classes": ["timetable", "subjects"], // v76: a Timetable class as Extra or Regular
 };
 
 const buildAccessFromPermissions = (permissions) => {

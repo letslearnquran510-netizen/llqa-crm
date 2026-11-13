@@ -14,7 +14,7 @@ const AttendanceMod = ({
     const id = setInterval(() => setTick((t) => t + 1), 60000);
     return () => clearInterval(id);
   }, []);
-  const [tab, setTab] = useState("live");
+  const [tab, setTab] = useState(() => llqaTakeTab("attendance", "live")); // v76: a notice opens the fines
   const [search, setSearch] = useState("");
   const [fShift, setFShift] = useState("all");
   const [selectedTeacher, setSelectedTeacher] = useState(0);
@@ -187,6 +187,9 @@ const AttendanceMod = ({
           officeStart: o.start,
           officeEnd: o.end,
           offDay: wd.ok ? "" : wd.why,
+          ...(status === "Absent" || status === "On Leave" ? { paid: status === "On Leave", dayPay: llqaDayPay(t, day) } : {}), // v76
+          auto: false,
+          pending: false,
           fineOverride: null,
           device: (h && h.device) || "Admin Panel",
           markedBy: who,
@@ -1065,7 +1068,9 @@ const AttendanceMod = ({
                         padding: "8px",
                       },
                     },
-                    !llqaCanMarkDay(user, t, rec && rec.date ? rec : null) // v72: who may mark this day
+                    rec && rec.date && !llqaCanMarkDay(user, t, rec) && llqaCanMarkLeave(user, t, rec) // v76: a team lead or manager marks leave on a day without a sign-in
+                      ? llqaMini("Leave / absent", () => llqaOpen("leaveday", { tid: t.id, date: rec.date }), { key: "lv", title: "Paid leave, unpaid leave or absent" })
+                      : !llqaCanMarkDay(user, t, rec && rec.date ? rec : null) // v72: who may mark this day
                       ? React.createElement(
                           "span",
                           { style: { color: c.textMuted, fontSize: 10 }, title: rec && rec.date ? "A day already marked or signed in is changed by an admin" : "Marked by an admin, or this teacher's team lead" },
@@ -1136,7 +1141,7 @@ const AttendanceMod = ({
                       React.createElement(
                         "button",
                         {
-                          onClick: () => markAttendance(t.id, "On Leave"),
+                          onClick: () => llqaOpen("leaveday", { tid: t.id, date: dayOf(t) }), // v76: paid or unpaid leave
                           title: "Leave",
                           style: {
                             background: c.accentBg,
