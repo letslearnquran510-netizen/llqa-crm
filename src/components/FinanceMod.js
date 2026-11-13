@@ -1,4212 +1,484 @@
+// v77: the Finance page, connected to the whole CRM — fees (the fee cycle, Accounts Receivable), other income, bills
+// (Accounts Payable) and salaries (Payroll). Nothing here is a separate list: a payment, a bill paid or a salary paid
+// anywhere shows here at once, and what is done here (a payment, an expense, a reminder) is saved where it belongs.
+// All in PKR: the PKR received, else the rate of the payment's day, else your rate (Settings → Payment Gateways).
 const FinanceMod = () => {
-  const [feeStudents, setFeeStudents] = useState(initFeeStudents);
-  const [expenses, setExpenses] = useState(initExpenses);
+  const ctx = LLQAApp.ctx;
+  const today = todayPK();
+  const cur = today.slice(0, 7);
   const [tab, setTab] = useState("dashboard");
-  const [search, setSearch] = useState("");
-  const [fStatus, setFStatus] = useState("all");
-  const [fCourse, setFCourse] = useState("all");
-  const [fCat, setFCat] = useState("all");
-  const [selectedMonth, setSelectedMonth] = useState(
-    new Date().toISOString().substring(0, 7),
-  );
-  const [displayCur, setDisplayCur] = useState("USD");
-  const [modal, setModal] = useState(null);
-  const [form, setForm] = useState({});
-  const toCur = (amount, fromCur) => {
-    const inPKR = amount * EXCHANGE_RATE[fromCur];
-    return Math.round(inPKR / EXCHANGE_RATE[displayCur]);
-  };
-  const feeStats = useMemo(() => {
-    let totalPaidUSD = 0,
-      totalDueUSD = 0,
-      paidCount = 0,
-      overdueCount = 0,
-      partialCount = 0;
-    feeStudents.forEach((s) => {
-      totalPaidUSD +=
-        s.totalPaid * (EXCHANGE_RATE[s.currency] / EXCHANGE_RATE.USD);
-      totalDueUSD +=
-        s.dueAmount * (EXCHANGE_RATE[s.currency] / EXCHANGE_RATE.USD);
-      if (s.status === "paid") paidCount++;
-      else if (s.status === "overdue") overdueCount++;
-      else if (s.status === "partial") partialCount++;
-    });
-    const monthlyRev = feeStudents.reduce(
-      (sum, s) => sum + s.fee * (EXCHANGE_RATE[s.currency] / EXCHANGE_RATE.USD),
-      0,
-    );
-    const collRate =
-      feeStudents.length > 0
-        ? Math.round(
-            ((paidCount + partialCount * 0.5) / feeStudents.length) * 100,
-          )
-        : 0;
-    return {
-      totalPaidUSD: Math.round(totalPaidUSD),
-      totalDueUSD: Math.round(totalDueUSD),
-      paidCount,
-      overdueCount,
-      partialCount,
-      monthlyRev: Math.round(monthlyRev),
-      collRate,
-      arps: Math.round(monthlyRev / (feeStudents.length || 1)),
-    };
-  }, [feeStudents]);
-  const expStats = useMemo(() => {
-    let totalPKR = 0,
-      paidPKR = 0,
-      pendingPKR = 0,
-      byCat = {};
-    expenses.forEach((e) => {
-      const pkr = e.amount * EXCHANGE_RATE[e.currency];
-      totalPKR += pkr;
-      if (e.status === "paid") paidPKR += pkr;
-      else pendingPKR += pkr;
-      byCat[e.category] = (byCat[e.category] || 0) + pkr;
-    });
-    return {
-      totalPKR,
-      paidPKR,
-      pendingPKR,
-      byCat: Object.entries(byCat).sort((a, b) => b[1] - a[1]),
-    };
-  }, [expenses]);
-  const trendData = useMemo(() => {
-    const months = {};
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date();
-      d.setMonth(d.getMonth() - i);
-      const m = d.toISOString().substring(0, 7);
-      months[m] = {
-        month: m.substring(5),
-        income: 0,
-        expense: 0,
-      };
-    }
-    // v70: no made-up numbers — this page has no month-by-month income, so it shows none
-    expenses.forEach((e) => {
-      const m = e.date.substring(0, 7);
-      if (months[m])
-        months[m].expense +=
-          (e.amount * EXCHANGE_RATE[e.currency]) / EXCHANGE_RATE.USD;
-    });
-    Object.keys(months).forEach((m, i) => {
-      months[m].profit = Math.round(months[m].income - months[m].expense);
-      months[m].income = Math.round(months[m].income);
-      months[m].expense = Math.round(months[m].expense);
-    });
-    return Object.values(months);
-  }, [feeStats.monthlyRev, expenses]);
-  const filteredFees = useMemo(() => {
-    let d = feeStudents;
-    if (search)
-      d = d.filter(
-        (s) =>
-          s.name.toLowerCase().includes(search.toLowerCase()) ||
-          s.parent.toLowerCase().includes(search.toLowerCase()),
-      );
-    if (fStatus !== "all") d = d.filter((s) => s.status === fStatus);
-    if (fCourse !== "all") d = d.filter((s) => s.course === fCourse);
-    return d;
-  }, [feeStudents, search, fStatus, fCourse]);
-  const filteredExp = useMemo(() => {
-    let d = expenses
-      .slice()
-      .sort((a, b) => new Date(b.date) - new Date(a.date));
-    if (fCat !== "all") d = d.filter((e) => e.category === fCat);
-    if (search)
-      d = d.filter(
-        (e) =>
-          e.description.toLowerCase().includes(search.toLowerCase()) ||
-          e.vendor.toLowerCase().includes(search.toLowerCase()),
-      );
-    return d;
-  }, [expenses, search, fCat]);
-  const recordPayment = (id, amount) =>
-    setFeeStudents(
-      feeStudents.map((s) =>
-        s.id === id
-          ? {
-              ...s,
-              status: "paid",
-              lastPaid: todayPK(),
-              monthsPaid: s.monthsPaid + 1,
-              totalPaid: s.totalPaid + (amount || s.fee),
-              dueAmount: 0,
-            }
-          : s,
-      ),
-    );
-  const markOverdue = (id) =>
-    setFeeStudents(
-      feeStudents.map((s) =>
-        s.id === id
-          ? {
-              ...s,
-              status: "overdue",
-              dueAmount: s.dueAmount + s.fee,
-            }
-          : s,
-      ),
-    );
-  const sendReminder = (id) =>
-    alert("Reminder sent to " + feeStudents.find((s) => s.id === id)?.parent);
-  const openInvoice = (s) =>
-    setModal({
-      type: "invoice",
-      data: s,
-    });
-  const openAddExpense = () => {
-    setForm({
-      date: todayPK(),
-      category: "",
-      description: "",
-      amount: "",
-      currency: "PKR",
-      vendor: "",
-      paymentMethod: "Bank Transfer",
-      status: "pending",
-    });
-    setModal({
-      type: "addExpense",
-    });
-  };
-  const openPaymentRecord = (s) => {
-    setForm({
-      studentId: s.id,
-      amount: s.fee,
-      date: todayPK(),
-      gateway: s.gateway,
-    });
-    setModal({
-      type: "recordPay",
-      data: s,
-    });
-  };
-  const savePayment = () => {
-    recordPayment(form.studentId, Number(form.amount));
-    setModal(null);
-  };
-  const saveExpense = () => {
-    if (!form.category || !form.amount) return;
-    if (form.editingExpId) {
-      setExpenses(
-        expenses.map((e) =>
-          e.id === form.editingExpId
-            ? {
-                ...e,
-                date: form.date,
-                category: form.category,
-                description: form.description,
-                amount: Number(form.amount),
-                currency: form.currency,
-                vendor: form.vendor,
-                paymentMethod: form.paymentMethod,
-                status: form.status,
-                approvedBy:
-                  form.status === "paid" ? "Super Admin" : e.approvedBy,
-              }
-            : e,
+  const [month, setMonth] = useState(cur);
+  const [q, setQ] = useState("");
+  const [fs, setFs] = useState("all");
+  const [course, setCourse] = useState("all");
+  const [conv, setConv] = useState({ amount: "100", from: "USD" });
+  const R = llqaRates(ctx.appSettings);
+  const ML = llqaMonthLabel(month);
+  const ql = q.trim().toLowerCase();
+  const hit = (...v) => !ql || v.some((x) => String(x == null ? "" : x).toLowerCase().includes(ql));
+  const all = llqaAllCycles(today);
+  const live = all.filter((x) => !x.gone);
+  const owed = llqaFinOwed(today);
+  const months6 = llqaFinMonths(6, today);
+  const pays = (ctx.arPayments || []).filter(Boolean);
+  const pk = (p) => llqaPayPKR(p, R).pkr;
+  const stat = llqaStat;
+  const row = (kids, k) => React.createElement("div", { key: k, style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } }, kids);
+  const empty = (t) => React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, t);
+  const monthPick = () => React.createElement("input", { type: "month", "aria-label": "Month", value: month, onChange: (e) => /^\d{4}-\d{2}$/.test(e.target.value) && setMonth(e.target.value), style: { ...llqaSelectStyle, padding: "7px 9px" } });
+  // simple bars: [label, value] pairs, one colour each
+  const bars = (pairs, max, cols) =>
+    React.createElement(
+      "div",
+      { style: { display: "flex", flexDirection: "column", gap: 6 } },
+      pairs.map(([label, vals], i) =>
+        React.createElement(
+          "div",
+          { key: label + i, style: { display: "grid", gridTemplateColumns: "92px 1fr", gap: 8, alignItems: "center" } },
+          React.createElement("div", { style: { fontSize: 11, color: c.textSec } }, label),
+          React.createElement(
+            "div",
+            { style: { display: "flex", flexDirection: "column", gap: 2 } },
+            vals.map((v, j) =>
+              React.createElement(
+                "div",
+                { key: j, style: { display: "flex", alignItems: "center", gap: 6 } },
+                React.createElement("div", { style: { height: 8, borderRadius: 4, width: max > 0 ? Math.max(2, Math.round((Math.abs(v) / max) * 100)) + "%" : 2, background: v < 0 ? c.danger : cols[j] } }),
+                React.createElement("span", { style: { fontSize: 10, color: c.textMuted, whiteSpace: "nowrap" } }, llqaPKR(v)),
+              ),
+            ),
+          ),
         ),
-      );
-      setModal(null);
-      return;
-    }
-    setExpenses([
-      {
-        id: Date.now(),
-        ...form,
-        amount: Number(form.amount),
-        approvedBy: form.status === "paid" ? "Super Admin" : "Pending",
-      },
-      ...expenses,
-    ]);
-    setModal(null);
-  };
-  const approveExpense = (id) =>
-    setExpenses(
-      expenses.map((e) =>
-        e.id === id
-          ? {
-              ...e,
-              status: "paid",
-              approvedBy: "Super Admin",
-            }
-          : e,
       ),
     );
-  const oEditExp = (e) => {
-    setForm({
-      editingExpId: e.id,
-      date: e.date,
-      category: e.category,
-      description: e.description,
-      amount: e.amount,
-      currency: e.currency,
-      vendor: e.vendor,
-      paymentMethod: e.paymentMethod,
-      status: e.status,
-    });
-    setModal({
-      type: "addExpense",
-    });
+  const legend = (items) => React.createElement("div", { style: { display: "flex", gap: 12, fontSize: 11, color: c.textSec, margin: "4px 0 8px" } }, items.map(([t, col]) => React.createElement("span", { key: t, style: { display: "flex", gap: 5, alignItems: "center" } }, React.createElement("span", { style: { width: 10, height: 10, borderRadius: 3, background: col, display: "inline-block" } }), t)));
+  const go = (page) => llqaGo(page);
+  const print = (title, lines) => {
+    const w = window.open("", "_blank");
+    if (!w) return;
+    const esc = (t) => String(t).replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[ch]);
+    w.document.write("<html><head><title>" + esc(title) + "</title><style>body{font-family:Arial,sans-serif;padding:32px;color:#111}h1{font-size:20px;margin:0}table{border-collapse:collapse;margin-top:16px;width:100%;max-width:640px}td{padding:6px 10px;border-bottom:1px solid #ddd;font-size:13px}td:last-child{text-align:right}tr.b td{font-weight:bold;border-top:2px solid #333}</style></head><body><h1>" + esc(llqaAcademy()) + "</h1><div>" + esc(title) + "</div><table>" + lines.map((r) => "<tr" + (r[2] ? ' class="b"' : "") + "><td>" + esc(r[0]) + "</td><td>" + esc(r[1]) + "</td></tr>").join("") + "</table></body></html>");
+    w.document.close();
+    if (w.print) w.print();
   };
-  const delExp = (id) => {
-    if (confirm("Delete this expense permanently?"))
-      setExpenses(expenses.filter((e) => e.id !== id));
+  const remindItems = (rows) => {
+    const sent = llqaLogIndex(ctx.messageLog).keys;
+    return rows
+      .map((x) => {
+        if (x.gone) {
+          const lf = llqaLeftDue(x.s, x.cy, today);
+          return lf ? { studentId: x.s.id, student: x.s, template: lf.tpl, extra: lf.extra, key: lf.key } : null;
+        }
+        const ch = llqaChaseNow(x.s, today);
+        const st = llqaFeeStage(x.s, x.cy, today);
+        if (ch.hold || !st || x.s.feeHold) return null;
+        if (ch.promiseDue) return { studentId: x.s.id, student: x.s, template: "feePromise", extra: { fee: llqaOwedText(x.cy), promise: llqaDateLabel(ch.promise.date) }, key: ch.key };
+        return { studentId: x.s.id, student: x.s, template: st.tpl, extra: { fee: llqaFeeText(st, x.cy), deadline: llqaDateLabel(llqaAddDays(today, 3)) }, key: st.key };
+      })
+      .filter((it) => it && !sent.has(it.key) && llqaPhone(it.student.phone, it.student.country));
   };
-  const sc3 = (s) =>
-    s === "paid"
-      ? "success"
-      : s === "overdue"
-        ? "danger"
-        : s === "partial"
-          ? "warn"
-          : "accent";
-  const curSym = (cur) =>
-    cur === "USD"
-      ? "$"
-      : cur === "CAD"
-        ? "C$"
-        : cur === "GBP"
-          ? "£"
-          : cur === "PKR"
-            ? "Rs"
-            : "";
+  let content = null;
+  let csv = null;
+
+  if (tab === "dashboard") {
+    const now = llqaFinCash(cur);
+    const pos = llqaFinPosition(today);
+    const ahead = llqaFinAhead(30, today);
+    const weOwe = llqaSumPKR(llqaApAll(today), R, (l) => ({ amount: llqaApLeft(l), currency: l.currency, fallback: "PKR" }));
+    const series = months6.map((ym) => llqaFinCash(ym));
+    const max = Math.max(1, ...series.map((x) => Math.max(x.inAll, x.outAll)));
+    const pr = llqaApPayroll(today);
+    const prDue = pr.filter((x) => x.toApprove || x.toPay);
+    const apLate = ((ctx.apLiabilities || []).filter((l) => l && llqaApState(l, today) === "overdue"));
+    const left = owed.rows.filter((r) => r.gone);
+    const late = owed.rows.filter((r) => !r.gone && r.overdue);
+    const alerts = [
+      late.length ? ["💸 " + late.length + " famil" + (late.length === 1 ? "y owes" : "ies owe") + " overdue fees — " + llqaPKR(late.reduce((a, r) => a + r.pkr, 0)), "Defaulters", () => go("ar")] : null,
+      left.length ? ["👤 " + left.length + " famil" + (left.length === 1 ? "y" : "ies") + " who left still owe " + llqaPKR(left.reduce((a, r) => a + r.pkr, 0)), "Recovery", () => go("ar")] : null,
+      apLate.length ? ["🧾 " + apLate.length + " bill" + (apLate.length === 1 ? " is" : "s are") + " overdue", "Accounts Payable", () => go("ap")] : null,
+      ...prDue.map((x) => ["👥 Salaries " + llqaMonthLabel(x.ym) + ": " + (x.toApprove ? x.toApprove + " to approve" : "") + (x.toApprove && x.toPay ? ", " : "") + (x.toPay ? x.toPay + " to pay" : "") + " (due " + llqaDateLabel(x.dueDate) + ")", "Payroll", () => (typeof llqaPayOpen === "function" ? llqaPayOpen(x.ym) : go("payroll"))]),
+    ].filter(Boolean);
+    const recent = pays.slice().sort((a, b) => String(b.paidDate).localeCompare(String(a.paidDate)) || String(b.postedAt || "").localeCompare(String(a.postedAt || ""))).slice(0, 8);
+    content = [
+      row([
+        stat("Money in — " + llqaMonthLabel(cur), llqaPKR(now.inAll), now.inOther ? "fees " + llqaPKR(now.inFees) + " · other " + llqaPKR(now.inOther) : llqaSumSub(now.fees), c.success, "a"),
+        stat("Money out — " + llqaMonthLabel(cur), llqaPKR(now.outAll), Object.keys(now.out).length ? Object.entries(now.out).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k, v]) => k + " " + llqaPKR(v)).join(" · ") : "bills and salaries paid", c.warn, "b"),
+        stat("Net — " + llqaMonthLabel(cur), llqaPKR(now.net), "money in − money out", now.net >= 0 ? c.success : c.danger, "c"),
+        stat("Cash in hand", pos ? llqaPKR(pos.now) : "—", pos ? "from " + llqaPKR(pos.start) + " on " + llqaDateLabel(pos.from) : "set the starting amount in Settings → Finance", pos && pos.now < 0 ? c.danger : null, "d"),
+      ], "r1"),
+      row([
+        stat("Families owe", llqaPKR(owed.total), owed.rows.length + " famil" + (owed.rows.length === 1 ? "y" : "ies") + (left.length ? " · " + left.length + " who left" : ""), owed.total > 0 ? c.warn : null, "e"),
+        stat("The academy owes", llqaPKR(weOwe.pkr), "bills and salaries not paid yet", weOwe.pkr > 0 ? c.warn : null, "f"),
+        stat("Next 30 days", llqaPKR(ahead.net), "in " + llqaPKR(ahead.inPKR) + " · out " + llqaPKR(ahead.outPKR), ahead.net >= 0 ? c.success : c.danger, "g"),
+        stat("Paying families", live.filter((x) => x.s.status !== "quit").length, owed.rows.length ? Math.round((late.length / Math.max(1, live.length)) * 100) + "% overdue" : "none overdue", null, "h"),
+      ], "r2"),
+      alerts.length
+        ? llqaCard([llqaH("⚠ Needs attention"), ...alerts.map(([t, b, run], i) => React.createElement("div", { key: i, style: { display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", padding: "5px 0", borderBottom: "1px solid " + llqaAlpha(c.border, "55"), fontSize: 12 } }, React.createElement("span", null, llqaIconize(t, { size: 12, keep: true, gap: 5 })), llqaMini(b, run, { key: "b" })))], { key: "al" })
+        : null,
+      llqaCard([llqaH("Money in vs money out — last 6 months", "By the day money moved (Cash Flow has the balance)."), legend([["In", c.success], ["Out", c.warn]]), bars(series.map((x) => [llqaMonthLabel(x.ym), [x.inAll, x.outAll]]), max, [c.success, c.warn])], { key: "ch" }),
+      React.createElement(
+        "div",
+        { key: "two", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 10 } },
+        llqaCard([llqaH("Recent payments received"), recent.length ? recent.map((p) => React.createElement("div", { key: p.id, style: { display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, padding: "4px 0", borderBottom: "1px solid " + llqaAlpha(c.border, "44") } }, React.createElement("span", null, (p.studentName || p.payer || "—") + " · " + llqaDateLabel(p.paidDate)), React.createElement("span", { style: { fontWeight: 700 } }, llqaAmt(p.amount, p.currency)))) : empty("No payments yet.")], { key: "rp" }),
+        llqaCard([llqaH("Top families owing"), owed.rows.length ? owed.rows.slice(0, 6).map((r) => React.createElement("div", { key: r.s.id, style: { display: "flex", justifyContent: "space-between", gap: 8, fontSize: 12, padding: "4px 0", borderBottom: "1px solid " + llqaAlpha(c.border, "44") } }, React.createElement("span", null, r.s.name + (r.gone ? " (left)" : "") + " · " + r.days + " days"), React.createElement("span", { style: { fontWeight: 700 } }, llqaAmt(r.left, r.cur)))) : empty("Nobody owes anything.")], { key: "td" }),
+      ),
+    ];
+  } else if (tab === "fees") {
+    const courses = [...new Set(live.map((x) => x.s.course).filter(Boolean))].sort();
+    const F = [
+      ["all", "All", () => true],
+      ["overdue", "Overdue", (x) => x.cy.status === "overdue"],
+      ["due", "Due now", (x) => x.cy.status === "due" || x.cy.status === "partial"],
+      ["paid", "Paid", (x) => x.cy.status === "paid"],
+      ["upcoming", "Upcoming", (x) => x.cy.status === "upcoming"],
+    ];
+    const test = (F.find((x) => x[0] === fs) || F[0])[2];
+    const rows = live.filter((x) => test(x) && (course === "all" || x.s.course === course) && hit(x.s.name, x.s.parent, x.s.code, x.s.phone)).sort((a, b) => b.cy.left - a.cy.left || String(a.s.name).localeCompare(String(b.s.name)));
+    const lastPaid = (s) => pays.filter((p) => p.type !== "other" && String(p.studentId) === String(s.id)).map((p) => String(p.paidDate || "")).sort().pop() || "";
+    const items = remindItems(rows);
+    csv = [["Student", "Parent", "Course", "Fee", "Currency", "Due day", "Status", "Owed", "Months paid", "Last paid"], ...rows.map((x) => [x.s.name, x.s.parent || "", x.s.course || "", x.cy.amt, x.cy.cur, x.cy.day, x.cy.status, x.cy.left, x.cy.months.filter((m) => m.state === "paid").length, lastPaid(x.s)])];
+    content = [
+      row([
+        stat("Paying families", live.length, llqaPKR(llqaSumPKR(live, R, (x) => ({ amount: x.cy.amt, currency: x.cy.cur, fallback: "USD" })).pkr) + " a month in fees", null, "a"),
+        stat("Overdue", live.filter((x) => x.cy.status === "overdue").length, llqaPKR(owed.rows.filter((r) => !r.gone && r.overdue).reduce((a, r) => a + r.pkr, 0)), c.danger, "b"),
+        stat("Due now", live.filter((x) => x.cy.status === "due" || x.cy.status === "partial").length, "within the grace days", c.warn, "c"),
+        stat("Paid", live.filter((x) => x.cy.status === "paid").length, "nothing owed now", c.success, "d"),
+      ], "st"),
+      React.createElement(
+        "div",
+        { key: "ft", style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 } },
+        llqaChips(F.map(([k, l, t]) => [k, l, live.filter(t).length]), fs, setFs),
+        courses.length ? llqaSel(course, setCourse, [["all", "All courses"], ...courses.map((x) => [x, x])], { key: "cr", title: "Course" }) : null,
+        items.length ? llqaMini("💬 Bulk reminder " + items.length, () => llqaOpen("queue", { title: "Fee reminders", items }), { key: "bulk", big: true, tone: "success" }) : null,
+      ),
+      llqaCard(
+        rows.length
+          ? llqaTable(
+              ["Student", "Monthly fee", "Status", "Owed", "Months paid", "Last paid", ""],
+              rows.map((x) => {
+                const d = LLQA_FEE_STATES[x.cy.status] || [x.cy.status, "textSec"];
+                const lp = lastPaid(x.s);
+                const one = remindItems([x])[0];
+                return React.createElement(
+                  "tr",
+                  { key: x.s.id },
+                  llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, x.s.name), llqaSmall([x.s.parent, x.s.course].filter(Boolean).join(" · "), null, "s"), llqaChaseText(x.s, today) ? llqaSmall(llqaChaseText(x.s, today), c.accent, "c") : null], "n"),
+                  llqaTd([llqaAmt(x.cy.amt, x.cy.cur), llqaSmall("due on day " + x.cy.day, null, "d")], "f", { whiteSpace: "nowrap" }),
+                  llqaTd(llqaPill(d[0], c[d[1]] || c.textSec), "s"),
+                  llqaTd(x.cy.left ? llqaAmt(x.cy.left, x.cy.cur) : "—", "o", { whiteSpace: "nowrap", fontWeight: x.cy.left ? 700 : 400 }),
+                  llqaTd(x.cy.months.filter((m) => m.state === "paid").length, "m"),
+                  llqaTd(lp ? llqaDateLabel(lp) : "—", "l", { whiteSpace: "nowrap" }),
+                  llqaTd(
+                    React.createElement(
+                      "div",
+                      { style: { display: "flex", gap: 4, flexWrap: "wrap" } },
+                      llqaMini("💰 Record payment", () => llqaOpen("payment", { studentId: x.s.id }), { key: "p", tone: "success" }),
+                      one ? llqaMini("💬 Send reminder", () => llqaOpen("queue", { title: "Fee reminder", items: [one] }), { key: "r" }) : null,
+                      x.cy.current ? llqaMini("🧾", () => llqaOpen("invoice", { studentId: x.s.id, ym: x.cy.current.ym }), { key: "i", title: "Invoice" }) : null,
+                    ),
+                    "x",
+                  ),
+                );
+              }),
+            )
+          : empty(live.length ? "No family in this filter." : "No paying families yet — a trial joins the fee cycle when it is enrolled as paid."),
+      ),
+    ];
+  } else if (tab === "invoices") {
+    const list = all
+      .map((x) => ({ ...x, m: x.cy.months.find((m) => m.ym === month) }))
+      .filter((x) => x.m && hit(x.s.name, x.s.parent, x.s.code, llqaInvNo(x.s, month)))
+      .sort((a, b) => String(a.s.name).localeCompare(String(b.s.name)));
+    const sum = (pick) => llqaSumPKR(list, R, (x) => ({ amount: pick(x), currency: x.cy.cur, fallback: "USD" })).pkr;
+    csv = [["Invoice", "Bill to", "Student", "Month", "Due", "Fee", "Paid", "Balance", "Currency", "Status"], ...list.map((x) => [llqaInvNo(x.s, month), x.s.parent || x.s.name, x.s.name, month, x.m.due, x.m.fee, x.m.paid, x.m.left, x.cy.cur, x.m.state])];
+    content = [
+      row([stat("Invoices — " + ML, list.length, "one per family, made by the fee cycle", null, "a"), stat("Billed", llqaPKR(sum((x) => x.m.fee)), "", null, "b"), stat("Paid", llqaPKR(sum((x) => x.m.paid)), "", c.success, "c"), stat("Balance", llqaPKR(sum((x) => x.m.left)), "", c.warn, "d")], "st"),
+      llqaCard(
+        list.length
+          ? llqaTable(
+              ["Invoice", "Bill to", "Fee", "Paid", "Balance", "Status", ""],
+              list.map((x) => {
+                const d = x.m.left === 0 && x.m.wo > 0 && x.m.paid < x.m.fee ? ["Written off", "textSec"] : LLQA_FEE_STATES[x.m.state] || [x.m.state, "textSec"];
+                return React.createElement(
+                  "tr",
+                  { key: x.s.id },
+                  llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700, fontSize: 11 } }, llqaInvNo(x.s, month)), llqaSmall("due " + llqaDateLabel(x.m.due), null, "d")], "i"),
+                  llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, x.s.parent || x.s.name), llqaSmall(x.s.name + (x.gone ? " · left" : ""), null, "s")], "b"),
+                  llqaTd(llqaAmt(x.m.fee, x.cy.cur), "f", { whiteSpace: "nowrap" }),
+                  llqaTd(llqaAmt(x.m.paid, x.cy.cur), "p", { whiteSpace: "nowrap" }),
+                  llqaTd(llqaAmt(x.m.left, x.cy.cur), "l", { whiteSpace: "nowrap", fontWeight: x.m.left ? 700 : 400 }),
+                  llqaTd(llqaPill(d[0], c[d[1]] || c.textSec), "s"),
+                  llqaTd(llqaMini("View invoice", () => llqaOpen("invoice", { studentId: x.s.id, ym: month }), { key: "v" }), "x"),
+                );
+              }),
+            )
+          : empty("No invoices for " + ML + "."),
+      ),
+    ];
+  } else if (tab === "income") {
+    const cash = llqaFinCash(month);
+    const mp = pays.filter((p) => String(p.paidDate || "").slice(0, 7) === month);
+    const by = (key) => {
+      const g = {};
+      mp.forEach((p) => (g[key(p)] = (g[key(p)] || 0) + pk(p)));
+      return Object.entries(g).sort((a, b) => b[1] - a[1]);
+    };
+    const country = (p) => {
+      const s = p.studentId != null ? llqaFindStudent(p.studentId) : null;
+      return (s && s.country) || "—";
+    };
+    const other = mp.filter((p) => p.type === "other" && hit(p.payer, p.studentName, p.category, p.receiptNo));
+    const streams = [["Monthly fees", cash.inFees], ...Object.entries(cash.other).sort((a, b) => b[1] - a[1])];
+    const max = Math.max(1, ...streams.map((x) => x[1]));
+    csv = [["Receipt", "Type", "From", "Amount", "Currency", "PKR", "Date", "Paid by"], ...mp.map((p) => [p.receiptNo || "", p.type === "other" ? p.category : "Monthly fee", p.studentName || p.payer || "", p.amount, p.currency, Math.round(pk(p)), p.paidDate, p.gateway || ""])];
+    content = [
+      row([stat("Income — " + ML, llqaPKR(cash.inAll), mp.length + " payments", c.success, "a"), stat("Monthly fees", llqaPKR(cash.inFees), llqaSumSub(cash.fees), null, "b"), stat("Other income", llqaPKR(cash.inOther), Object.keys(cash.other).join(", ") || "registration, certificates…", null, "c"), stat("Families paid", new Set(mp.filter((p) => p.type !== "other").map((p) => String(p.studentId))).size, "", null, "d")], "st"),
+      React.createElement(
+        "div",
+        { key: "g", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 10 } },
+        llqaCard([llqaH("Income streams"), bars(streams.map(([k, v]) => [k, [v]]), max, [c.success])], { key: "s" }),
+        llqaCard([llqaH("By way paid"), by((p) => p.gateway || "Other").map(([k, v]) => React.createElement("div", { key: k, style: { display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0" } }, React.createElement("span", null, k), React.createElement("b", null, llqaPKR(v))))], { key: "g" }),
+        llqaCard([llqaH("By country"), by(country).map(([k, v]) => React.createElement("div", { key: k, style: { display: "flex", justifyContent: "space-between", fontSize: 12, padding: "3px 0" } }, React.createElement("span", null, k), React.createElement("b", null, llqaPKR(v))))], { key: "c" }),
+      ),
+      llqaCard(
+        [
+          React.createElement("div", { key: "h", style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" } }, llqaH("Other income — " + ML, "Registration and certificate fees, books, donations."), llqaMini("＋ Other income", () => llqaOpen("income", {}), { key: "a", tone: "success" })),
+          other.length
+            ? llqaTable(
+                ["Receipt", "Type", "From", "Amount", "Date", ""],
+                other.map((p) =>
+                  React.createElement(
+                    "tr",
+                    { key: p.id },
+                    llqaTd(p.receiptNo || "—", "r", { fontSize: 11 }),
+                    llqaTd(p.category || "Other", "t"),
+                    llqaTd(p.payer || p.studentName || "—", "f"),
+                    llqaTd(llqaAmt(p.amount, p.currency), "a", { fontWeight: 700 }),
+                    llqaTd(llqaDateLabel(p.paidDate), "d"),
+                    llqaTd(React.createElement("div", { style: { display: "flex", gap: 4 } }, llqaMini("✎", () => llqaOpen("payEdit", { payId: p.id }), { key: "e" }), llqaMini("🗑", () => llqaOpen("remove", { kind: "pay", id: p.id }), { key: "d", tone: "danger" })), "x"),
+                  ),
+                ),
+              )
+            : empty("None in " + ML + "."),
+        ],
+        { key: "o" },
+      ),
+    ];
+  } else if (tab === "expenses") {
+    const cash = llqaFinCash(month);
+    const pnl = llqaFinPnl(month);
+    const budgets = llqaOpt("budgets") || {};
+    const out = [];
+    llqaApAll(today).forEach((l) =>
+      (l.pays || []).forEach((p) => {
+        if (p && String(p.date || "").slice(0, 7) === month) out.push({ l, p, pkr: llqaToPKR(p.amount, l.currency || "PKR", R).pkr });
+      }),
+    );
+    (ctx.apLiabilities || []).forEach((l) => {
+      if (l && !(Array.isArray(l.pays) && l.pays.length) && String(l.paidDate || "").slice(0, 7) === month && llqaApPaid(l) > 0) out.push({ l, p: { id: "old" + l.id, date: l.paidDate, amount: llqaApPaid(l), method: "", by: "" }, pkr: llqaToPKR(llqaApPaid(l), l.currency || "PKR", R).pkr });
+    });
+    const rows = out.filter((x) => hit(x.l.vendor, x.l.category, x.p.ref, x.p.method)).sort((a, b) => String(b.p.date).localeCompare(String(a.p.date)));
+    const cats = Object.entries(cash.out).sort((a, b) => b[1] - a[1]);
+    const maxC = Math.max(1, ...cats.map((x) => x[1]));
+    const bud = Object.keys(budgets).map((k) => [k, k === "Salaries" ? pnl.salaries + (pnl.cost[k] || 0) : pnl.cost[k] || 0, Number(budgets[k]) || 0]);
+    csv = [["Date", "Paid to", "Category", "Amount", "Currency", "PKR", "Paid by", "Reference", "By"], ...rows.map((x) => [x.p.date, x.l.vendor, x.l.category, x.p.amount, x.l.currency || "PKR", Math.round(x.pkr), x.p.method || "", x.p.ref || "", x.p.by || ""])];
+    content = [
+      row([
+        stat("Paid out — " + ML, llqaPKR(cash.outAll), rows.length + " payment" + (rows.length === 1 ? "" : "s"), c.warn, "a"),
+        stat("Bills due in " + ML, llqaPKR(Object.values(pnl.cost).reduce((a, v) => a + v, 0)), "typed in Accounts Payable", null, "b"),
+        stat("Salaries — " + ML, llqaPKR(pnl.salaries), pnl.salariesEst ? "estimate until approved (Payroll)" : "from Payroll", null, "c"),
+        stat("Budget used", bud.length ? Math.round((bud.reduce((a, x) => a + x[1], 0) / Math.max(1, bud.reduce((a, x) => a + x[2], 0))) * 100) + "%" : "—", bud.length ? "of " + llqaPKR(bud.reduce((a, x) => a + x[2], 0)) : "set budgets in Settings → Finance", null, "d"),
+      ], "st"),
+      React.createElement(
+        "div",
+        { key: "g", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 10 } },
+        llqaCard([llqaH("Expense breakdown — paid out"), cats.length ? bars(cats.map(([k, v]) => [k, [v]]), maxC, [c.warn]) : empty("Nothing paid out in " + ML + ".")], { key: "b" }),
+        llqaCard([llqaH("Budget vs actual — " + ML, "Bills due in the month (and salaries) against your budgets."), bud.length ? bud.map(([k, a, b]) => React.createElement("div", { key: k, style: { marginBottom: 8 } }, React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 11 } }, React.createElement("span", null, k), React.createElement("span", { style: { color: a > b ? c.danger : c.textSec } }, "Actual " + llqaPKR(a) + " · Budget " + llqaPKR(b))), React.createElement("div", { style: { height: 6, background: c.bgDeep, borderRadius: 3, marginTop: 3 } }, React.createElement("div", { style: { height: 6, width: Math.min(100, Math.round((a / Math.max(1, b)) * 100)) + "%", background: a > b ? c.danger : c.success, borderRadius: 3 } })))) : React.createElement("div", null, empty("No budgets yet."), llqaMini("Set budgets", () => llqaOpenSettings("finance"), { key: "sb" }))], { key: "v" }),
+      ),
+      llqaCard(
+        [
+          React.createElement("div", { key: "h", style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" } }, llqaH("Money paid out — " + ML, "Bills paid in Accounts Payable and salaries paid in Payroll."), llqaMini("＋ Add expense", () => llqaOpen("apBill", { paid: true }), { key: "a", tone: "success" })),
+          rows.length
+            ? llqaTable(
+                ["Date", "Paid to", "Amount", "Paid by", ""],
+                rows.map((x) =>
+                  React.createElement(
+                    "tr",
+                    { key: x.l.id + x.p.id },
+                    llqaTd(llqaDateLabel(x.p.date), "d", { whiteSpace: "nowrap" }),
+                    llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, x.l.vendor), llqaSmall([x.l.category, x.l.payroll ? x.p.ref : ""].filter(Boolean).join(" · "), null, "s")], "v"),
+                    llqaTd([llqaAmt(x.p.amount, x.l.currency || "PKR"), x.l.currency && x.l.currency !== "PKR" ? llqaSmall(llqaPKR(x.pkr), null, "k") : null], "a", { whiteSpace: "nowrap", fontWeight: 700 }),
+                    llqaTd([x.p.method || "—", x.p.by ? llqaSmall("by " + x.p.by, null, "b") : null], "m"),
+                    llqaTd(x.l.payroll ? llqaMini("Payroll", () => (typeof llqaPayOpen === "function" ? llqaPayOpen(x.l.ym) : go("payroll")), { key: "pr" }) : React.createElement("div", { style: { display: "flex", gap: 4 } }, llqaMini("✎", () => llqaOpen("apBill", { billId: x.l.id }), { key: "e" }), !x.l.approvedBy && llqaCanManage() ? llqaMini("✓ Approve", () => llqaApApprove(x.l), { key: "ap" }) : x.l.approvedBy ? llqaSmall("approved by " + x.l.approvedBy, c.success, "ok") : null, llqaMini("🗑", () => llqaOpen("remove", { kind: "bill", id: x.l.id }), { key: "d", tone: "danger" })), "x"),
+                  ),
+                ),
+              )
+            : empty("Nothing paid out in " + ML + "."),
+        ],
+        { key: "o" },
+      ),
+    ];
+  } else if (tab === "pnl") {
+    const p = llqaFinPnl(month);
+    const six = months6.map((ym) => llqaFinPnl(ym));
+    const y0 = month.slice(0, 4) + "-01";
+    const ytd = [];
+    for (let ym = y0; ym <= month; ym = llqaMonthAdd(ym, 1)) ytd.push(llqaFinPnl(ym));
+    const tot = (k) => ytd.reduce((a, x) => a + (x[k] || 0), 0);
+    const lines = [
+      ["REVENUE", "", true],
+      ["Fees billed for " + ML, llqaPKR(p.fees)],
+      ...Object.entries(p.other).map(([k, v]) => [k, llqaPKR(v)]),
+      ["Total revenue", llqaPKR(p.revenue), true],
+      ["EXPENSES", "", true],
+      ["Teachers' salaries" + (p.salariesEst ? " (estimate until approved)" : ""), llqaPKR(p.salaries)],
+      ...Object.entries(p.cost).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, llqaPKR(v)]),
+      ...(p.wo ? [["Fees written off", llqaPKR(p.wo)]] : []),
+      ["Total expenses", llqaPKR(p.costAll), true],
+      [p.net >= 0 ? "NET PROFIT" : "NET LOSS", llqaPKR(p.net), true],
+      ["Operating margin", p.margin == null ? "—" : p.margin + "%"],
+    ];
+    csv = [["Month", "Revenue PKR", "Expenses PKR", "Net PKR", "Margin %"], ...six.map((x) => [x.ym, Math.round(x.revenue), Math.round(x.costAll), Math.round(x.net), x.margin == null ? "" : x.margin])];
+    const maxN = Math.max(1, ...six.map((x) => Math.abs(x.net)));
+    content = [
+      row([stat("Revenue — " + ML, llqaPKR(p.revenue), "fees billed + other income", c.success, "a"), stat("Expenses — " + ML, llqaPKR(p.costAll), "salaries, bills, write-offs", c.warn, "b"), stat(p.net >= 0 ? "Net profit" : "Net loss", llqaPKR(p.net), p.margin == null ? "" : "margin " + p.margin + "%", p.net >= 0 ? c.success : c.danger, "c"), stat("Year to date", llqaPKR(tot("net")), "revenue " + llqaPKR(tot("revenue")) + " · expenses " + llqaPKR(tot("costAll")), tot("net") >= 0 ? c.success : c.danger, "d")], "st"),
+      React.createElement(
+        "div",
+        { key: "g", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 10 } },
+        llqaCard(
+          [
+            React.createElement("div", { key: "h", style: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, llqaH("Profit & loss statement — " + ML, "What the month earned and cost (fees billed for it, salaries for it, bills due in it)."), llqaMini("⎙ Print / PDF", () => print("Profit & loss — " + ML, lines), { key: "p" })),
+            llqaTable(["", ""], lines.map((r, i) => React.createElement("tr", { key: i }, llqaTd(r[0], "a", { fontWeight: r[2] ? 800 : 400, color: r[2] ? c.text : c.textSec }), llqaTd(r[1], "b", { textAlign: "right", fontWeight: r[2] ? 800 : 400, color: r[0].startsWith("NET") ? (p.net >= 0 ? c.success : c.danger) : c.text })))),
+            p.missing ? llqaSmall(p.missing + " fee amount(s) have no rate and are left out — set the rates in Settings → Payment Gateways.", c.warn, "m") : null,
+          ],
+          { key: "s" },
+        ),
+        llqaCard([llqaH("Net profit trend — last 6 months"), legend([["Profit", c.success], ["Loss", c.danger]]), bars(six.map((x) => [llqaMonthLabel(x.ym), [x.net]]), maxN, [c.success]), llqaTable(["Month", "Revenue", "Expenses", "Net", "Margin"], six.slice().reverse().map((x) => React.createElement("tr", { key: x.ym }, llqaTd(llqaMonthLabel(x.ym), "m"), llqaTd(llqaPKR(x.revenue), "r"), llqaTd(llqaPKR(x.costAll), "e"), llqaTd(llqaPKR(x.net), "n", { color: x.net >= 0 ? c.success : c.danger, fontWeight: 700 }), llqaTd(x.margin == null ? "—" : x.margin + "%", "g"))))], { key: "t" }),
+      ),
+    ];
+  } else if (tab === "cashflow") {
+    const pos = llqaFinPosition(today);
+    const cs = llqaOpt("cashStart");
+    const six = months6.map((ym) => llqaFinCash(ym));
+    // the balance at each month's end: the starting amount + in − out from its day
+    const closing = (ym) => {
+      if (!cs || !llqaIsDay(cs.date)) return null;
+      const end = ym + "-" + String(llqaYmDays(ym)).padStart(2, "0");
+      if (end < cs.date) return null;
+      const p2 = llqaFinPosition(end > today ? today : end);
+      return p2 ? p2.now : null;
+    };
+    const ahead = [30, 60, 90, 180].map((d) => llqaFinAhead(d, today)); // up to six months ahead
+    const next = ahead[0];
+    const flow = [
+      ...next.fees.map((x) => ({ date: x.date, what: "Fee — " + x.s.name, inn: llqaToPKR(x.amount, x.cur, R).pkr, raw: llqaAmt(x.amount, x.cur) })),
+      ...next.bills.map((x) => ({ date: x.date, what: x.what + (x.projected ? " (repeating)" : ""), out: llqaToPKR(x.amount, x.cur, R).pkr, raw: llqaAmt(x.amount, x.cur) })),
+      ...next.salaries.map((x) => ({ date: x.date, what: x.what + (x.estimate ? " (estimate)" : ""), out: x.amount, raw: llqaPKR(x.amount) })),
+    ].sort((a, b) => a.date.localeCompare(b.date));
+    csv = [["Month", "In PKR", "Out PKR", "Net PKR", "Closing PKR"], ...six.map((x) => [x.ym, Math.round(x.inAll), Math.round(x.outAll), Math.round(x.net), closing(x.ym) == null ? "" : Math.round(closing(x.ym))])];
+    content = [
+      row([
+        stat("Opening balance", cs && llqaIsDay(cs.date) ? llqaPKR(cs.amount) : "—", cs && llqaIsDay(cs.date) ? "on " + llqaDateLabel(cs.date) : "set it in Settings → Finance", null, "a"),
+        stat("Cash in hand now", pos ? llqaPKR(pos.now) : "—", pos ? "in " + llqaPKR(pos.inn) + " · out " + llqaPKR(pos.out) + " since" : "", pos && pos.now < 0 ? c.danger : c.success, "b"),
+        stat("Next 30 days", llqaPKR(next.net), "in " + llqaPKR(next.inPKR) + " · out " + llqaPKR(next.outPKR), next.net >= 0 ? c.success : c.danger, "c"),
+        stat("Closing in 30 days", pos ? llqaPKR(pos.now + next.net) : "—", pos ? "if everything comes in and goes out on time" : "", null, "d"),
+      ], "st"),
+      !cs ? llqaCard(React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", fontSize: 12 } }, "Enter the money in hand on a day once — the cash position and closing balances follow by themselves.", llqaMini("Settings → Finance", () => llqaOpenSettings("finance"), { key: "s", tone: "accent" })), { key: "set" }) : null,
+      React.createElement(
+        "div",
+        { key: "g", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))", gap: 10 } },
+        llqaCard([llqaH("Monthly cash flow — last 6 months"), llqaTable(["Month", "In", "Out", "Net", "Closing"], six.slice().reverse().map((x) => React.createElement("tr", { key: x.ym }, llqaTd(llqaMonthLabel(x.ym), "m"), llqaTd(llqaPKR(x.inAll), "i", { color: c.success }), llqaTd(llqaPKR(x.outAll), "o", { color: c.warn }), llqaTd(llqaPKR(x.net), "n", { fontWeight: 700 }), llqaTd(closing(x.ym) == null ? "—" : llqaPKR(closing(x.ym)), "c"))))], { key: "m" }),
+        llqaCard([llqaH("Cash flow forecast", "Fees falling due, bills due (repeating ones too) and salaries due."), llqaTable(["", "In", "Out", "Net"], ahead.map((a) => React.createElement("tr", { key: a.days }, llqaTd(a.days === 180 ? "Next 6 months" : "Next " + a.days + " days", "d"), llqaTd(llqaPKR(a.inPKR), "i", { color: c.success }), llqaTd(llqaPKR(a.outPKR), "o", { color: c.warn }), llqaTd(llqaPKR(a.net), "n", { fontWeight: 700, color: a.net >= 0 ? c.success : c.danger })))), owed.total ? llqaSmall("Not counted: " + llqaPKR(owed.total) + " families owe already (overdue) — Recovery may bring it in.", null, "o") : null], { key: "f" }),
+      ),
+      llqaCard([llqaH("The next 30 days, day by day"), flow.length ? llqaTable(["Date", "What", "In", "Out"], flow.slice(0, 120).map((x, i) => React.createElement("tr", { key: i }, llqaTd(llqaDateLabel(x.date), "d", { whiteSpace: "nowrap" }), llqaTd(x.what, "w"), llqaTd(x.inn ? llqaPKR(x.inn) : "", "i", { color: c.success }), llqaTd(x.out ? llqaPKR(x.out) : "", "o", { color: c.warn })))) : empty("Nothing due in the next 30 days.")], { key: "d" }),
+    ];
+  } else if (tab === "reports") {
+    const p = llqaFinPnl(cur);
+    const prev = llqaFinPnl(llqaMonthAdd(cur, -1));
+    const late = owed.rows.filter((r) => !r.gone && r.overdue);
+    const curBills = all.map((x) => x.cy.months.find((m) => m.ym === cur)).filter(Boolean);
+    const billed = curBills.reduce((a, m) => a + m.fee, 0);
+    const paidOn = curBills.reduce((a, m) => a + m.paid, 0);
+    const ratio = (n, d) => (d > 0 ? Math.round((n / d) * 1000) / 10 + "%" : "—");
+    const taxes = months6.map((ym) => [ym, llqaFinPnl(ym).cost.Taxes || 0, llqaFinCash(ym).out.Taxes || 0]);
+    const toPKR = llqaToPKR(Number(conv.amount) || 0, conv.from, R);
+    const exp = (name, rows) => llqaCsv(name, rows);
+    const reports = [
+      ["Fee collection", "Every payment received (receipts, families, months paid)", () => exp("Fee-Collection-" + today + ".csv", [["Receipt", "Family", "Type", "For", "Amount", "Currency", "PKR", "Date", "Paid by", "Reference", "Posted by"], ...pays.map((x) => [x.receiptNo || "", x.studentName || x.payer || "", x.type === "other" ? x.category : "Monthly fee", x.type === "other" ? "" : llqaPayFor(x, today), x.amount, x.currency, Math.round(pk(x)), x.paidDate, x.gateway || "", x.receipt || "", x.postedBy || ""])])],
+      ["Expense report", "Every payment out (bills and salaries)", () => exp("Expense-Report-" + today + ".csv", [["Date", "Paid to", "Category", "Amount", "Currency", "Paid by", "Reference", "By"], ...llqaApAll(today).flatMap((l) => (l.pays || []).map((x) => [x.date, l.vendor, l.category, x.amount, l.currency || "PKR", x.method || "", x.ref || "", x.by || ""]))])],
+      ["Profit & loss (6 months)", "Revenue, expenses and net by month", () => exp("PnL-" + today + ".csv", [["Month", "Fees billed", "Other income", "Salaries", "Bills", "Written off", "Net", "Margin %"], ...months6.map((ym) => { const x = llqaFinPnl(ym); return [ym, Math.round(x.fees), Math.round(x.revenue - x.fees), Math.round(x.salaries), Math.round(Object.values(x.cost).reduce((a, v) => a + v, 0)), Math.round(x.wo), Math.round(x.net), x.margin == null ? "" : x.margin]; })])],
+      ["Cash flow (6 months)", "Money in and out by month", () => exp("Cash-Flow-" + today + ".csv", [["Month", "In", "Out", "Net"], ...months6.map((ym) => { const x = llqaFinCash(ym); return [ym, Math.round(x.inAll), Math.round(x.outAll), Math.round(x.net)]; })])],
+      ["Families owing", "Who owes what and for how long (with families who left)", () => exp("Families-Owing-" + today + ".csv", [["Student", "Parent", "Phone", "Status", "Owed", "Currency", "PKR", "Oldest due", "Days late"], ...owed.rows.map((r) => [r.s.name, r.s.parent || "", r.s.phone || "", r.gone ? "Left" : "With the academy", r.left, r.cur, Math.round(r.pkr), r.oldest.due, r.days])])],
+      ["Tax summary", "The Taxes category: due and paid by month", () => exp("Tax-Summary-" + today + ".csv", [["Month", "Due PKR", "Paid PKR"], ...taxes.map((t) => [t[0], Math.round(t[1]), Math.round(t[2])])])],
+    ];
+    content = [
+      row([
+        stat("Expense ratio", ratio(p.costAll, p.revenue), "expenses ÷ revenue, " + llqaMonthLabel(cur), null, "a"),
+        stat("Defaulter rate", ratio(late.length, live.length), late.length + " of " + live.length + " paying families overdue", late.length ? c.warn : c.success, "b"),
+        stat("Monthly growth", prev.revenue > 0 ? Math.round(((p.revenue - prev.revenue) / prev.revenue) * 1000) / 10 + "%" : "—", "revenue vs " + llqaMonthLabel(llqaMonthAdd(cur, -1)), null, "c"),
+        stat("Revenue per family", llqaPKR(live.length ? p.fees / live.length : 0), "fees billed this month ÷ paying families", null, "d"),
+        stat("Collection rate", ratio(paidOn, billed), "of this month's bills (in their currencies)", null, "e"),
+      ], "st"),
+      React.createElement(
+        "div",
+        { key: "g", style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(300px, 1fr))", gap: 10 } },
+        llqaCard([llqaH("Export reports (CSV)"), ...reports.map(([n, sub, run]) => React.createElement("div", { key: n, style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: "1px solid " + llqaAlpha(c.border, "44") } }, React.createElement("div", null, React.createElement("div", { style: { fontSize: 12, fontWeight: 700 } }, n), llqaSmall(sub, null, "s")), llqaMini("⬇ Export", run, { key: "x" })))], { key: "r" }),
+        llqaCard(
+          [
+            llqaH("Currency converter", "At your rates (Settings → Payment Gateways)."),
+            React.createElement(
+              "div",
+              { key: "c", style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" } },
+              React.createElement("input", { type: "number", "aria-label": "Amount to convert", value: conv.amount, onChange: (e) => setConv({ ...conv, amount: e.target.value }), style: { ...llqaSelectStyle, width: 110 } }),
+              llqaSel(conv.from, (v) => setConv({ ...conv, from: v }), Object.keys(R).length ? Object.keys(R) : ["USD"], { key: "f", title: "Currency" }),
+              React.createElement("span", { style: { fontSize: 13, fontWeight: 700 } }, "= " + (toPKR.how === "missing" ? "no rate set" : llqaPKR(toPKR.pkr))),
+            ),
+            Object.keys(R).length ? llqaSmall(Object.entries(R).map(([k, v]) => "1 " + k + " = Rs " + v).join(" · "), null, "r") : llqaMini("Set rates", () => llqaOpenSettings("payments"), { key: "sr" }),
+          ],
+          { key: "cv" },
+        ),
+      ),
+    ];
+  }
+  const TABS = [
+    ["dashboard", "Dashboard"],
+    ["fees", "Student Fees"],
+    ["invoices", "Invoices"],
+    ["income", "Income"],
+    ["expenses", "Expenses"],
+    ["pnl", "P&L Statement"],
+    ["cashflow", "Cash Flow"],
+    ["reports", "Reports"],
+  ];
+  const monthly = ["invoices", "income", "expenses", "pnl"].includes(tab);
   return React.createElement(
     "div",
     null,
     React.createElement(
       "div",
-      {
-        style: {
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "center",
-          marginBottom: 14,
-          flexWrap: "wrap",
-          gap: 8,
-        },
-      },
+      { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 } },
       React.createElement(
         "div",
         null,
-        React.createElement(
-          "p",
-          {
-            style: {
-              margin: 0,
-              color: c.text,
-              fontSize: 14,
-              fontWeight: 600,
-            },
-          },
-          "Finance & Accounting \u2014 ",
-          llqaLocalDay(selectedMonth + "-01").toLocaleDateString("en-US", { // v70
-            month: "long",
-            year: "numeric",
-          }),
-        ),
-        React.createElement(
-          "p",
-          {
-            style: {
-              margin: "2px 0 0",
-              color: c.textSec,
-              fontSize: 11,
-            },
-          },
-          "Monthly Revenue $",
-          feeStats.monthlyRev.toLocaleString(),
-          " \xB7 Collection ",
-          feeStats.collRate,
-          "% \xB7 ",
-          feeStats.overdueCount,
-          " overdue students",
-        ),
+        React.createElement("h2", { style: { color: c.text, fontSize: 20, fontWeight: 800, margin: 0 } }, "Finance"),
+        React.createElement("div", { style: { color: c.textSec, fontSize: 12, marginTop: 3 } }, "Fees, other income, bills and salaries from Accounts Receivable, Accounts Payable and Payroll — one set of numbers, in PKR."),
       ),
       React.createElement(
         "div",
-        {
-          style: {
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-          },
-        },
-        React.createElement(
-          LLQASelect, // v70: the CRM's own list
-          {
-            value: displayCur,
-            onChange: (e) => setDisplayCur(e.target.value),
-            style: {
-              padding: "8px 10px",
-              background: c.bgInput,
-              border: "1px solid " + c.border,
-              borderRadius: 7,
-              color: c.text,
-              fontSize: 11,
-            },
-          },
-          CURRENCIES.map((cr) =>
-            React.createElement(
-              "option",
-              {
-                key: cr,
-              },
-              cr,
-            ),
-          ),
-        ),
-        React.createElement("input", {
-          type: "month",
-          value: selectedMonth,
-          onChange: (e) => setSelectedMonth(e.target.value),
-          style: {
-            padding: "8px 12px",
-            background: c.bgInput,
-            border: "1px solid " + c.border,
-            borderRadius: 7,
-            color: c.text,
-            fontSize: 12,
-          },
-        }),
-        React.createElement(
-          Btn,
-          {
-            icon: Plus,
-            onClick: openAddExpense,
-          },
-          "Add Expense",
-        ),
+        { style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" } },
+        monthly ? monthPick() : null,
+        llqaMini("💰 Record payment", () => llqaOpen("payment", {}), { key: "rp", big: true, solid: true, tone: "success" }),
+        llqaMini("＋ Add expense", () => llqaOpen("apBill", { paid: true }), { key: "ae", big: true }),
+        csv ? llqaMini("⬇ Export", () => llqaCsv("Finance-" + tab + "-" + (monthly ? month : today) + ".csv", csv), { key: "ex", big: true }) : null,
       ),
     ),
     React.createElement(
       "div",
-      {
-        style: {
-          display: "flex",
-          gap: 10,
-          flexWrap: "wrap",
-          marginBottom: 14,
-        },
-      },
-      React.createElement(SC, {
-        icon: TrendingUp,
-        label: "Monthly Revenue",
-        value: "$" + feeStats.monthlyRev.toLocaleString(),
-        sub: feeStudents.length + " students",
-        color: c.success,
-      }),
-      React.createElement(SC, {
-        icon: DollarSign,
-        label: "Collected",
-        value: "$" + feeStats.totalPaidUSD.toLocaleString(),
-        sub: "This period",
-        color: c.accent,
-      }),
-      React.createElement(SC, {
-        icon: AlertTriangle,
-        label: "Outstanding",
-        value: "$" + feeStats.totalDueUSD.toLocaleString(),
-        sub: feeStats.overdueCount + " overdue",
-        color: c.danger,
-      }),
-      React.createElement(SC, {
-        icon: CreditCard,
-        label: "Expenses",
-        value: "Rs " + (expStats.totalPKR / 1000).toFixed(0) + "K",
-        sub: "Total this month",
-        color: c.warn,
-      }),
-      React.createElement(SC, {
-        icon: Award,
-        label: "Net Profit",
-        value:
-          "$" +
-          (
-            feeStats.monthlyRev -
-            Math.round(expStats.totalPKR / EXCHANGE_RATE.USD)
-          ).toLocaleString(),
-        color: c.purple,
-      }),
-      React.createElement(SC, {
-        icon: Check,
-        label: "Collection Rate",
-        value: feeStats.collRate + "%",
-        sub: "ARPS $" + feeStats.arps,
-        color: feeStats.collRate >= 85 ? c.success : c.warn,
-      }),
+      { style: { display: "flex", gap: 2, background: c.bgDeep, borderRadius: 8, padding: 3, marginBottom: 14, flexWrap: "wrap" } },
+      TABS.map(([k, l]) => React.createElement("button", { key: k, type: "button", onClick: () => setTab(k), style: { padding: "7px 12px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, background: tab === k ? c.accentFill : "transparent", color: tab === k ? c.accentText : c.textSec } }, l)),
     ),
-    React.createElement(
-      "div",
-      {
-        style: {
-          display: "flex",
-          gap: 2,
-          background: c.bgDeep,
-          borderRadius: 8,
-          padding: 3,
-          marginBottom: 14,
-          flexWrap: "wrap",
-        },
-      },
-      [
-        ["dashboard", "Dashboard"],
-        ["fees", "Student Fees"],
-        ["invoices", "Invoices"],
-        ["income", "Income"],
-        ["expenses", "Expenses"],
-        ["pnl", "P&L Statement"],
-        ["cashflow", "Cash Flow"],
-        ["reports", "Reports"],
-      ].map(([k, l]) =>
-        React.createElement(
-          "button",
-          {
-            key: k,
-            onClick: () => setTab(k),
-            style: {
-              padding: "7px 12px",
-              borderRadius: 6,
-              border:
-                tab === k ? "1px solid transparent" : "1px solid " + c.border,
-              cursor: "pointer",
-              fontSize: 10,
-              fontWeight: 500,
-              background: tab === k ? c.accentFill : "transparent",
-              color: tab === k ? c.accentText : c.textSec,
-            },
-          },
-          l,
-        ),
-      ),
-    ),
-    tab === "dashboard" &&
-      React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "grid",
-              gridTemplateColumns: "2fr 1fr",
-              gap: 14,
-              marginBottom: 14,
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgCard,
-                backdropFilter: "blur(16px)",
-                boxShadow: c.shadow3d,
-                border: "1px solid " + c.border,
-                borderRadius: 12,
-                padding: 16,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.text,
-                  margin: "0 0 10px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                },
-              },
-              "Revenue vs Expenses (Last 6 Months)",
-            ),
-            React.createElement(
-              ResponsiveContainer,
-              {
-                width: "100%",
-                height: 240,
-              },
-              React.createElement(
-                AreaChart,
-                {
-                  data: trendData,
-                },
-                React.createElement(CartesianGrid, {
-                  strokeDasharray: "3 3",
-                  stroke: c.border,
-                }),
-                React.createElement(XAxis, {
-                  dataKey: "month",
-                  stroke: c.textMuted,
-                  fontSize: 10,
-                }),
-                React.createElement(YAxis, {
-                  stroke: c.textMuted,
-                  fontSize: 10,
-                  tickFormatter: (v) => "$" + (v / 1000).toFixed(0) + "K",
-                }),
-                React.createElement(Tooltip, {
-                  contentStyle: {
-                    background: c.bgCard,
-                    backdropFilter: "blur(16px)",
-                    boxShadow: c.shadow3d,
-                    border: "1px solid " + c.border,
-                    borderRadius: 8,
-                    fontSize: 11,
-                    color: c.text,
-                  },
-                  formatter: (v) => "$" + v.toLocaleString(),
-                }),
-                React.createElement(Area, {
-                  type: "monotone",
-                  dataKey: "income",
-                  stroke: c.success,
-                  fill: c.successBg,
-                  strokeWidth: 2,
-                  name: "Income",
-                }),
-                React.createElement(Area, {
-                  type: "monotone",
-                  dataKey: "expense",
-                  stroke: c.danger,
-                  fill: c.dangerBg,
-                  strokeWidth: 2,
-                  name: "Expenses",
-                }),
-              ),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgCard,
-                backdropFilter: "blur(16px)",
-                boxShadow: c.shadow3d,
-                border: "1px solid " + c.border,
-                borderRadius: 12,
-                padding: 16,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.text,
-                  margin: "0 0 10px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                },
-              },
-              "Expense Breakdown",
-            ),
-            React.createElement(
-              ResponsiveContainer,
-              {
-                width: "100%",
-                height: 240,
-              },
-              React.createElement(
-                PieChart,
-                null,
-                React.createElement(
-                  Pie,
-                  {
-                    data: expStats.byCat.map(([k, v]) => ({
-                      name: k,
-                      value: Math.round(v / 1000),
-                    })),
-                    cx: "50%",
-                    cy: "50%",
-                    outerRadius: 75,
-                    innerRadius: 40,
-                    dataKey: "value",
-                    label: ({ name, percent }) =>
-                      name.substring(0, 10) +
-                      " " +
-                      (percent * 100).toFixed(0) +
-                      "%",
-                    fontSize: 8,
-                  },
-                  expStats.byCat.map((_, i) =>
-                    React.createElement(Cell, {
-                      key: i,
-                      fill: CC[i % CC.length],
-                    }),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 14,
-              marginBottom: 14,
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgCard,
-                backdropFilter: "blur(16px)",
-                boxShadow: c.shadow3d,
-                border: "1px solid " + c.border,
-                borderRadius: 12,
-                padding: 16,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.text,
-                  margin: "0 0 10px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                },
-              },
-              "Net Profit Trend",
-            ),
-            React.createElement(
-              ResponsiveContainer,
-              {
-                width: "100%",
-                height: 200,
-              },
-              React.createElement(
-                BarChart,
-                {
-                  data: trendData,
-                },
-                React.createElement(CartesianGrid, {
-                  strokeDasharray: "3 3",
-                  stroke: c.border,
-                }),
-                React.createElement(XAxis, {
-                  dataKey: "month",
-                  stroke: c.textMuted,
-                  fontSize: 10,
-                }),
-                React.createElement(YAxis, {
-                  stroke: c.textMuted,
-                  fontSize: 10,
-                }),
-                React.createElement(Tooltip, {
-                  contentStyle: {
-                    background: c.bgCard,
-                    backdropFilter: "blur(16px)",
-                    boxShadow: c.shadow3d,
-                    border: "1px solid " + c.border,
-                    borderRadius: 8,
-                    fontSize: 11,
-                    color: c.text,
-                  },
-                  formatter: (v) => "$" + v.toLocaleString(),
-                }),
-                React.createElement(
-                  Bar,
-                  {
-                    dataKey: "profit",
-                    radius: [4, 4, 0, 0],
-                  },
-                  trendData.map((d, i) =>
-                    React.createElement(Cell, {
-                      key: i,
-                      fill: d.profit >= 0 ? c.success : c.danger,
-                    }),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgCard,
-                backdropFilter: "blur(16px)",
-                boxShadow: c.shadow3d,
-                border: "1px solid " + c.border,
-                borderRadius: 12,
-                padding: 16,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.text,
-                  margin: "0 0 10px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                },
-              },
-              "Top Defaulters",
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 5,
-                },
-              },
-              feeStudents
-                .filter((s) => s.dueAmount > 0)
-                .sort((a, b) => b.dueAmount - a.dueAmount)
-                .slice(0, 6)
-                .map((s, i) =>
-                  React.createElement(
-                    "div",
-                    {
-                      key: s.id,
-                      style: {
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 8,
-                        background: c.bgDeep,
-                        borderRadius: 6,
-                        padding: "6px 10px",
-                      },
-                    },
-                    React.createElement(
-                      "span",
-                      {
-                        style: {
-                          color: c.textMuted,
-                          fontSize: 10,
-                          fontWeight: 700,
-                          width: 18,
-                        },
-                      },
-                      "#",
-                      i + 1,
-                    ),
-                    React.createElement(
-                      "div",
-                      {
-                        style: {
-                          flex: 1,
-                        },
-                      },
-                      React.createElement(
-                        "div",
-                        {
-                          style: {
-                            color: c.text,
-                            fontSize: 11,
-                            fontWeight: 600,
-                          },
-                        },
-                        s.name,
-                      ),
-                      React.createElement(
-                        "div",
-                        {
-                          style: {
-                            color: c.textMuted,
-                            fontSize: 9,
-                          },
-                        },
-                        s.parent,
-                        " \xB7 Last paid ",
-                        s.lastPaid,
-                      ),
-                    ),
-                    React.createElement(
-                      "span",
-                      {
-                        style: {
-                          color: c.danger,
-                          fontSize: 12,
-                          fontWeight: 700,
-                        },
-                      },
-                      curSym(s.currency),
-                      s.dueAmount,
-                    ),
-                  ),
-                ),
-            ),
-          ),
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr 1fr",
-              gap: 10,
-            },
-          },
-          [
-            ["Avg Revenue/Student", "$" + feeStats.arps, c.success],
-            ["Active Students", feeStudents.length, c.accent],
-            ["Overdue", feeStats.overdueCount, c.danger],
-            ["Partial Payments", feeStats.partialCount, c.warn],
-            [
-              "Countries",
-              [...new Set(feeStudents.map((s) => s.country))].length,
-              c.purple,
-            ],
-            ["Gateways", PAY_GATEWAYS.length - 1, c.cyan],
-          ].map(([l, v, col]) =>
-            React.createElement(
-              "div",
-              {
-                key: l,
-                style: {
-                  background: c.bgCard,
-                  backdropFilter: "blur(16px)",
-                  boxShadow: c.shadow3d,
-                  border: "1px solid " + c.border,
-                  borderRadius: 8,
-                  padding: "10px 14px",
-                },
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 9,
-                    textTransform: "uppercase",
-                  },
-                },
-                l,
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: col,
-                    fontSize: 18,
-                    fontWeight: 700,
-                  },
-                },
-                v,
-              ),
-            ),
-          ),
-        ),
-      ),
-    tab === "fees" &&
-      React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "flex",
-              gap: 8,
-              marginBottom: 12,
-              flexWrap: "wrap",
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                position: "relative",
-                flex: 1,
-                minWidth: 200,
-              },
-            },
-            React.createElement(Search, {
-              size: 14,
-              style: {
-                position: "absolute",
-                left: 10,
-                top: 9,
-                color: c.textMuted,
-              },
-            }),
-            React.createElement("input", {
-              value: search,
-              onChange: (e) => setSearch(e.target.value),
-              placeholder: "Search student or parent...",
-              style: {
-                width: "100%",
-                padding: "8px 12px 8px 30px",
-                background: c.bgInput,
-                border: "1px solid " + c.border,
-                borderRadius: 7,
-                color: c.text,
-                fontSize: 12,
-                outline: "none",
-                boxSizing: "border-box",
-              },
-            }),
-          ),
-          React.createElement(
-            LLQASelect, // v70: the CRM's own list
-            {
-              value: fStatus,
-              onChange: (e) => setFStatus(e.target.value),
-              style: {
-                padding: "8px 10px",
-                background: c.bgInput,
-                border: "1px solid " + c.border,
-                borderRadius: 7,
-                color: c.text,
-                fontSize: 11,
-              },
-            },
-            React.createElement(
-              "option",
-              {
-                value: "all",
-              },
-              "All Status",
-            ),
-            React.createElement(
-              "option",
-              {
-                value: "paid",
-              },
-              "Paid",
-            ),
-            React.createElement(
-              "option",
-              {
-                value: "overdue",
-              },
-              "Overdue",
-            ),
-            React.createElement(
-              "option",
-              {
-                value: "partial",
-              },
-              "Partial",
-            ),
-          ),
-          React.createElement(
-            LLQASelect, // v70: the CRM's own list
-            {
-              value: fCourse,
-              onChange: (e) => setFCourse(e.target.value),
-              style: {
-                padding: "8px 10px",
-                background: c.bgInput,
-                border: "1px solid " + c.border,
-                borderRadius: 7,
-                color: c.text,
-                fontSize: 11,
-              },
-            },
-            React.createElement(
-              "option",
-              {
-                value: "all",
-              },
-              "All Courses",
-            ),
-            Object.keys(FEE_PLANS).map((fp) =>
-              React.createElement(
-                "option",
-                {
-                  key: fp,
-                  value: fp,
-                },
-                fp,
-              ),
-            ),
-          ),
-          React.createElement(
-            Btn,
-            {
-              icon: AlertTriangle,
-              variant: "outline",
-              onClick: () => {
-                const overdue = feeStudents.filter(
-                  (s) => s.feeStatus === "overdue",
-                ).length;
-                if (overdue === 0) {
-                  alert("No students with overdue fees right now.");
-                  return;
-                }
-                if (
-                  confirm(
-                    "Send fee reminder to " +
-                      overdue +
-                      " student(s) with overdue fees?\n\nReminders will be sent via email and SMS.",
-                  )
-                )
-                  alert(overdue + " reminder(s) sent successfully.");
-              },
-            },
-            "Bulk Reminder",
-          ),
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              overflowX: "auto",
-              borderRadius: 10,
-              border: "1px solid " + c.border,
-            },
-          },
-          React.createElement(
-            "table",
-            {
-              style: {
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 11,
-              },
-            },
-            React.createElement(
-              "thead",
-              null,
-              React.createElement(
-                "tr",
-                null,
-                [
-                  "Student",
-                  "Parent",
-                  "Course",
-                  "Fee",
-                  "Currency",
-                  "Months Paid",
-                  "Total Paid",
-                  "Due",
-                  "Last Paid",
-                  "Gateway",
-                  "Status",
-                  "Actions",
-                ].map((h) =>
-                  React.createElement(
-                    "th",
-                    {
-                      key: h,
-                      style: {
-                        padding: "9px 8px",
-                        textAlign: "left",
-                        color: c.textSec,
-                        fontWeight: 600,
-                        fontSize: 9,
-                        textTransform: "uppercase",
-                        borderBottom: "1px solid " + c.border,
-                        background: c.bgDeep,
-                        whiteSpace: "nowrap",
-                      },
-                    },
-                    h,
-                  ),
-                ),
-              ),
-            ),
-            React.createElement(
-              "tbody",
-              null,
-              filteredFees.map((s, i) =>
-                React.createElement(
-                  "tr",
-                  {
-                    key: s.id,
-                    style: {
-                      borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
-                    },
-                  },
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        fontWeight: 600,
-                      },
-                    },
-                    React.createElement("div", null, s.name),
-                    s.family
-                      ? React.createElement(
-                          "div",
-                          {
-                            style: {
-                              display: "inline-block",
-                              fontSize: 9,
-                              padding: "1px 6px",
-                              borderRadius: 8,
-                              background: c.accentBg,
-                              color: c.accent,
-                              marginTop: 3,
-                              fontWeight: 500,
-                            },
-                          },
-                          llqaLabel("\uD83D\uDC65 " + s.family),
-                        )
-                      : null,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.textSec,
-                        fontSize: 10,
-                      },
-                    },
-                    s.parent,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                      },
-                    },
-                    React.createElement(Badge, {
-                      text:
-                        s.course.length > 12
-                          ? s.course.substring(0, 10) + ".."
-                          : s.course,
-                      color: "accent",
-                    }),
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.accent,
-                        fontWeight: 700,
-                      },
-                    },
-                    curSym(s.currency),
-                    s.fee,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.textSec,
-                        fontSize: 10,
-                      },
-                    },
-                    s.currency,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.text,
-                      },
-                    },
-                    s.monthsPaid,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.success,
-                        fontWeight: 600,
-                      },
-                    },
-                    curSym(s.currency),
-                    s.totalPaid,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: s.dueAmount > 0 ? c.danger : c.textMuted,
-                        fontWeight: 700,
-                      },
-                    },
-                    s.dueAmount > 0 ? curSym(s.currency) + s.dueAmount : "—",
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.textSec,
-                        fontSize: 10,
-                      },
-                    },
-                    s.lastPaid,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.textSec,
-                        fontSize: 10,
-                      },
-                    },
-                    s.gateway,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                      },
-                    },
-                    React.createElement(Badge, {
-                      text: s.status,
-                      color: sc3(s.status),
-                    }),
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        whiteSpace: "nowrap",
-                      },
-                    },
-                    React.createElement(
-                      "button",
-                      {
-                        onClick: () => openPaymentRecord(s),
-                        title: "Record Payment",
-                        style: {
-                          background: "none",
-                          border: "none",
-                          cursor: "pointer",
-                          padding: 3,
-                          color: c.success,
-                        },
-                      },
-                      React.createElement(DollarSign, {
-                        size: 13,
-                      }),
-                    ),
-                    React.createElement(
-                      "button",
-                      {
-                        onClick: () => openInvoice(s),
-                        title: "View Invoice",
-                        style: {
-                          background: "none",
-                          border: "none",
-                          cursor: "pointer",
-                          padding: 3,
-                          color: c.accent,
-                        },
-                      },
-                      React.createElement(Eye, {
-                        size: 13,
-                      }),
-                    ),
-                    React.createElement(
-                      "button",
-                      {
-                        onClick: () => sendReminder(s.id),
-                        title: "Send Reminder",
-                        style: {
-                          background: "none",
-                          border: "none",
-                          cursor: "pointer",
-                          padding: 3,
-                          color: c.warn,
-                        },
-                      },
-                      React.createElement(AlertTriangle, {
-                        size: 13,
-                      }),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    tab === "invoices" &&
-      React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "flex",
-              gap: 8,
-              marginBottom: 12,
-              flexWrap: "wrap",
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                position: "relative",
-                flex: 1,
-                minWidth: 200,
-              },
-            },
-            React.createElement(Search, {
-              size: 14,
-              style: {
-                position: "absolute",
-                left: 10,
-                top: 9,
-                color: c.textMuted,
-              },
-            }),
-            React.createElement("input", {
-              value: search,
-              onChange: (e) => setSearch(e.target.value),
-              placeholder: "Search invoice...",
-              style: {
-                width: "100%",
-                padding: "8px 12px 8px 30px",
-                background: c.bgInput,
-                border: "1px solid " + c.border,
-                borderRadius: 7,
-                color: c.text,
-                fontSize: 12,
-                outline: "none",
-                boxSizing: "border-box",
-              },
-            }),
-          ),
-          React.createElement(
-            Btn,
-            {
-              icon: Plus,
-              onClick: () => {
-                const num =
-                  "INV-" +
-                  new Date().getFullYear() +
-                  "-" +
-                  String(Math.floor(Math.random() * 9000) + 1000);
-                alert(
-                  "Invoice " +
-                    num +
-                    " generated.\nCustomize via Invoice Templates in Settings.",
-                );
-              },
-            },
-            "Generate Invoice",
-          ),
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill,minmax(280px,1fr))",
-              gap: 10,
-            },
-          },
-          feeStudents.slice(0, 12).map((s) =>
-            React.createElement(
-              "div",
-              {
-                key: s.id,
-                onClick: () => openInvoice(s),
-                style: {
-                  background: c.bgCard,
-                  border:
-                    "1px solid " +
-                    (s.status === "overdue"
-                      ? llqaAlpha(c.danger, "44")
-                      : s.status === "paid"
-                        ? llqaAlpha(c.success, "44")
-                        : llqaAlpha(c.warn, "44")),
-                  borderRadius: 10,
-                  padding: "12px 14px",
-                  cursor: "pointer",
-                },
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    justifyContent: "space-between",
-                    marginBottom: 6,
-                  },
-                },
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textMuted,
-                      fontSize: 9,
-                      fontFamily: "monospace",
-                    },
-                  },
-                  "INV-",
-                  String(s.id).padStart(4, "0"),
-                ),
-                React.createElement(Badge, {
-                  text: s.status,
-                  color: sc3(s.status),
-                }),
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.text,
-                    fontSize: 13,
-                    fontWeight: 700,
-                    marginBottom: 2,
-                  },
-                },
-                s.name,
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 10,
-                    marginBottom: 8,
-                  },
-                },
-                s.parent,
-                " \xB7 ",
-                s.course,
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "baseline",
-                  },
-                },
-                React.createElement(
-                  "div",
-                  null,
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        color: c.textMuted,
-                        fontSize: 9,
-                      },
-                    },
-                    "Amount",
-                  ),
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        color: c.success,
-                        fontSize: 16,
-                        fontWeight: 700,
-                      },
-                    },
-                    curSym(s.currency),
-                    s.fee,
-                  ),
-                ),
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      textAlign: "right",
-                    },
-                  },
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        color: c.textMuted,
-                        fontSize: 9,
-                      },
-                    },
-                    "Due",
-                  ),
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        color: s.dueAmount > 0 ? c.danger : c.textMuted,
-                        fontSize: 13,
-                        fontWeight: 700,
-                      },
-                    },
-                    s.dueAmount > 0 ? curSym(s.currency) + s.dueAmount : "—",
-                  ),
-                ),
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    marginTop: 8,
-                    paddingTop: 8,
-                    borderTop: "1px solid " + c.border,
-                    color: c.textMuted,
-                    fontSize: 9,
-                  },
-                },
-                "Last paid: ",
-                s.lastPaid,
-                " via ",
-                s.gateway,
-              ),
-            ),
-          ),
-        ),
-      ),
-    tab === "income" &&
-      React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 10,
-              padding: 14,
-              marginBottom: 14,
-            },
-          },
-          React.createElement(
-            "h4",
-            {
-              style: {
-                color: c.text,
-                margin: "0 0 10px",
-                fontSize: 13,
-                fontWeight: 600,
-              },
-            },
-            "Income Streams",
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit,minmax(200px,1fr))",
-                gap: 8,
-              },
-            },
-            [
-              [
-                "Monthly Fees",
-                "$" + feeStats.monthlyRev.toLocaleString(),
-                c.success,
-                feeStudents.length + " students",
-              ],
-              ["Registration", "$0", c.accent, "0 new this month"],
-              ["Certificates", "$0", c.purple, "0 issued"],
-              ["Donations", "$0", c.cyan, "0 received"],
-            ].map(([l, v, col, sub]) =>
-              React.createElement(
-                "div",
-                {
-                  key: l,
-                  style: {
-                    background: c.bgDeep,
-                    border: "1px solid " + llqaAlpha(col, "44"),
-                    borderRadius: 8,
-                    padding: "10px 12px",
-                  },
-                },
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      color: c.textSec,
-                      fontSize: 9,
-                      textTransform: "uppercase",
-                      marginBottom: 2,
-                    },
-                  },
-                  l,
-                ),
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      color: col,
-                      fontSize: 16,
-                      fontWeight: 700,
-                    },
-                  },
-                  v,
-                ),
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      color: c.textMuted,
-                      fontSize: 9,
-                      marginTop: 2,
-                    },
-                  },
-                  sub,
-                ),
-              ),
-            ),
-          ),
-        ),
-        React.createElement(
-          "h4",
-          {
-            style: {
-              color: c.text,
-              fontSize: 13,
-              margin: "0 0 10px",
-              fontWeight: 600,
-            },
-          },
-          "Recent Payments Received",
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              overflowX: "auto",
-              borderRadius: 10,
-              border: "1px solid " + c.border,
-            },
-          },
-          React.createElement(
-            "table",
-            {
-              style: {
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 11,
-              },
-            },
-            React.createElement(
-              "thead",
-              null,
-              React.createElement(
-                "tr",
-                null,
-                [
-                  "Date",
-                  "Student",
-                  "Parent",
-                  "Course",
-                  "Amount",
-                  "Currency",
-                  "Gateway",
-                  "Status",
-                ].map((h) =>
-                  React.createElement(
-                    "th",
-                    {
-                      key: h,
-                      style: {
-                        padding: "9px 8px",
-                        textAlign: "left",
-                        color: c.textSec,
-                        fontWeight: 600,
-                        fontSize: 9,
-                        textTransform: "uppercase",
-                        borderBottom: "1px solid " + c.border,
-                        background: c.bgDeep,
-                      },
-                    },
-                    h,
-                  ),
-                ),
-              ),
-            ),
-            React.createElement(
-              "tbody",
-              null,
-              feeStudents
-                .filter((s) => s.status === "paid" || s.status === "partial")
-                .sort((a, b) => new Date(b.lastPaid) - new Date(a.lastPaid))
-                .slice(0, 15)
-                .map((s, i) =>
-                  React.createElement(
-                    "tr",
-                    {
-                      key: s.id,
-                      style: {
-                        borderBottom: "1px solid " + c.border,
-                        background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
-                      },
-                    },
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          color: c.accent,
-                          fontSize: 10,
-                        },
-                      },
-                      s.lastPaid,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          fontWeight: 600,
-                        },
-                      },
-                      React.createElement("div", null, s.name),
-                      s.family
-                        ? React.createElement(
-                            "div",
-                            {
-                              style: {
-                                display: "inline-block",
-                                fontSize: 9,
-                                padding: "1px 6px",
-                                borderRadius: 8,
-                                background: c.accentBg,
-                                color: c.accent,
-                                marginTop: 3,
-                                fontWeight: 500,
-                              },
-                            },
-                            llqaLabel("\uD83D\uDC65 " + s.family),
-                          )
-                        : null,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          color: c.textSec,
-                          fontSize: 10,
-                        },
-                      },
-                      s.parent,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          color: c.textSec,
-                          fontSize: 10,
-                        },
-                      },
-                      s.course,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          color: c.success,
-                          fontWeight: 700,
-                        },
-                      },
-                      curSym(s.currency),
-                      s.fee,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          color: c.textSec,
-                          fontSize: 10,
-                        },
-                      },
-                      s.currency,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                          color: c.textSec,
-                          fontSize: 10,
-                        },
-                      },
-                      s.gateway,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px",
-                        },
-                      },
-                      React.createElement(Badge, {
-                        text: s.status,
-                        color: sc3(s.status),
-                      }),
-                    ),
-                  ),
-                ),
-            ),
-          ),
-        ),
-      ),
-    tab === "expenses" &&
-      React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "flex",
-              gap: 8,
-              marginBottom: 12,
-              flexWrap: "wrap",
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                position: "relative",
-                flex: 1,
-                minWidth: 200,
-              },
-            },
-            React.createElement(Search, {
-              size: 14,
-              style: {
-                position: "absolute",
-                left: 10,
-                top: 9,
-                color: c.textMuted,
-              },
-            }),
-            React.createElement("input", {
-              value: search,
-              onChange: (e) => setSearch(e.target.value),
-              placeholder: "Search expense...",
-              style: {
-                width: "100%",
-                padding: "8px 12px 8px 30px",
-                background: c.bgInput,
-                border: "1px solid " + c.border,
-                borderRadius: 7,
-                color: c.text,
-                fontSize: 12,
-                outline: "none",
-                boxSizing: "border-box",
-              },
-            }),
-          ),
-          React.createElement(
-            LLQASelect, // v70: the CRM's own list
-            {
-              value: fCat,
-              onChange: (e) => setFCat(e.target.value),
-              style: {
-                padding: "8px 10px",
-                background: c.bgInput,
-                border: "1px solid " + c.border,
-                borderRadius: 7,
-                color: c.text,
-                fontSize: 11,
-              },
-            },
-            React.createElement(
-              "option",
-              {
-                value: "all",
-              },
-              "All Categories",
-            ),
-            EXPENSE_CATS.map((ec) =>
-              React.createElement(
-                "option",
-                {
-                  key: ec,
-                  value: ec,
-                },
-                ec,
-              ),
-            ),
-          ),
-          React.createElement(
-            Btn,
-            {
-              icon: Plus,
-              onClick: openAddExpense,
-            },
-            "Add Expense",
-          ),
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              overflowX: "auto",
-              borderRadius: 10,
-              border: "1px solid " + c.border,
-            },
-          },
-          React.createElement(
-            "table",
-            {
-              style: {
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 11,
-              },
-            },
-            React.createElement(
-              "thead",
-              null,
-              React.createElement(
-                "tr",
-                null,
-                [
-                  "Date",
-                  "Category",
-                  "Description",
-                  "Vendor",
-                  "Amount",
-                  "Currency",
-                  "In PKR",
-                  "Method",
-                  "Status",
-                  "Approved By",
-                  "Actions",
-                ].map((h) =>
-                  React.createElement(
-                    "th",
-                    {
-                      key: h,
-                      style: {
-                        padding: "9px 8px",
-                        textAlign: "left",
-                        color: c.textSec,
-                        fontWeight: 600,
-                        fontSize: 9,
-                        textTransform: "uppercase",
-                        borderBottom: "1px solid " + c.border,
-                        background: c.bgDeep,
-                        whiteSpace: "nowrap",
-                      },
-                    },
-                    h,
-                  ),
-                ),
-              ),
-            ),
-            React.createElement(
-              "tbody",
-              null,
-              filteredExp.map((e, i) =>
-                React.createElement(
-                  "tr",
-                  {
-                    key: e.id,
-                    style: {
-                      borderBottom: "1px solid " + c.border,
-                      background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
-                    },
-                  },
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.accent,
-                        fontSize: 10,
-                      },
-                    },
-                    e.date,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                      },
-                    },
-                    React.createElement(Badge, {
-                      text: e.category,
-                      color: e.category.includes("Salaries")
-                        ? "danger"
-                        : e.category.includes("Rent")
-                          ? "warn"
-                          : e.category.includes("Marketing")
-                            ? "purple"
-                            : "accent",
-                    }),
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.text,
-                        fontSize: 10,
-                      },
-                    },
-                    e.description,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.textSec,
-                        fontSize: 10,
-                      },
-                    },
-                    e.vendor,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.text,
-                        fontWeight: 700,
-                      },
-                    },
-                    curSym(e.currency),
-                    e.amount.toLocaleString(),
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.textSec,
-                        fontSize: 10,
-                      },
-                    },
-                    e.currency,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.danger,
-                        fontWeight: 600,
-                      },
-                    },
-                    "Rs ",
-                    (e.amount * EXCHANGE_RATE[e.currency]).toLocaleString(),
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.textSec,
-                        fontSize: 10,
-                      },
-                    },
-                    e.paymentMethod,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                      },
-                    },
-                    React.createElement(Badge, {
-                      text: e.status,
-                      color: e.status === "paid" ? "success" : "warn",
-                    }),
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                        color: c.textSec,
-                        fontSize: 10,
-                      },
-                    },
-                    e.approvedBy,
-                  ),
-                  React.createElement(
-                    "td",
-                    {
-                      style: {
-                        padding: "8px",
-                      },
-                    },
-                    React.createElement(
-                      "div",
-                      {
-                        style: {
-                          display: "flex",
-                          gap: 5,
-                          alignItems: "center",
-                        },
-                      },
-                      e.status === "pending" &&
-                        React.createElement(
-                          "button",
-                          {
-                            onClick: () => approveExpense(e.id),
-                            style: {
-                              background: c.successBg,
-                              border: "1px solid " + llqaAlpha(c.success, "44"),
-                              borderRadius: 4,
-                              cursor: "pointer",
-                              padding: "3px 8px",
-                              color: c.success,
-                              fontSize: 9,
-                              fontWeight: 600,
-                            },
-                          },
-                          "Approve",
-                        ),
-                      React.createElement(
-                        "button",
-                        {
-                          onClick: () => oEditExp(e),
-                          style: {
-                            background: "none",
-                            border: "none",
-                            cursor: "pointer",
-                            padding: 3,
-                            color: c.purple,
-                          },
-                          title: "Edit Expense",
-                        },
-                        React.createElement(Edit2, {
-                          size: 13,
-                        }),
-                      ),
-                      React.createElement(
-                        "button",
-                        {
-                          onClick: () => delExp(e.id),
-                          style: {
-                            background: "none",
-                            border: "none",
-                            cursor: "pointer",
-                            padding: 3,
-                            color: c.danger,
-                          },
-                          title: "Delete Expense",
-                        },
-                        React.createElement(Trash2, {
-                          size: 13,
-                        }),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    tab === "pnl" &&
-      React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 12,
-              padding: 24,
-            },
-          },
-          React.createElement(
-            "h3",
-            {
-              style: {
-                color: c.text,
-                margin: "0 0 4px",
-                fontSize: 18,
-                fontWeight: 700,
-                textAlign: "center",
-              },
-            },
-            "PROFIT & LOSS STATEMENT",
-          ),
-          React.createElement(
-            "p",
-            {
-              style: {
-                color: c.textSec,
-                fontSize: 11,
-                textAlign: "center",
-                margin: "0 0 20px",
-              },
-            },
-            "LLQA Academy \xB7 For the month of ",
-            llqaLocalDay(selectedMonth + "-01").toLocaleDateString("en-US", { // v70
-              month: "long",
-              year: "numeric",
-            }),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.successBg,
-                border: "1px solid " + llqaAlpha(c.success, "44"),
-                borderRadius: 10,
-                padding: "12px 16px",
-                marginBottom: 14,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.success,
-                  margin: "0 0 10px",
-                  fontSize: 14,
-                  fontWeight: 700,
-                },
-              },
-              "REVENUE",
-            ),
-            [
-              ["Monthly Student Fees", feeStats.monthlyRev, "USD"],
-              ["Registration Fees", 0, "USD"],
-              ["Certificate Fees", 0, "USD"],
-              ["Donations", 0, "USD"],
-            ].map(([l, v]) =>
-              React.createElement(
-                "div",
-                {
-                  key: l,
-                  style: {
-                    display: "flex",
-                    justifyContent: "space-between",
-                    padding: "4px 0",
-                  },
-                },
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textSec,
-                      fontSize: 12,
-                    },
-                  },
-                  l,
-                ),
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.text,
-                      fontSize: 12,
-                      fontWeight: 600,
-                    },
-                  },
-                  "$",
-                  v.toLocaleString(),
-                ),
-              ),
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  borderTop: "1px solid " + llqaAlpha(c.success, "44"),
-                  marginTop: 10,
-                  paddingTop: 10,
-                  display: "flex",
-                  justifyContent: "space-between",
-                },
-              },
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    color: c.text,
-                    fontSize: 13,
-                    fontWeight: 700,
-                  },
-                },
-                "Total Revenue",
-              ),
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    color: c.success,
-                    fontSize: 16,
-                    fontWeight: 700,
-                  },
-                },
-                "$",
-                feeStats.monthlyRev.toLocaleString(),
-              ),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.dangerBg,
-                border: "1px solid " + llqaAlpha(c.danger, "44"),
-                borderRadius: 10,
-                padding: "12px 16px",
-                marginBottom: 14,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.danger,
-                  margin: "0 0 10px",
-                  fontSize: 14,
-                  fontWeight: 700,
-                },
-              },
-              "EXPENSES",
-            ),
-            expStats.byCat.map(([cat, amt]) =>
-              React.createElement(
-                "div",
-                {
-                  key: cat,
-                  style: {
-                    display: "flex",
-                    justifyContent: "space-between",
-                    padding: "4px 0",
-                  },
-                },
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textSec,
-                      fontSize: 12,
-                    },
-                  },
-                  cat,
-                ),
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.text,
-                      fontSize: 12,
-                      fontWeight: 600,
-                    },
-                  },
-                  "Rs ",
-                  amt.toLocaleString(),
-                  " ($",
-                  Math.round(amt / EXCHANGE_RATE.USD).toLocaleString(),
-                  ")",
-                ),
-              ),
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  borderTop: "1px solid " + llqaAlpha(c.danger, "44"),
-                  marginTop: 10,
-                  paddingTop: 10,
-                  display: "flex",
-                  justifyContent: "space-between",
-                },
-              },
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    color: c.text,
-                    fontSize: 13,
-                    fontWeight: 700,
-                  },
-                },
-                "Total Expenses",
-              ),
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    color: c.danger,
-                    fontSize: 16,
-                    fontWeight: 700,
-                  },
-                },
-                "$",
-                Math.round(
-                  expStats.totalPKR / EXCHANGE_RATE.USD,
-                ).toLocaleString(),
-              ),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background:
-                  "linear-gradient(135deg," +
-                  llqaAlpha(c.accent, "22") + "," +
-                  llqaAlpha(c.purple, "22") + ")",
-                border: "2px solid " + c.accent,
-                borderRadius: 10,
-                padding: "16px 20px",
-                textAlign: "center",
-              },
-            },
-            React.createElement(
-              "div",
-              {
-                style: {
-                  color: c.textSec,
-                  fontSize: 11,
-                  textTransform: "uppercase",
-                  letterSpacing: 1,
-                  marginBottom: 6,
-                },
-              },
-              "NET PROFIT / LOSS",
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  color:
-                    feeStats.monthlyRev -
-                      Math.round(expStats.totalPKR / EXCHANGE_RATE.USD) >=
-                    0
-                      ? c.success
-                      : c.danger,
-                  fontSize: 32,
-                  fontWeight: 800,
-                },
-              },
-              "$",
-              (
-                feeStats.monthlyRev -
-                Math.round(expStats.totalPKR / EXCHANGE_RATE.USD)
-              ).toLocaleString(),
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  color: c.textSec,
-                  fontSize: 10,
-                  marginTop: 4,
-                },
-              },
-              "Operating Margin: ",
-              Math.round(
-                ((feeStats.monthlyRev -
-                  Math.round(expStats.totalPKR / EXCHANGE_RATE.USD)) /
-                  feeStats.monthlyRev) *
-                  100,
-              ),
-              "%",
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                textAlign: "center",
-                color: c.textMuted,
-                fontSize: 9,
-                marginTop: 12,
-                paddingTop: 10,
-                borderTop: "1px solid " + c.border,
-              },
-            },
-            "LLQA Academy \xB7 Generated on ",
-            new Date().toLocaleDateString(),
-            " \xB7 Exchange rate: 1 USD = Rs ",
-            EXCHANGE_RATE.USD,
-          ),
-        ),
-      ),
-    tab === "cashflow" &&
-      React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 12,
-              padding: 16,
-              marginBottom: 14,
-            },
-          },
-          React.createElement(
-            "h4",
-            {
-              style: {
-                color: c.text,
-                margin: "0 0 10px",
-                fontSize: 13,
-                fontWeight: 600,
-              },
-            },
-            "Monthly Cash Flow Forecast (6 Months)",
-          ),
-          React.createElement(
-            ResponsiveContainer,
-            {
-              width: "100%",
-              height: 280,
-            },
-            React.createElement(
-              AreaChart,
-              {
-                data: trendData,
-              },
-              React.createElement(CartesianGrid, {
-                strokeDasharray: "3 3",
-                stroke: c.border,
-              }),
-              React.createElement(XAxis, {
-                dataKey: "month",
-                stroke: c.textMuted,
-                fontSize: 10,
-              }),
-              React.createElement(YAxis, {
-                stroke: c.textMuted,
-                fontSize: 10,
-                tickFormatter: (v) => "$" + (v / 1000).toFixed(0) + "K",
-              }),
-              React.createElement(Tooltip, {
-                contentStyle: {
-                  background: c.bgCard,
-                  backdropFilter: "blur(16px)",
-                  boxShadow: c.shadow3d,
-                  border: "1px solid " + c.border,
-                  borderRadius: 8,
-                  fontSize: 11,
-                  color: c.text,
-                },
-                formatter: (v) => "$" + v.toLocaleString(),
-              }),
-              React.createElement(Area, {
-                type: "monotone",
-                dataKey: "income",
-                stroke: c.success,
-                fill: c.successBg,
-                strokeWidth: 2,
-                name: "Income",
-              }),
-              React.createElement(Area, {
-                type: "monotone",
-                dataKey: "expense",
-                stroke: c.danger,
-                fill: c.dangerBg,
-                strokeWidth: 2,
-                name: "Expenses",
-              }),
-              React.createElement(Area, {
-                type: "monotone",
-                dataKey: "profit",
-                stroke: c.accent,
-                fill: c.accentBg,
-                strokeWidth: 2,
-                name: "Net",
-              }),
-            ),
-          ),
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 14,
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgCard,
-                backdropFilter: "blur(16px)",
-                boxShadow: c.shadow3d,
-                border: "1px solid " + c.border,
-                borderRadius: 12,
-                padding: 16,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.text,
-                  margin: "0 0 10px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                },
-              },
-              "Budget vs Actual (This Month)",
-            ),
-            [
-              ["Teacher Salaries", 0, 0],
-              ["Rent & Utilities", 0, 0],
-              ["Marketing", 0, 0],
-              ["Software", 0, 0],
-              ["Admin Staff", 0, 0],
-              ["Equipment", 0, 0],
-            ].map(([l, b, a]) => {
-              const pct = b === 0 ? 0 : Math.round((a / b) * 100);
-              return React.createElement(
-                "div",
-                {
-                  key: l,
-                  style: {
-                    marginBottom: 8,
-                  },
-                },
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      display: "flex",
-                      justifyContent: "space-between",
-                      marginBottom: 3,
-                      fontSize: 10,
-                    },
-                  },
-                  React.createElement(
-                    "span",
-                    {
-                      style: {
-                        color: c.textSec,
-                      },
-                    },
-                    l,
-                  ),
-                  React.createElement(
-                    "span",
-                    {
-                      style: {
-                        color:
-                          pct > 100 ? c.danger : pct >= 90 ? c.warn : c.success,
-                        fontWeight: 600,
-                      },
-                    },
-                    pct,
-                    "%",
-                  ),
-                ),
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      display: "flex",
-                      gap: 2,
-                    },
-                  },
-                  React.createElement("div", {
-                    style: {
-                      flex: Math.min(pct, 100),
-                      height: 6,
-                      background:
-                        pct > 100 ? c.danger : pct >= 90 ? c.warn : c.success,
-                      borderRadius: "3px 0 0 3px",
-                    },
-                  }),
-                  pct < 100 &&
-                    React.createElement("div", {
-                      style: {
-                        flex: 100 - pct,
-                        height: 6,
-                        background: c.border,
-                        borderRadius: "0 3px 3px 0",
-                      },
-                    }),
-                ),
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      display: "flex",
-                      justifyContent: "space-between",
-                      marginTop: 2,
-                      fontSize: 9,
-                      color: c.textMuted,
-                    },
-                  },
-                  React.createElement(
-                    "span",
-                    null,
-                    "Actual Rs ",
-                    a.toLocaleString(),
-                  ),
-                  React.createElement(
-                    "span",
-                    null,
-                    "Budget Rs ",
-                    b.toLocaleString(),
-                  ),
-                ),
-              );
-            }),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgCard,
-                backdropFilter: "blur(16px)",
-                boxShadow: c.shadow3d,
-                border: "1px solid " + c.border,
-                borderRadius: 12,
-                padding: 16,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.text,
-                  margin: "0 0 10px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                },
-              },
-              "Cash Position",
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  background: c.bgDeep,
-                  borderRadius: 8,
-                  padding: "12px 14px",
-                  marginBottom: 10,
-                },
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 10,
-                    textTransform: "uppercase",
-                    marginBottom: 3,
-                  },
-                },
-                "Opening Balance",
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.text,
-                    fontSize: 20,
-                    fontWeight: 700,
-                  },
-                },
-                "Rs 0",
-              ),
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  background: c.successBg,
-                  borderRadius: 8,
-                  padding: "10px 14px",
-                  marginBottom: 6,
-                },
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    justifyContent: "space-between",
-                  },
-                },
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textSec,
-                      fontSize: 11,
-                    },
-                  },
-                  "+ Cash Inflow",
-                ),
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.success,
-                      fontSize: 13,
-                      fontWeight: 700,
-                    },
-                  },
-                  "Rs ",
-                  (feeStats.monthlyRev * EXCHANGE_RATE.USD).toLocaleString(),
-                ),
-              ),
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  background: c.dangerBg,
-                  borderRadius: 8,
-                  padding: "10px 14px",
-                  marginBottom: 10,
-                },
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    justifyContent: "space-between",
-                  },
-                },
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textSec,
-                      fontSize: 11,
-                    },
-                  },
-                  "\u2212 Cash Outflow",
-                ),
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.danger,
-                      fontSize: 13,
-                      fontWeight: 700,
-                    },
-                  },
-                  "Rs ",
-                  expStats.totalPKR.toLocaleString(),
-                ),
-              ),
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  background: c.accentBg,
-                  border: "2px solid " + c.accent,
-                  borderRadius: 8,
-                  padding: "12px 14px",
-                },
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 10,
-                    textTransform: "uppercase",
-                    marginBottom: 3,
-                  },
-                },
-                "Closing Balance",
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.accent,
-                    fontSize: 22,
-                    fontWeight: 800,
-                  },
-                },
-                "Rs ",
-                (
-                  0 +
-                  feeStats.monthlyRev * EXCHANGE_RATE.USD -
-                  expStats.totalPKR
-                ).toLocaleString(),
-              ),
-            ),
-          ),
-        ),
-      ),
-    tab === "reports" &&
-      React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 14,
-              marginBottom: 14,
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgCard,
-                backdropFilter: "blur(16px)",
-                boxShadow: c.shadow3d,
-                border: "1px solid " + c.border,
-                borderRadius: 12,
-                padding: 16,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.text,
-                  margin: "0 0 10px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                },
-              },
-              "Currency Converter",
-            ),
-            React.createElement(
-              "p",
-              {
-                style: {
-                  color: c.textSec,
-                  fontSize: 10,
-                  marginBottom: 10,
-                },
-              },
-              "Live rates (updated: Today)",
-            ),
-            [
-              ["USD → PKR", EXCHANGE_RATE.USD],
-              ["CAD → PKR", EXCHANGE_RATE.CAD],
-              ["GBP → PKR", EXCHANGE_RATE.GBP],
-            ].map(([l, r]) =>
-              React.createElement(
-                "div",
-                {
-                  key: l,
-                  style: {
-                    display: "flex",
-                    justifyContent: "space-between",
-                    background: c.bgDeep,
-                    borderRadius: 6,
-                    padding: "8px 12px",
-                    marginBottom: 5,
-                  },
-                },
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.text,
-                      fontSize: 12,
-                      fontWeight: 600,
-                    },
-                  },
-                  l,
-                ),
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.accent,
-                      fontSize: 13,
-                      fontWeight: 700,
-                    },
-                  },
-                  r,
-                ),
-              ),
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  marginTop: 10,
-                  background: c.bgDeep,
-                  borderRadius: 8,
-                  padding: 10,
-                },
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 10,
-                    marginBottom: 4,
-                  },
-                },
-                "Quick Convert",
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.text,
-                    fontSize: 11,
-                  },
-                },
-                "$1,000 = Rs ",
-                (1000 * EXCHANGE_RATE.USD).toLocaleString(),
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.text,
-                    fontSize: 11,
-                  },
-                },
-                "$5,000 = Rs ",
-                (5000 * EXCHANGE_RATE.USD).toLocaleString(),
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.text,
-                    fontSize: 11,
-                  },
-                },
-                "$10,000 = Rs ",
-                (10000 * EXCHANGE_RATE.USD).toLocaleString(),
-              ),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgCard,
-                backdropFilter: "blur(16px)",
-                boxShadow: c.shadow3d,
-                border: "1px solid " + c.border,
-                borderRadius: 12,
-                padding: 16,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.text,
-                  margin: "0 0 10px",
-                  fontSize: 13,
-                  fontWeight: 600,
-                },
-              },
-              "Key Financial Ratios",
-            ),
-            [
-              ["Revenue per Student", "$" + feeStats.arps, c.success],
-              [
-                "Expense Ratio",
-                Math.round(
-                  (expStats.totalPKR /
-                    EXCHANGE_RATE.USD /
-                    feeStats.monthlyRev) *
-                    100,
-                ) + "%",
-                c.warn,
-              ],
-              [
-                "Operating Margin",
-                Math.round(
-                  ((feeStats.monthlyRev -
-                    Math.round(expStats.totalPKR / EXCHANGE_RATE.USD)) /
-                    feeStats.monthlyRev) *
-                    100,
-                ) + "%",
-                c.purple,
-              ],
-              [
-                "Collection Rate",
-                feeStats.collRate + "%",
-                feeStats.collRate >= 85 ? c.success : c.warn,
-              ],
-              [
-                "Defaulter Rate",
-                Math.round((feeStats.overdueCount / feeStudents.length) * 100) +
-                  "%",
-                c.danger,
-              ],
-              ["Monthly Growth", "+8.5%", c.cyan],
-            ].map(([l, v, col]) =>
-              React.createElement(
-                "div",
-                {
-                  key: l,
-                  style: {
-                    display: "flex",
-                    justifyContent: "space-between",
-                    background: c.bgDeep,
-                    borderRadius: 6,
-                    padding: "8px 12px",
-                    marginBottom: 5,
-                  },
-                },
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textSec,
-                      fontSize: 11,
-                    },
-                  },
-                  l,
-                ),
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: col,
-                      fontSize: 13,
-                      fontWeight: 700,
-                    },
-                  },
-                  v,
-                ),
-              ),
-            ),
-          ),
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 12,
-              padding: 16,
-            },
-          },
-          React.createElement(
-            "h4",
-            {
-              style: {
-                color: c.text,
-                margin: "0 0 10px",
-                fontSize: 13,
-                fontWeight: 600,
-              },
-            },
-            "Export Reports",
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "grid",
-                gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))",
-                gap: 10,
-              },
-            },
-            [
-              ["Monthly P&L", "pdf"],
-              ["Fee Collection", "excel"],
-              ["Expense Report", "pdf"],
-              ["Income Statement", "pdf"],
-              ["Tax Summary", "pdf"],
-              ["Student Invoices", "zip"],
-              ["Vendor Payments", "excel"],
-              ["Year-to-Date Summary", "pdf"],
-            ].map(([name, fmt]) =>
-              React.createElement(
-                "button",
-                {
-                  key: name,
-                  onClick: () => {
-                    alert("Filtered by category: " + name);
-                  },
-                  style: {
-                    background: c.bgDeep,
-                    border: "1px solid " + c.border,
-                    borderRadius: 8,
-                    cursor: "pointer",
-                    padding: "12px 14px",
-                    color: c.text,
-                    textAlign: "left",
-                  },
-                },
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      display: "flex",
-                      justifyContent: "space-between",
-                      marginBottom: 2,
-                    },
-                  },
-                  React.createElement(
-                    "span",
-                    {
-                      style: {
-                        fontSize: 11,
-                        fontWeight: 600,
-                      },
-                    },
-                    name,
-                  ),
-                  React.createElement(Badge, {
-                    text: fmt.toUpperCase(),
-                    color: "accent",
-                  }),
-                ),
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      color: c.textSec,
-                      fontSize: 9,
-                    },
-                  },
-                  "Click to download",
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    modal &&
-      modal.type === "invoice" &&
-      React.createElement(
-        "div",
-        {
-          style: {
-            position: "fixed",
-            inset: 0,
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,.65)",
-            backdropFilter: "blur(4px)",
-            padding: 20,
-            overflowY: "auto",
-          },
-        },
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 14,
-              padding: 24,
-              width: 560,
-              maxHeight: "90vh",
-              overflowY: "auto",
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 16,
-                paddingBottom: 14,
-                borderBottom: "2px solid " + c.accent,
-              },
-            },
-            React.createElement(
-              "div",
-              null,
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8,
-                    marginBottom: 4,
-                  },
-                },
-                React.createElement(BookOpen, {
-                  size: 20,
-                  color: c.accent,
-                }),
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.text,
-                      fontSize: 18,
-                      fontWeight: 700,
-                    },
-                  },
-                  "LLQA Academy",
-                ),
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 11,
-                  },
-                },
-                "Invoice INV-",
-                String(modal.data.id).padStart(4, "0"),
-              ),
-            ),
-            React.createElement(
-              "button",
-              {
-                onClick: () => setModal(null),
-                style: {
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  color: c.textSec,
-                },
-              },
-              React.createElement(X, {
-                size: 18,
-              }),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 14,
-                marginBottom: 16,
-              },
-            },
-            React.createElement(
-              "div",
-              null,
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 10,
-                    textTransform: "uppercase",
-                    marginBottom: 4,
-                  },
-                },
-                "Bill To",
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.text,
-                    fontSize: 13,
-                    fontWeight: 700,
-                  },
-                },
-                modal.data.parent,
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 11,
-                  },
-                },
-                "Student: ",
-                modal.data.name,
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 11,
-                  },
-                },
-                modal.data.country,
-                " \xB7 ",
-                modal.data.state,
-              ),
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  textAlign: "right",
-                },
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 10,
-                    textTransform: "uppercase",
-                    marginBottom: 4,
-                  },
-                },
-                "Invoice Date",
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.text,
-                    fontSize: 13,
-                    fontWeight: 600,
-                  },
-                },
-                new Date().toLocaleDateString(),
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 10,
-                    marginTop: 4,
-                  },
-                },
-                "Due: Monthly Recurring",
-              ),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgDeep,
-                borderRadius: 8,
-                padding: 14,
-                marginBottom: 14,
-              },
-            },
-            React.createElement(
-              "div",
-              {
-                style: {
-                  display: "flex",
-                  justifyContent: "space-between",
-                  borderBottom: "1px solid " + c.border,
-                  paddingBottom: 8,
-                  marginBottom: 8,
-                },
-              },
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    textTransform: "uppercase",
-                  },
-                },
-                "Description",
-              ),
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 11,
-                    fontWeight: 600,
-                    textTransform: "uppercase",
-                  },
-                },
-                "Amount",
-              ),
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  display: "flex",
-                  justifyContent: "space-between",
-                  marginBottom: 6,
-                },
-              },
-              React.createElement(
-                "div",
-                null,
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      color: c.text,
-                      fontSize: 12,
-                      fontWeight: 600,
-                    },
-                  },
-                  modal.data.course,
-                ),
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      color: c.textSec,
-                      fontSize: 10,
-                    },
-                  },
-                  "Monthly tuition",
-                ),
-              ),
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    color: c.text,
-                    fontSize: 13,
-                    fontWeight: 600,
-                  },
-                },
-                curSym(modal.data.currency),
-                modal.data.fee,
-              ),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background:
-                  "linear-gradient(135deg," +
-                  llqaAlpha(c.accent, "22") + "," +
-                  llqaAlpha(c.purple, "22") + ")",
-                border: "2px solid " + c.accent,
-                borderRadius: 10,
-                padding: 14,
-                marginBottom: 14,
-                textAlign: "center",
-              },
-            },
-            React.createElement(
-              "div",
-              {
-                style: {
-                  color: c.textSec,
-                  fontSize: 10,
-                  textTransform: "uppercase",
-                  marginBottom: 3,
-                },
-              },
-              "Total Amount",
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  color: c.accent,
-                  fontSize: 26,
-                  fontWeight: 800,
-                },
-              },
-              curSym(modal.data.currency),
-              modal.data.fee,
-              ".00",
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  color: c.textSec,
-                  fontSize: 10,
-                  marginTop: 3,
-                },
-              },
-              modal.data.currency,
-              " \xB7 via ",
-              modal.data.gateway,
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: 8,
-                marginBottom: 12,
-              },
-            },
-            React.createElement(
-              "div",
-              {
-                style: {
-                  background: c.bgDeep,
-                  borderRadius: 6,
-                  padding: "6px 10px",
-                },
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 9,
-                    textTransform: "uppercase",
-                  },
-                },
-                "Status",
-              ),
-              React.createElement(Badge, {
-                text: modal.data.status,
-                color: sc3(modal.data.status),
-              }),
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  background: c.bgDeep,
-                  borderRadius: 6,
-                  padding: "6px 10px",
-                },
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 9,
-                    textTransform: "uppercase",
-                  },
-                },
-                "Last Paid",
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.text,
-                    fontSize: 11,
-                  },
-                },
-                modal.data.lastPaid,
-              ),
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  background: c.bgDeep,
-                  borderRadius: 6,
-                  padding: "6px 10px",
-                },
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 9,
-                    textTransform: "uppercase",
-                  },
-                },
-                "Months Paid",
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.success,
-                    fontSize: 11,
-                    fontWeight: 700,
-                  },
-                },
-                modal.data.monthsPaid,
-              ),
-            ),
-            React.createElement(
-              "div",
-              {
-                style: {
-                  background: c.bgDeep,
-                  borderRadius: 6,
-                  padding: "6px 10px",
-                },
-              },
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: c.textSec,
-                    fontSize: 9,
-                    textTransform: "uppercase",
-                  },
-                },
-                "Due",
-              ),
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    color: modal.data.dueAmount > 0 ? c.danger : c.textMuted,
-                    fontSize: 11,
-                    fontWeight: 700,
-                  },
-                },
-                modal.data.dueAmount > 0
-                  ? curSym(modal.data.currency) + modal.data.dueAmount
-                  : "None",
-              ),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                textAlign: "center",
-                color: c.textMuted,
-                fontSize: 9,
-                paddingTop: 10,
-                borderTop: "1px solid " + c.border,
-              },
-            },
-            "Thank you for choosing LLQA Academy \xB7 letslearnquran.net",
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                gap: 8,
-                marginTop: 12,
-              },
-            },
-            React.createElement(
-              Btn,
-              {
-                variant: "outline",
-                onClick: () => setModal(null),
-              },
-              "Close",
-            ),
-            React.createElement(
-              Btn,
-              {
-                icon: AlertTriangle,
-                variant: "outline",
-                onClick: () => {
-                  const studentName = (modal.data && modal.data.name) || "this student"; // v70: was "s" (not defined)
-                  alert(
-                    "\u2713 Reminder sent to " +
-                      studentName +
-                      "\n\nDelivery: Email + SMS\nStatus: Queued for delivery",
-                  );
-                },
-              },
-              "Send Reminder",
-            ),
-            React.createElement(
-              Btn,
-              {
-                icon: Download,
-                onClick: () => {
-                  window.print && window.print();
-                },
-              },
-              "Download PDF",
-            ),
-          ),
-        ),
-      ),
-    modal &&
-      modal.type === "recordPay" &&
-      React.createElement(
-        "div",
-        {
-          style: {
-            position: "fixed",
-            inset: 0,
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,.65)",
-            backdropFilter: "blur(4px)",
-          },
-        },
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 14,
-              padding: 24,
-              width: 440,
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 14,
-              },
-            },
-            React.createElement(
-              "h3",
-              {
-                style: {
-                  color: c.text,
-                  fontSize: 16,
-                  margin: 0,
-                },
-              },
-              "Record Payment",
-            ),
-            React.createElement(
-              "button",
-              {
-                onClick: () => setModal(null),
-                style: {
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  color: c.textSec,
-                },
-              },
-              React.createElement(X, {
-                size: 18,
-              }),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.successBg,
-                borderRadius: 8,
-                padding: "8px 12px",
-                marginBottom: 12,
-                color: c.success,
-                fontSize: 11,
-              },
-            },
-            "Student: ",
-            modal.data.name,
-            " \xB7 Monthly fee ",
-            curSym(modal.data.currency),
-            modal.data.fee,
-          ),
-          React.createElement(Inp, {
-            label: "Amount Received *",
-            value: form.amount || "",
-            onChange: (v) =>
-              setForm({
-                ...form,
-                amount: v,
-              }),
-            type: "number",
-          }),
-          React.createElement(Inp, {
-            label: "Payment Date",
-            value: form.date || "",
-            onChange: (v) =>
-              setForm({
-                ...form,
-                date: v,
-              }),
-            type: "date",
-          }),
-          React.createElement(Inp, {
-            label: "Payment Gateway",
-            value: form.gateway || "",
-            onChange: (v) =>
-              setForm({
-                ...form,
-                gateway: v,
-              }),
-            options: PAY_GATEWAYS,
-          }),
-          React.createElement(Inp, {
-            label: "Transaction ID",
-            value: form.txnId || "",
-            onChange: (v) =>
-              setForm({
-                ...form,
-                txnId: v,
-              }),
-            placeholder: "Optional reference",
-          }),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 8,
-                marginTop: 10,
-              },
-            },
-            React.createElement(
-              Btn,
-              {
-                variant: "outline",
-                onClick: () => setModal(null),
-              },
-              "Cancel",
-            ),
-            React.createElement(
-              Btn,
-              {
-                onClick: savePayment,
-                icon: DollarSign,
-              },
-              "Record Payment",
-            ),
-          ),
-        ),
-      ),
-    modal &&
-      modal.type === "addExpense" &&
-      React.createElement(
-        "div",
-        {
-          style: {
-            position: "fixed",
-            inset: 0,
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,.65)",
-            backdropFilter: "blur(4px)",
-          },
-        },
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 14,
-              padding: 24,
-              width: 480,
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 14,
-              },
-            },
-            React.createElement(
-              "h3",
-              {
-                style: {
-                  color: c.text,
-                  fontSize: 16,
-                  margin: 0,
-                },
-              },
-              form.editingExpId ? "Edit Expense" : "Add Expense",
-            ),
-            React.createElement(
-              "button",
-              {
-                onClick: () => setModal(null),
-                style: {
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  color: c.textSec,
-                },
-              },
-              React.createElement(X, {
-                size: 18,
-              }),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "0 14px",
-              },
-            },
-            React.createElement(Inp, {
-              label: "Date *",
-              value: form.date || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  date: v,
-                }),
-              type: "date",
-            }),
-            React.createElement(Inp, {
-              label: "Category *",
-              value: form.category || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  category: v,
-                }),
-              options: EXPENSE_CATS,
-            }),
-          ),
-          React.createElement(Inp, {
-            label: "Description *",
-            value: form.description || "",
-            onChange: (v) =>
-              setForm({
-                ...form,
-                description: v,
-              }),
-            placeholder: "e.g. March office rent",
-          }),
-          React.createElement(Inp, {
-            label: "Vendor / Paid To",
-            value: form.vendor || "",
-            onChange: (v) =>
-              setForm({
-                ...form,
-                vendor: v,
-              }),
-            placeholder: "Vendor name",
-          }),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "grid",
-                gridTemplateColumns: "2fr 1fr",
-                gap: "0 14px",
-              },
-            },
-            React.createElement(Inp, {
-              label: "Amount *",
-              value: form.amount || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  amount: v,
-                }),
-              type: "number",
-            }),
-            React.createElement(Inp, {
-              label: "Currency",
-              value: form.currency || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  currency: v,
-                }),
-              options: CURRENCIES,
-            }),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "0 14px",
-              },
-            },
-            React.createElement(Inp, {
-              label: "Payment Method",
-              value: form.paymentMethod || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  paymentMethod: v,
-                }),
-              options: [
-                "Bank Transfer",
-                "Cash",
-                "Credit Card",
-                "JazzCash",
-                "EasyPaisa",
-                "Auto-pay",
-              ],
-            }),
-            React.createElement(Inp, {
-              label: "Status",
-              value: form.status || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  status: v,
-                }),
-              options: ["pending", "paid"],
-            }),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 8,
-                marginTop: 10,
-              },
-            },
-            React.createElement(
-              Btn,
-              {
-                variant: "outline",
-                onClick: () => setModal(null),
-              },
-              "Cancel",
-            ),
-            React.createElement(
-              Btn,
-              {
-                onClick: saveExpense,
-                icon: Check,
-              },
-              "Save Expense",
-            ),
-          ),
-        ),
-      ),
+    ["fees", "invoices", "income", "expenses"].includes(tab) ? React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12 } }, llqaSearch(q, setQ, "Search family, vendor, receipt…")) : null,
+    llqaRatesNote([llqaSumPKR(pays, R, llqaPayPick), llqaSumPKR(live, R, (x) => ({ amount: x.cy.amt, currency: x.cy.cur, fallback: "USD" })), llqaSumPKR(llqaApAll(today), R, (l) => ({ amount: l.amount, currency: l.currency, fallback: "PKR" }))], R, "rates"), // v71
+    content,
   );
 };

@@ -1,1625 +1,276 @@
-const AccountsPMod = ({ apLiabilities, setApLiabilities, appSettings }) => {
-  const [tab, setTab] = useState("ledger");
-  const [search, setSearch] = useState("");
-  const [fStatus, setFStatus] = useState("all");
-  const [modal, setModal] = useState(null);
-  const [form, setForm] = useState({});
-  const CATEGORIES = [
-    "Salaries",
-    "Rent",
-    "Utilities",
-    "Software/SaaS",
-    "Marketing",
-    "Equipment",
-    "Internet/Telecom",
-    "Bank/Fees",
-    "Taxes",
-    "Vendor Services",
-    "Other",
-  ];
-  const CURRENCIES = ["PKR", "USD", "CAD", "GBP", "EUR", "AED"];
-  const STATUSES = ["unpaid", "partial", "paid"];
+// v77: Accounts Payable — each bill keeps its payments (part payments too) and its status follows them; a repeating
+// bill brings the next one by itself; teachers' salaries come from Payroll (one line a month, paid as Payroll pays);
+// the office is told before a bill is due and when it is overdue; vendor details kept once; a removed bill is kept
+// with the reason. Totals in PKR at your rates.
+const AccountsPMod = ({ apLiabilities, appSettings }) => {
   const today = todayPK();
-  const liabs = apLiabilities || [];
-  const num = (n) => Number(n || 0);
-  const fmt = (n) =>
-    num(n).toLocaleString(void 0, {
-      maximumFractionDigits: 2,
-    });
-  const isOverdue = (l) =>
-    l.status !== "paid" && l.dueDate && String(l.dueDate) < today;
-  const paidOf = (l) =>
-    l.status === "paid"
-      ? num(l.amount)
-      : l.status === "partial"
-        ? num(l.paidAmount)
-        : 0;
-  const owedOf = (l) => Math.max(0, num(l.amount) - paidOf(l));
-  const daysDiff = (d) => {
-    if (!d) return null;
-    const a = new Date(d + "T00:00:00"),
-      b = new Date(today + "T00:00:00");
-    return Math.round((a - b) / 864e5);
+  const [tab, setTab] = useState("ledger");
+  const [q, setQ] = useState("");
+  const [fStatus, setFStatus] = useState("all");
+  const [showGone, setShowGone] = useState(false);
+  const R = llqaRates(appSettings);
+  const typed = (apLiabilities || []).filter(Boolean);
+  const payroll = llqaApPayroll(today);
+  const allBills = [...typed, ...payroll];
+  const ql = q.trim().toLowerCase();
+  const hit = (...v) => !ql || v.some((x) => String(x == null ? "" : x).toLowerCase().includes(ql));
+  const pk = (l, n) => llqaToPKR(n, l.currency || "PKR", R).pkr;
+  const sumOf = (list, pick) => llqaSumPKR(list, R, (l) => ({ amount: pick(l), currency: l.currency, fallback: "PKR" }));
+  const owedS = sumOf(allBills, llqaApLeft);
+  const paidS = sumOf(allBills, llqaApPaid);
+  const late = allBills.filter((l) => llqaApState(l, today) === "overdue");
+  const days = (d) => (llqaIsDay(d) ? llqaDays(today, d) : null);
+  const can = llqaCanManage();
+  const series = llqaApSeries(typed);
+  const pill = (l) => {
+    const d = LLQA_AP_STATES[llqaApState(l, today)] || ["—", "textSec"];
+    return llqaPill(d[0], c[d[1]] || c.textSec);
   };
-  const oAdd = () => {
-    setForm({
-      vendor: "",
-      category: "Vendor Services",
-      amount: "",
-      currency: "PKR",
-      paidAmount: "",
-      status: "unpaid",
-      dueDate: "",
-      paidDate: "",
-      reference: "",
-      notes: "",
-    });
-    setModal({
-      type: "add",
-    });
-  };
-  const oEdit = (l) => {
-    setForm({
-      ...l,
-    });
-    setModal({
-      type: "edit",
-      data: l,
-    });
-  };
-  const save = () => {
-    if (!form.vendor || !form.vendor.trim()) {
-      alert("Please enter a vendor / payee name.");
-      return;
-    }
-    if (!form.amount || num(form.amount) <= 0) {
-      alert("Please enter a valid amount.");
-      return;
-    }
-    const rec = {
-      ...form,
-      amount: num(form.amount),
-      paidAmount: num(form.paidAmount),
-    };
-    if (modal.type === "edit")
-      setApLiabilities(liabs.map((l) => (l.id === form.id ? rec : l)));
-    else
-      setApLiabilities([
-        ...liabs,
-        {
-          ...rec,
-          id: Date.now(),
-        },
-      ]);
-    setModal(null);
-  };
-  const oDel = (l) =>
-    setModal({
-      type: "del",
-      data: l,
-    });
-  const doDel = () => {
-    setApLiabilities(liabs.filter((l) => l.id !== modal.data.id));
-    setModal(null);
-  };
-  // v71: totals in PKR (a bill in USD at your rate); a currency without a rate is listed, never added
-  const RATES = llqaRates(appSettings);
-  const pk = (l, n) => llqaToPKR(n, l.currency || "PKR", RATES).pkr;
-  const owedSum = llqaSumPKR(liabs, RATES, (l) => ({ amount: owedOf(l), currency: l.currency, fallback: "PKR" }));
-  const paidSum = llqaSumPKR(liabs, RATES, (l) => ({ amount: paidOf(l), currency: l.currency, fallback: "PKR" }));
-  const totalOwed = owedSum.pkr;
-  const totalPaid = paidSum.pkr;
-  const overdueList = liabs.filter(isOverdue);
-  const outstanding = liabs.filter((l) => l.status !== "paid");
-  const matchS = (vals) => {
-    if (!search) return true;
-    const q = search.toLowerCase();
-    return vals.some((v) =>
-      String(v || "")
-        .toLowerCase()
-        .includes(q),
-    );
-  };
-  const stColor = {
-    unpaid: "danger",
-    partial: "warn",
-    paid: "success",
-  };
-  const thS = {
-    padding: "9px 10px",
-    textAlign: "left",
-    color: c.textSec,
-    fontWeight: 600,
-    fontSize: 10,
-    textTransform: "uppercase",
-    borderBottom: "1px solid " + c.border,
-    background: c.bgDeep,
-    whiteSpace: "nowrap",
-  };
-  const tdS = {
-    padding: "8px 10px",
-    color: c.textSec,
-  };
-  const Table = (rows, cols, empty) =>
-    React.createElement(
-      "div",
-      {
-        style: {
-          overflowX: "auto",
-          borderRadius: 10,
-          border: "1px solid " + c.border,
-        },
-      },
-      React.createElement(
-        "table",
-        {
-          style: {
-            width: "100%",
-            borderCollapse: "collapse",
-            fontSize: 11,
-          },
-        },
-        React.createElement(
-          "thead",
-          null,
-          React.createElement(
-            "tr",
-            null,
-            cols.map((col, ci) =>
-              React.createElement(
-                "th",
-                {
-                  key: ci,
-                  style: thS,
-                },
-                col.h,
-              ),
-            ),
-          ),
+  const vendorCell = (l, k) =>
+    llqaTd(
+      [
+        React.createElement("div", { key: "v", style: { fontWeight: 700 } }, l.vendor || "—"),
+        llqaSmall(
+          [l.category, l.payroll ? l.notes : "", l.repeat && LLQA_AP_REPEAT[l.repeat.every] ? "repeats " + LLQA_AP_REPEAT_NAME[l.repeat.every].toLowerCase() : "", l.estimate ? (l.payroll ? "estimate until approved" : "amount to confirm") : "", l.approvedBy ? "approved by " + l.approvedBy : "", l.reference].filter(Boolean).join(" · "),
+          l.estimate ? c.warn : null,
+          "s",
         ),
-        React.createElement(
-          "tbody",
-          null,
-          rows.length === 0
-            ? React.createElement(
-                "tr",
-                null,
-                React.createElement(
-                  "td",
-                  {
-                    colSpan: cols.length,
-                    style: {
-                      padding: 32,
-                      textAlign: "center",
-                      color: c.textMuted,
-                      fontSize: 12,
-                    },
-                  },
-                  empty,
-                ),
-              )
-            : rows.map((r, ri) =>
+      ],
+      k || "v",
+    );
+  const dueCell = (l) => {
+    const d = days(l.dueDate);
+    const st = llqaApState(l, today);
+    return llqaTd([llqaDateLabel(l.dueDate) || "—", d != null && st !== "paid" ? llqaSmall(d < 0 ? -d + " days overdue" : d === 0 ? "due today" : "in " + d + " days", d < 0 ? c.danger : d <= 3 ? c.warn : null, "d") : null], "d", { whiteSpace: "nowrap" });
+  };
+  const acts = (l) =>
+    l.payroll
+      ? llqaMini("Open Payroll", () => (typeof llqaPayOpen === "function" ? llqaPayOpen(l.ym) : llqaGo("payroll")), { key: "pr", title: "Payroll approves and pays salaries" })
+      : React.createElement(
+          "div",
+          { style: { display: "flex", gap: 4, flexWrap: "wrap" } },
+          llqaApLeft(l) > 0 ? llqaMini("💳 Pay", () => llqaOpen("apPay", { billId: l.id }), { key: "p", tone: "success" }) : llqaMini("Payments", () => llqaOpen("apPay", { billId: l.id }), { key: "p" }),
+          llqaMini("✎", () => llqaOpen("apBill", { billId: l.id }), { key: "e", title: "Edit" }),
+          can && !l.approvedBy && llqaApLeft(l) > 0 ? llqaMini("✓ Approve", () => llqaApApprove(l), { key: "a", title: "Approve this bill" }) : null,
+          llqaMini("🗑", () => llqaOpen("remove", { kind: "bill", id: l.id }), { key: "d", tone: "danger", title: "Remove (with the reason)" }),
+        );
+  const paidCell = (l) => {
+    const ps = Array.isArray(l.pays) ? l.pays : [];
+    const last = ps.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).pop();
+    return llqaTd([llqaAmt(llqaApPaid(l), l.currency || "PKR"), ps.length ? llqaSmall(ps.length + " payment" + (ps.length === 1 ? "" : "s") + (last ? " · last " + llqaDateLabel(last.date) + (last.method ? " (" + last.method + ")" : "") : ""), null, "p") : null], "p", { whiteSpace: "nowrap" });
+  };
+  let content = null;
+  let csv = null;
+  if (tab === "ledger") {
+    const gone = (llqaFinDoc().apRemoved || []).slice().reverse();
+    const F = [
+      ["all", "All", () => true],
+      ["unpaid", "Unpaid", (l) => llqaApState(l, today) === "unpaid"],
+      ["partial", "Part paid", (l) => llqaApState(l, today) === "partial"],
+      ["overdue", "Overdue", (l) => llqaApState(l, today) === "overdue"],
+      ["paid", "Paid", (l) => llqaApState(l, today) === "paid"],
+    ];
+    const test = (F.find((x) => x[0] === fStatus) || F[0])[2];
+    const rows = (showGone ? gone : allBills.filter(test)).filter((l) => hit(l.vendor, l.category, l.reference, l.notes)).sort((a, b) => String(b.dueDate || "").localeCompare(String(a.dueDate || "")));
+    csv = [["Vendor", "Category", "Due", "Amount", "Currency", "Paid", "Left", "Status", "Repeats", "Reference"], ...rows.map((l) => [l.vendor, l.category, l.dueDate || "", l.amount, l.currency || "PKR", llqaApPaid(l), llqaApLeft(l), showGone ? "Removed: " + (l.removedWhy || "") : (LLQA_AP_STATES[llqaApState(l, today)] || [""])[0], l.repeat && l.repeat.every ? LLQA_AP_REPEAT_NAME[l.repeat.every] : "", l.reference || ""])];
+    content = [
+      React.createElement("div", { key: "st", style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } }, [
+        llqaStat("Outstanding (owed)", llqaPKR(owedS.pkr), llqaSumSub(owedS) || allBills.filter((l) => llqaApLeft(l) > 0).length + " bills", owedS.pkr > 0 ? c.warn : c.text, "a"),
+        llqaStat("Paid", llqaPKR(paidS.pkr), llqaSumSub(paidS), c.success, "b"),
+        llqaStat("Overdue", late.length, llqaPKR(late.reduce((a, l) => a + pk(l, llqaApLeft(l)), 0)), late.length ? c.danger : c.text, "c"),
+        llqaStat("Repeating", [...series.values()].filter((l) => l.repeat && LLQA_AP_REPEAT[l.repeat.every]).length, "the next one appears " + (parseInt(llqaOpt("billAhead"), 10) || 0) + " days before it is due", null, "d"),
+      ]),
+      React.createElement("div", { key: "ft", style: { display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 10 } }, llqaChips([...F.map(([k, l, t]) => [k, l, allBills.filter(t).length]), ["gone", "Removed", gone.length]], showGone ? "gone" : fStatus, (k) => (k === "gone" ? setShowGone(true) : (setShowGone(false), setFStatus(k))))),
+      llqaCard(
+        rows.length
+          ? llqaTable(
+              ["Vendor / payee", "Due", "Amount", "Paid", "Left", "Status", ""],
+              rows.map((l) =>
                 React.createElement(
                   "tr",
-                  {
-                    key: ri,
-                    style: {
-                      borderBottom: "1px solid " + c.border,
-                      background: ri % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
-                    },
-                  },
-                  cols.map((col, ci) =>
-                    React.createElement(
-                      "td",
-                      {
-                        key: ci,
-                        style: {
-                          ...tdS,
-                          ...(col.tdStyle || {}),
-                        },
-                      },
-                      col.render(r),
-                    ),
-                  ),
+                  { key: l.id + (l.removedAt || "") },
+                  vendorCell(l),
+                  dueCell(l),
+                  llqaTd(llqaAmt(l.amount, l.currency || "PKR"), "a", { whiteSpace: "nowrap", fontWeight: 700 }),
+                  paidCell(l),
+                  llqaTd(llqaAmt(llqaApLeft(l), l.currency || "PKR"), "l", { whiteSpace: "nowrap" }),
+                  llqaTd(showGone ? llqaSmall("Removed by " + (l.removedBy || "?") + " — " + (l.removedWhy || ""), c.danger, "r") : pill(l), "s"),
+                  llqaTd(showGone ? (can ? llqaMini("↺ Put back", () => llqaApRestore(l), { key: "rs", tone: "success" }) : null) : acts(l), "x"),
                 ),
               ),
-        ),
+            )
+          : React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, showGone ? "Nothing removed." : typed.length || payroll.length ? "No bill in this filter." : "No bills yet. Add rent, internet, software… — a repeating bill brings the next one by itself. Teachers' salaries come from Payroll."),
       ),
-    );
-  const money = (n, cur) =>
-    React.createElement(
-      "span",
-      {
-        style: {
-          fontWeight: 600,
-          color: c.text,
-        },
-      },
-      fmt(n),
-      " ",
-      React.createElement(
-        "span",
-        {
-          style: {
-            fontSize: 9,
-            color: c.textMuted,
-          },
-        },
-        cur || "PKR",
+    ];
+  } else if (tab === "due") {
+    const open = allBills.filter((l) => llqaApLeft(l) > 0 && hit(l.vendor, l.category)).sort((a, b) => String(a.dueDate || "9999").localeCompare(String(b.dueDate || "9999")));
+    const week = open.filter((l) => {
+      const d = days(l.dueDate);
+      return d != null && d >= 0 && d <= 7;
+    });
+    const month = open.filter((l) => {
+      const d = days(l.dueDate);
+      return d != null && d >= 0 && d <= 30;
+    });
+    csv = [["Vendor", "Category", "Due", "Left", "Currency", "Days"], ...open.map((l) => [l.vendor, l.category, l.dueDate || "", llqaApLeft(l), l.currency || "PKR", days(l.dueDate)])];
+    content = [
+      React.createElement("div", { key: "st", style: { display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 12 } }, [
+        llqaStat("Overdue", late.length, llqaPKR(late.reduce((a, l) => a + pk(l, llqaApLeft(l)), 0)), late.length ? c.danger : c.success, "a"),
+        llqaStat("Due in 7 days", week.length, llqaPKR(week.reduce((a, l) => a + pk(l, llqaApLeft(l)), 0)), week.length ? c.warn : c.text, "b"),
+        llqaStat("Due in 30 days", month.length, llqaPKR(month.reduce((a, l) => a + pk(l, llqaApLeft(l)), 0)), null, "c"),
+        llqaStat("All still to pay", open.length, llqaPKR(owedS.pkr), null, "d"),
+      ]),
+      llqaCard(
+        open.length
+          ? llqaTable(["Vendor / payee", "Due", "Left", "Status", ""], open.map((l) => React.createElement("tr", { key: l.id }, vendorCell(l), dueCell(l), llqaTd(llqaAmt(llqaApLeft(l), l.currency || "PKR"), "l", { whiteSpace: "nowrap", fontWeight: 700 }), llqaTd(pill(l), "s"), llqaTd(acts(l), "x"))))
+          : React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "Nothing to pay."),
       ),
+    ];
+  } else if (tab === "vendors") {
+    const g = {};
+    allBills.forEach((l) => {
+      const k = String(l.vendor || "—").trim();
+      if (!g[k]) g[k] = { name: k, n: 0, total: 0, paid: 0, left: 0, last: "", cats: new Set(), payroll: !!l.payroll };
+      const x = g[k];
+      x.n++;
+      x.total += pk(l, l.amount);
+      x.paid += pk(l, llqaApPaid(l));
+      x.left += pk(l, llqaApLeft(l));
+      (l.pays || []).forEach((p) => p && String(p.date) > x.last && (x.last = String(p.date)));
+      x.cats.add(l.category || "Other");
+    });
+    const rows = Object.values(g).filter((x) => hit(x.name, [...x.cats].join(" "))).sort((a, b) => b.total - a.total);
+    csv = [["Vendor", "Bills", "Total PKR", "Paid PKR", "Left PKR", "Last paid", "Phone", "Bank", "Account"], ...rows.map((x) => { const vd = llqaApVendor(x.name) || {}; return [x.name, x.n, Math.round(x.total), Math.round(x.paid), Math.round(x.left), x.last, vd.phone || "", vd.bank || "", vd.account || ""]; })];
+    content = llqaCard(
+      rows.length
+        ? llqaTable(
+            ["Vendor / payee", "Bills", "Total", "Paid", "Still to pay", "Details", ""],
+            rows.map((x) => {
+              const vd = llqaApVendor(x.name);
+              return React.createElement(
+                "tr",
+                { key: x.name },
+                llqaTd([React.createElement("div", { key: "n", style: { fontWeight: 700 } }, x.name), llqaSmall([...x.cats].join(", ") + (x.last ? " · last paid " + llqaDateLabel(x.last) : ""), null, "s")], "n"),
+                llqaTd(x.n, "c"),
+                llqaTd(llqaPKR(x.total), "t", { whiteSpace: "nowrap" }),
+                llqaTd(llqaPKR(x.paid), "p", { whiteSpace: "nowrap", color: c.success }),
+                llqaTd(llqaPKR(x.left), "l", { whiteSpace: "nowrap", fontWeight: x.left > 0 ? 700 : 400 }),
+                llqaTd(vd ? llqaSmall([vd.bank, vd.account, vd.phone].filter(Boolean).join(" · ") || "—", null, "d") : llqaSmall("—", null, "d"), "d"),
+                llqaTd(x.payroll ? null : llqaMini("📋 Details", () => llqaOpen("apVendor", { name: x.name }), { key: "v", title: "Phone, bank, account" }), "x"),
+              );
+            }),
+          )
+        : React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "No vendors yet."),
     );
-  const stBadge = (l) =>
-    React.createElement(
-      "span",
-      null,
-      React.createElement(Badge, {
-        text: l.status,
-        color: stColor[l.status],
-      }),
-      isOverdue(l) &&
-        React.createElement(
-          "span",
-          {
-            style: {
-              marginLeft: 5,
-              fontSize: 9,
-              fontWeight: 700,
-              color: c.danger,
-              background: c.dangerBg,
-              padding: "1px 5px",
-              borderRadius: 4,
-              textTransform: "uppercase",
-            },
-          },
-          "overdue",
-        ),
+  } else if (tab === "category") {
+    const ym = today.slice(0, 7);
+    const budgets = llqaOpt("budgets") || {};
+    const g = {};
+    allBills.forEach((l) => {
+      const k = l.category || "Other";
+      if (!g[k]) g[k] = { k, n: 0, total: 0, paid: 0, left: 0, month: 0 };
+      g[k].n++;
+      g[k].total += pk(l, l.amount);
+      g[k].paid += pk(l, llqaApPaid(l));
+      g[k].left += pk(l, llqaApLeft(l));
+      if (String(l.dueDate || "").slice(0, 7) === ym) g[k].month += pk(l, l.amount);
+    });
+    Object.keys(budgets).forEach((k) => g[k] || (g[k] = { k, n: 0, total: 0, paid: 0, left: 0, month: 0 }));
+    const rows = Object.values(g).sort((a, b) => b.total - a.total);
+    csv = [["Category", "Bills", "Total PKR", "Paid PKR", "Left PKR", "This month PKR", "Budget PKR"], ...rows.map((x) => [x.k, x.n, Math.round(x.total), Math.round(x.paid), Math.round(x.left), Math.round(x.month), budgets[x.k] || ""])];
+    content = llqaCard(
+      rows.length
+        ? llqaTable(
+            ["Category", "Bills", "Total", "Paid", "Still to pay", "This month / budget"],
+            rows.map((x) => {
+              const b = Number(budgets[x.k]) || 0;
+              const over = b > 0 && x.month > b;
+              return React.createElement(
+                "tr",
+                { key: x.k },
+                llqaTd(x.k, "k", { fontWeight: 700 }),
+                llqaTd(x.n, "n"),
+                llqaTd(llqaPKR(x.total), "t"),
+                llqaTd(llqaPKR(x.paid), "p", { color: c.success }),
+                llqaTd(llqaPKR(x.left), "l"),
+                llqaTd([llqaPKR(x.month) + (b ? " / " + llqaPKR(b) : ""), b ? llqaSmall(over ? "over the budget by " + llqaPKR(x.month - b) : Math.round((x.month / b) * 100) + "% of the budget", over ? c.danger : c.success, "b") : null], "m"),
+              );
+            }),
+          )
+        : React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "No bills yet."),
     );
-  const tabs = [
+  } else if (tab === "schedule") {
+    const end = llqaAddDays(today, 92);
+    const items = [
+      ...allBills.filter((l) => llqaApLeft(l) > 0 && llqaIsDay(l.dueDate) && l.dueDate <= end).map((l) => ({ l, date: l.dueDate, amount: llqaApLeft(l), late: l.dueDate < today })),
+      ...llqaApUpcoming(typed, end)
+        .filter((x) => !typed.some((b) => String(b.seriesId != null ? b.seriesId : b.id) === x.k && b.dueDate === x.dueDate))
+        .map((x) => ({ l: x.from, date: x.dueDate, amount: Number(x.from.amount) || 0, projected: true })),
+    ].filter((x) => hit(x.l.vendor, x.l.category));
+    const months = {};
+    items.forEach((x) => {
+      const k = x.late ? "late" : x.date.slice(0, 7);
+      if (!months[k]) months[k] = [];
+      months[k].push(x);
+    });
+    const keys = Object.keys(months).sort((a, b) => (a === "late" ? -1 : b === "late" ? 1 : a.localeCompare(b)));
+    csv = [["Month", "Vendor", "Category", "Due", "Amount", "Currency", "Note"], ...items.map((x) => [x.late ? "Overdue" : x.date.slice(0, 7), x.l.vendor, x.l.category, x.date, x.amount, x.l.currency || "PKR", x.projected ? "repeating — not created yet" : ""])];
+    content = keys.length
+      ? keys.map((k) => {
+          const list = months[k].sort((a, b) => a.date.localeCompare(b.date));
+          const tot = list.reduce((a, x) => a + pk(x.l, x.amount), 0);
+          return llqaCard(
+            [
+              llqaH((k === "late" ? "Overdue" : llqaMonthLabel(k)) + " — " + llqaPKR(tot), list.length + " bill" + (list.length === 1 ? "" : "s") + (list.some((x) => x.projected) ? " · repeating bills not created yet are included" : "")),
+              llqaTable(
+                ["Due", "Vendor / payee", "Amount", ""],
+                list.map((x, i) => React.createElement("tr", { key: (x.l.id || "") + x.date + i }, llqaTd(llqaDateLabel(x.date), "d", { whiteSpace: "nowrap" }), vendorCell(x.l), llqaTd(llqaAmt(x.amount, x.l.currency || "PKR"), "a", { whiteSpace: "nowrap", fontWeight: 700 }), llqaTd(x.projected ? llqaPill("🔁 will appear " + llqaDateLabel(llqaAddDays(x.date, -(parseInt(llqaOpt("billAhead"), 10) || 0))), c.textSec) : acts(x.l), "x"))),
+              ),
+            ],
+            { key: k },
+          );
+        })
+      : llqaCard(React.createElement("div", { style: { color: c.textSec, fontSize: 12 } }, "Nothing to pay in the next three months."));
+  }
+  const TABS = [
     ["ledger", "Liabilities Ledger"],
     ["due", "Due & Overdue"],
     ["vendors", "Vendors"],
     ["category", "By Category"],
     ["schedule", "Payment Schedule"],
   ];
-  const exportCSV = () => {
-    const safe = (v) =>
-      '"' +
-      String(v == null ? "" : v)
-        .split('"')
-        .join('""') +
-      '"';
-    let cols, rows, name;
-    if (tab === "vendors") {
-      cols = ["Vendor", "Liabilities", "Total Owed", "Total Paid"];
-      const g = {};
-      liabs.forEach((l) => {
-        const k = l.vendor || "\u2014";
-        if (!g[k])
-          g[k] = {
-            n: 0,
-            owed: 0,
-            paid: 0,
-          };
-        g[k].n++;
-        g[k].owed += owedOf(l);
-        g[k].paid += paidOf(l);
-      });
-      rows = Object.keys(g).map((k) => [k, g[k].n, g[k].owed, g[k].paid]);
-      name = "AP-Vendors";
-    } else if (tab === "category") {
-      cols = ["Category", "Items", "Total", "Owed", "Paid"];
-      const g = {};
-      liabs.forEach((l) => {
-        const k = l.category || "Other";
-        if (!g[k])
-          g[k] = {
-            n: 0,
-            t: 0,
-            owed: 0,
-            paid: 0,
-          };
-        g[k].n++;
-        g[k].t += num(l.amount);
-        g[k].owed += owedOf(l);
-        g[k].paid += paidOf(l);
-      });
-      rows = Object.keys(g).map((k) => [
-        k,
-        g[k].n,
-        g[k].t,
-        g[k].owed,
-        g[k].paid,
-      ]);
-      name = "AP-Categories";
-    } else {
-      cols = [
-        "Vendor",
-        "Category",
-        "Amount",
-        "Currency",
-        "Paid Amount",
-        "Due Date",
-        "Paid Date",
-        "Status",
-        "Reference",
-        "Notes",
-      ];
-      rows = liabs
-        .filter((l) => matchS([l.vendor, l.category, l.reference]))
-        .map((l) => [
-          l.vendor,
-          l.category,
-          num(l.amount),
-          l.currency,
-          paidOf(l),
-          l.dueDate,
-          l.paidDate,
-          isOverdue(l) ? "overdue" : l.status,
-          l.reference,
-          l.notes,
-        ]);
-      name = "AP-Liabilities";
-    }
-    let csv = cols.join(",") + "\n";
-    rows.forEach((r) => {
-      csv += r.map(safe).join(",") + "\n";
-    });
-    const blob = new Blob(["\uFEFF" + csv], {
-      type: "text/csv;charset=utf-8;",
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = name + ".csv";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-  };
-  let content;
-  if (tab === "ledger") {
-    let rows = liabs;
-    if (fStatus !== "all")
-      rows =
-        fStatus === "overdue"
-          ? rows.filter(isOverdue)
-          : rows.filter((l) => l.status === fStatus);
-    rows = rows.filter((l) => matchS([l.vendor, l.category, l.reference]));
-    content = React.createElement(
-      "div",
-      null,
-      React.createElement(
-        "div",
-        {
-          style: {
-            display: "flex",
-            gap: 10,
-            flexWrap: "wrap",
-            marginBottom: 14,
-          },
-        },
-        React.createElement(SC, {
-          icon: Receipt,
-          label: "Total Payables",
-          value: liabs.length,
-          color: c.accent,
-        }),
-        React.createElement(SC, {
-          icon: AlertTriangle,
-          label: "Outstanding (owed)",
-          value: llqaPKR(totalOwed), sub: llqaSumSub(owedSum), // v71
-          color: c.danger,
-        }),
-        React.createElement(SC, {
-          icon: CheckCircle,
-          label: "Total Paid",
-          value: llqaPKR(totalPaid), sub: llqaSumSub(paidSum), // v71
-          color: c.success,
-        }),
-        React.createElement(SC, {
-          icon: Clock,
-          label: "Overdue Items",
-          value: overdueList.length,
-          color: overdueList.length ? c.danger : c.textMuted,
-        }),
-      ),
-      Table(
-        rows,
-        [
-          {
-            h: "Vendor",
-            render: (l) =>
-              React.createElement(
-                "div",
-                null,
-                React.createElement(
-                  "div",
-                  {
-                    style: {
-                      fontWeight: 600,
-                      color: c.text,
-                    },
-                  },
-                  l.vendor || "\u2014",
-                ),
-                l.reference &&
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        fontSize: 10,
-                        color: c.textMuted,
-                        fontFamily: "monospace",
-                      },
-                    },
-                    l.reference,
-                  ),
-              ),
-          },
-          {
-            h: "Category",
-            render: (l) =>
-              React.createElement(Badge, {
-                text: l.category || "Other",
-                color: "purple",
-              }),
-          },
-          {
-            h: "Amount",
-            render: (l) => money(l.amount, l.currency),
-          },
-          {
-            h: "Paid",
-            render: (l) => money(paidOf(l), l.currency),
-          },
-          {
-            h: "Balance",
-            render: (l) =>
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    fontWeight: 600,
-                    color: owedOf(l) > 0 ? c.danger : c.success,
-                  },
-                },
-                fmt(owedOf(l)),
-                " ",
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      fontSize: 9,
-                      color: c.textMuted,
-                    },
-                  },
-                  l.currency,
-                ),
-              ),
-          },
-          {
-            h: "Due Date",
-            render: (l) =>
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    color: isOverdue(l) ? c.danger : c.textSec,
-                  },
-                },
-                l.dueDate || "\u2014",
-              ),
-          },
-          {
-            h: "Status",
-            render: (l) => stBadge(l),
-          },
-          {
-            h: "",
-            tdStyle: {
-              whiteSpace: "nowrap",
-            },
-            render: (l) =>
-              React.createElement(
-                "span",
-                null,
-                React.createElement(
-                  "button",
-                  {
-                    onClick: () => oEdit(l),
-                    title: "Edit",
-                    style: {
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
-                      padding: 3,
-                      color: c.warn,
-                    },
-                  },
-                  React.createElement(Edit2, {
-                    size: 14,
-                  }),
-                ),
-                React.createElement(
-                  "button",
-                  {
-                    onClick: () => oDel(l),
-                    title: "Delete",
-                    style: {
-                      background: "none",
-                      border: "none",
-                      cursor: "pointer",
-                      padding: 3,
-                      color: c.danger,
-                    },
-                  },
-                  React.createElement(Trash2, {
-                    size: 14,
-                  }),
-                ),
-              ),
-          },
-        ],
-        "No payables yet. Click \u201CAdd Liability\u201D to record what the academy owes.",
-      ),
-    );
-  } else if (tab === "due") {
-    const rows = outstanding
-      .filter((l) => matchS([l.vendor, l.category]))
-      .sort((a, b) =>
-        String(a.dueDate || "9999") < String(b.dueDate || "9999") ? -1 : 1,
-      );
-    const dueWeek = outstanding.filter((l) => {
-      const d = daysDiff(l.dueDate);
-      return d !== null && d >= 0 && d <= 7;
-    });
-    content = React.createElement(
-      "div",
-      null,
-      React.createElement(
-        "div",
-        {
-          style: {
-            display: "flex",
-            gap: 10,
-            flexWrap: "wrap",
-            marginBottom: 14,
-          },
-        },
-        React.createElement(SC, {
-          icon: AlertTriangle,
-          label: "Outstanding Items",
-          value: outstanding.length,
-          color: c.warn,
-        }),
-        React.createElement(SC, {
-          icon: DollarSign,
-          label: "Total Owed",
-          value: llqaPKR(totalOwed), sub: llqaSumSub(owedSum), // v71
-          color: c.danger,
-        }),
-        React.createElement(SC, {
-          icon: Clock,
-          label: "Overdue",
-          value: overdueList.length,
-          color: c.danger,
-        }),
-        React.createElement(SC, {
-          icon: Calendar,
-          label: "Due in 7 Days",
-          value: dueWeek.length,
-          color: c.cyan,
-        }),
-      ),
-      Table(
-        rows,
-        [
-          {
-            h: "Vendor",
-            render: (l) =>
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    fontWeight: 600,
-                    color: c.text,
-                  },
-                },
-                l.vendor || "\u2014",
-              ),
-          },
-          {
-            h: "Category",
-            render: (l) =>
-              React.createElement(Badge, {
-                text: l.category || "Other",
-                color: "purple",
-              }),
-          },
-          {
-            h: "Balance Due",
-            render: (l) =>
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    fontWeight: 700,
-                    color: c.danger,
-                  },
-                },
-                fmt(owedOf(l)),
-                " ",
-                React.createElement(
-                  "span",
-                  {
-                    style: {
-                      fontSize: 9,
-                      color: c.textMuted,
-                    },
-                  },
-                  l.currency,
-                ),
-              ),
-          },
-          {
-            h: "Due Date",
-            render: (l) => l.dueDate || "\u2014",
-          },
-          {
-            h: "Timing",
-            render: (l) => {
-              const d = daysDiff(l.dueDate);
-              if (d === null)
-                return React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.textMuted,
-                    },
-                  },
-                  "no date",
-                );
-              if (d < 0)
-                return React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.danger,
-                      fontWeight: 600,
-                    },
-                  },
-                  Math.abs(d) + "d overdue",
-                );
-              if (d === 0)
-                return React.createElement(
-                  "span",
-                  {
-                    style: {
-                      color: c.warn,
-                      fontWeight: 600,
-                    },
-                  },
-                  "due today",
-                );
-              return React.createElement(
-                "span",
-                {
-                  style: {
-                    color: c.textSec,
-                  },
-                },
-                "in " + d + "d",
-              );
-            },
-          },
-          {
-            h: "Status",
-            render: (l) => stBadge(l),
-          },
-        ],
-        "Nothing outstanding \u2014 all payables are settled.",
-      ),
-    );
-  } else if (tab === "vendors") {
-    const g = {};
-    liabs.forEach((l) => {
-      const k = l.vendor || "\u2014";
-      if (!g[k])
-        g[k] = {
-          vendor: k,
-          n: 0,
-          owed: 0,
-          paid: 0,
-        };
-      g[k].n++;
-      g[k].owed += owedOf(l);
-      g[k].paid += paidOf(l);
-    });
-    const rows = Object.values(g)
-      .filter((v) => matchS([v.vendor]))
-      .sort((a, b) => b.owed - a.owed);
-    content = React.createElement(
-      "div",
-      null,
-      React.createElement(
-        "div",
-        {
-          style: {
-            display: "flex",
-            gap: 10,
-            flexWrap: "wrap",
-            marginBottom: 14,
-          },
-        },
-        React.createElement(SC, {
-          icon: Users,
-          label: "Vendors / Payees",
-          value: rows.length,
-          color: c.accent,
-        }),
-        React.createElement(SC, {
-          icon: AlertTriangle,
-          label: "Total Owed",
-          value: llqaPKR(totalOwed), sub: llqaSumSub(owedSum), // v71
-          color: c.danger,
-        }),
-        React.createElement(SC, {
-          icon: CheckCircle,
-          label: "Total Paid",
-          value: llqaPKR(totalPaid), sub: llqaSumSub(paidSum), // v71
-          color: c.success,
-        }),
-      ),
-      Table(
-        rows,
-        [
-          {
-            h: "Vendor / Payee",
-            render: (v) =>
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    fontWeight: 600,
-                    color: c.text,
-                  },
-                },
-                v.vendor,
-              ),
-          },
-          {
-            h: "Liabilities",
-            render: (v) => v.n,
-          },
-          {
-            h: "Owed",
-            render: (v) =>
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    fontWeight: 600,
-                    color: v.owed > 0 ? c.danger : c.success,
-                  },
-                },
-                fmt(v.owed),
-              ),
-          },
-          {
-            h: "Paid",
-            render: (v) =>
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    color: c.success,
-                  },
-                },
-                fmt(v.paid),
-              ),
-          },
-        ],
-        "No vendor data yet.",
-      ),
-    );
-  } else if (tab === "category") {
-    const g = {};
-    liabs.forEach((l) => {
-      const k = l.category || "Other";
-      if (!g[k])
-        g[k] = {
-          cat: k,
-          n: 0,
-          t: 0,
-          owed: 0,
-          paid: 0,
-        };
-      g[k].n++;
-      g[k].t += pk(l, num(l.amount)); // v71: in PKR
-      g[k].owed += pk(l, owedOf(l));
-      g[k].paid += pk(l, paidOf(l));
-    });
-    const grand = Object.values(g).reduce((a, x) => a + x.t, 0);
-    const rows = Object.values(g).sort((a, b) => b.t - a.t);
-    content = React.createElement(
-      "div",
-      null,
-      React.createElement(
-        "div",
-        {
-          style: {
-            display: "flex",
-            gap: 10,
-            flexWrap: "wrap",
-            marginBottom: 14,
-          },
-        },
-        React.createElement(SC, {
-          icon: BarChart3,
-          label: "Categories",
-          value: rows.length,
-          color: c.accent,
-        }),
-        React.createElement(SC, {
-          icon: DollarSign,
-          label: "Total Committed",
-          value: llqaPKR(grand), // v71
-          color: c.cyan,
-        }),
-        React.createElement(SC, {
-          icon: AlertTriangle,
-          label: "Still Owed",
-          value: llqaPKR(totalOwed), sub: llqaSumSub(owedSum), // v71
-          color: c.danger,
-        }),
-      ),
-      Table(
-        rows,
-        [
-          {
-            h: "Category",
-            render: (x) =>
-              React.createElement(Badge, {
-                text: x.cat,
-                color: "purple",
-              }),
-          },
-          {
-            h: "Items",
-            render: (x) => x.n,
-          },
-          {
-            h: "Total",
-            render: (x) => money(x.t, ""),
-          },
-          {
-            h: "Owed",
-            render: (x) =>
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    color: x.owed > 0 ? c.danger : c.textMuted,
-                  },
-                },
-                fmt(x.owed),
-              ),
-          },
-          {
-            h: "Paid",
-            render: (x) =>
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    color: c.success,
-                  },
-                },
-                fmt(x.paid),
-              ),
-          },
-          {
-            h: "Share",
-            render: (x) =>
-              React.createElement(
-                "div",
-                {
-                  style: {
-                    width: 110,
-                    height: 6,
-                    background: c.bgDeep,
-                    borderRadius: 3,
-                    overflow: "hidden",
-                  },
-                },
-                React.createElement("div", {
-                  style: {
-                    width: (grand ? Math.round((x.t / grand) * 100) : 0) + "%",
-                    height: "100%",
-                    background: c.warn,
-                  },
-                }),
-              ),
-          },
-        ],
-        "No categories yet.",
-      ),
-    );
-  } else {
-    const g = {};
-    outstanding.forEach((l) => {
-      const k = String(l.dueDate || "").slice(0, 7) || "No date";
-      if (!g[k])
-        g[k] = {
-          month: k,
-          n: 0,
-          owed: 0,
-        };
-      g[k].n++;
-      g[k].owed += owedOf(l);
-    });
-    const rows = Object.values(g).sort((a, b) => (a.month < b.month ? -1 : 1));
-    const mLabel = (m) => {
-      const d = new Date(m + "-01T00:00:00");
-      return isNaN(d)
-        ? m
-        : d.toLocaleDateString("en-US", {
-            month: "long",
-            year: "numeric",
-          });
-    };
-    content = React.createElement(
-      "div",
-      null,
-      React.createElement(
-        "div",
-        {
-          style: {
-            display: "flex",
-            gap: 10,
-            flexWrap: "wrap",
-            marginBottom: 14,
-          },
-        },
-        React.createElement(SC, {
-          icon: Calendar,
-          label: "Months with Dues",
-          value: rows.length,
-          color: c.accent,
-        }),
-        React.createElement(SC, {
-          icon: DollarSign,
-          label: "Total Scheduled",
-          value: llqaPKR(totalOwed), sub: llqaSumSub(owedSum), // v71
-          color: c.warn,
-        }),
-        React.createElement(SC, {
-          icon: Clock,
-          label: "Overdue Items",
-          value: overdueList.length,
-          color: c.danger,
-        }),
-      ),
-      React.createElement(
-        "div",
-        {
-          style: {
-            display: "flex",
-            alignItems: "center",
-            gap: 8,
-            padding: "10px 14px",
-            background: c.warnBg,
-            border: "1px solid " + llqaAlpha(c.warn, "33"),
-            borderRadius: 8,
-            marginBottom: 14,
-            fontSize: 11,
-            color: c.textSec,
-          },
-        },
-        React.createElement(Calendar, {
-          size: 14,
-          color: c.warn,
-        }),
-        React.createElement(
-          "span",
-          null,
-          "Upcoming payment obligations grouped by the month they're due \u2014 plan cash-flow ahead.",
-        ),
-      ),
-      Table(
-        rows,
-        [
-          {
-            h: "Due Month",
-            render: (x) =>
-              React.createElement(
-                "span",
-                {
-                  style: {
-                    fontWeight: 600,
-                    color: c.text,
-                  },
-                },
-                mLabel(x.month),
-              ),
-          },
-          {
-            h: "Items Due",
-            render: (x) => x.n,
-          },
-          {
-            h: "Amount Owed",
-            render: (x) => money(x.owed, ""),
-          },
-        ],
-        "Nothing scheduled \u2014 no outstanding payables with due dates.",
-      ),
-    );
-  }
   return React.createElement(
     "div",
     null,
     React.createElement(
       "div",
-      {
-        style: {
-          display: "flex",
-          alignItems: "center",
-          gap: 14,
-          marginBottom: 18,
-          flexWrap: "wrap",
-        },
-      },
+      { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", marginBottom: 14 } },
       React.createElement(
         "div",
-        {
-          style: {
-            width: 48,
-            height: 48,
-            borderRadius: 12,
-            background: llqaAlpha(c.warn, "22"),
-            border: "1px solid " + llqaAlpha(c.warn, "55"),
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          },
-        },
-        React.createElement(Receipt, {
-          size: 24,
-          color: c.warn,
-        }),
+        null,
+        React.createElement("h2", { style: { color: c.text, fontSize: 20, fontWeight: 800, margin: 0 } }, "Accounts Payable"),
+        React.createElement("div", { style: { color: c.textSec, fontSize: 12, marginTop: 3 } }, "Bills to pay, repeating bills and teachers' salaries from Payroll — in PKR at your rates."),
       ),
       React.createElement(
         "div",
-        {
-          style: {
-            flex: 1,
-            minWidth: 200,
-          },
-        },
-        React.createElement(
-          "h1",
-          {
-            style: {
-              color: c.text,
-              margin: 0,
-              fontSize: 22,
-              fontWeight: 700,
-            },
-          },
-          "Accounts Payable",
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              color: c.textSec,
-              fontSize: 11,
-              marginTop: 4,
-            },
-          },
-          "Liabilities ledger, vendor dues, aging & payment schedule",
-        ),
-      ),
-      React.createElement(
-        "div",
-        {
-          style: {
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-          },
-        },
-        React.createElement(
-          Btn,
-          {
-            icon: Plus,
-            onClick: oAdd,
-          },
-          "Add Liability",
-        ),
-        React.createElement(
-          Btn,
-          {
-            variant: "outline",
-            icon: Download,
-            onClick: exportCSV,
-          },
-          "Export",
-        ),
+        { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+        llqaMini("＋ Add bill", () => llqaOpen("apBill", {}), { key: "add", big: true, solid: true, tone: "success" }),
+        llqaMini("⬇ Export", () => csv && llqaCsv("Accounts-Payable-" + tab + "-" + today + ".csv", csv), { key: "ex", big: true }),
       ),
     ),
     React.createElement(
       "div",
-      {
-        style: {
-          display: "flex",
-          gap: 2,
-          background: c.bgDeep,
-          borderRadius: 8,
-          padding: 3,
-          marginBottom: 16,
-          flexWrap: "wrap",
-        },
-      },
-      tabs.map(([k, l]) =>
+      { style: { display: "flex", gap: 2, background: c.bgDeep, borderRadius: 8, padding: 3, marginBottom: 14, flexWrap: "wrap" } },
+      TABS.map(([k, l]) =>
         React.createElement(
           "button",
-          {
-            key: k,
-            onClick: () => setTab(k),
-            style: {
-              padding: "8px 14px",
-              borderRadius: 6,
-              border: "none",
-              cursor: "pointer",
-              fontSize: 11,
-              fontWeight: 600,
-              background: tab === k ? c.accentFill : "transparent",
-              color: tab === k ? c.accentText : c.textSec,
-            },
-          },
-          l,
+          { key: k, type: "button", onClick: () => setTab(k), style: { padding: "7px 12px", borderRadius: 6, border: "none", cursor: "pointer", fontSize: 12, fontWeight: 600, background: tab === k ? c.accentFill : "transparent", color: tab === k ? c.accentText : c.textSec } },
+          l + (k === "due" && late.length ? " (" + late.length + " overdue)" : ""),
         ),
       ),
     ),
-    React.createElement(
-      "div",
-      {
-        style: {
-          display: "flex",
-          gap: 8,
-          marginBottom: 14,
-          flexWrap: "wrap",
-        },
-      },
-      React.createElement(
-        "div",
-        {
-          style: {
-            position: "relative",
-            flex: 1,
-            minWidth: 200,
-          },
-        },
-        React.createElement(Search, {
-          size: 14,
-          style: {
-            position: "absolute",
-            left: 10,
-            top: 9,
-            color: c.textMuted,
-          },
-        }),
-        React.createElement("input", {
-          value: search,
-          onChange: (e) => setSearch(e.target.value),
-          placeholder: "Search vendor, category, reference...",
-          style: {
-            width: "100%",
-            padding: "8px 12px 8px 30px",
-            background: c.bgInput,
-            border: "1px solid " + c.border,
-            borderRadius: 7,
-            color: c.text,
-            fontSize: 12,
-            outline: "none",
-            boxSizing: "border-box",
-          },
-        }),
-      ),
-      tab === "ledger" &&
-        React.createElement(
-          NativeSelectWrapper,
-          {
-            value: fStatus,
-            onChange: (e) => setFStatus(e.target.value),
-            style: {
-              padding: "8px 10px",
-              background: c.bgInput,
-              border: "1px solid " + c.border,
-              borderRadius: 7,
-              color: c.text,
-              fontSize: 11,
-            },
-          },
-          React.createElement(
-            "option",
-            {
-              value: "all",
-            },
-            "All Statuses",
-          ),
-          React.createElement(
-            "option",
-            {
-              value: "unpaid",
-            },
-            "Unpaid",
-          ),
-          React.createElement(
-            "option",
-            {
-              value: "partial",
-            },
-            "Partial",
-          ),
-          React.createElement(
-            "option",
-            {
-              value: "paid",
-            },
-            "Paid",
-          ),
-          React.createElement(
-            "option",
-            {
-              value: "overdue",
-            },
-            "Overdue",
-          ),
-        ),
-    ),
-    llqaRatesNote([owedSum, paidSum], RATES), // v71
+    React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 12 } }, llqaSearch(q, setQ, "Search vendor, category, reference…")),
+    llqaRatesNote([owedS, paidS], R, "rates"), // v71
     content,
-    modal &&
-      (modal.type === "add" || modal.type === "edit") &&
-      React.createElement(
-        "div",
-        {
-          style: {
-            position: "fixed",
-            inset: 0,
-            zIndex: 1e3,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,.65)",
-            backdropFilter: "blur(4px)",
-            padding: 20,
-            overflowY: "auto",
-          },
-        },
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 14,
-              padding: 24,
-              width: 540,
-              maxHeight: "90vh",
-              overflowY: "auto",
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 16,
-              },
-            },
-            React.createElement(
-              "div",
-              {
-                style: {
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10,
-                },
-              },
-              React.createElement(Receipt, {
-                size: 18,
-                color: c.warn,
-              }),
-              React.createElement(
-                "h3",
-                {
-                  style: {
-                    color: c.text,
-                    fontSize: 16,
-                    margin: 0,
-                  },
-                },
-                modal.type === "edit" ? "Edit Liability" : "Add Liability",
-              ),
-            ),
-            React.createElement(
-              "button",
-              {
-                onClick: () => setModal(null),
-                style: {
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  color: c.textSec,
-                },
-              },
-              React.createElement(X, {
-                size: 18,
-              }),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "grid",
-                gridTemplateColumns: "1fr 1fr",
-                gap: "0 14px",
-              },
-            },
-            React.createElement(Inp, {
-              label: "Vendor / Payee *",
-              value: form.vendor || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  vendor: v,
-                }),
-              placeholder: "e.g. PTCL, AWS, Landlord",
-            }),
-            React.createElement(Inp, {
-              label: "Category",
-              value: form.category || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  category: v,
-                }),
-              options: CATEGORIES,
-            }),
-            React.createElement(Inp, {
-              label: "Amount *",
-              value: form.amount || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  amount: v,
-                }),
-              type: "number",
-              placeholder: "0.00",
-            }),
-            React.createElement(Inp, {
-              label: "Currency",
-              value: form.currency || "PKR",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  currency: v,
-                }),
-              options: CURRENCIES,
-            }),
-            React.createElement(Inp, {
-              label: "Paid Amount (if partial)",
-              value: form.paidAmount || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  paidAmount: v,
-                }),
-              type: "number",
-              placeholder: "0.00",
-            }),
-            React.createElement(Inp, {
-              label: "Status",
-              value: form.status || "unpaid",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  status: v,
-                }),
-              options: STATUSES,
-            }),
-            React.createElement(Inp, {
-              label: "Due Date",
-              value: form.dueDate || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  dueDate: v,
-                }),
-              type: "date",
-            }),
-            React.createElement(Inp, {
-              label: "Paid Date",
-              value: form.paidDate || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  paidDate: v,
-                }),
-              type: "date",
-            }),
-            React.createElement(Inp, {
-              label: "Reference / Invoice #",
-              value: form.reference || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  reference: v,
-                }),
-            }),
-          ),
-          React.createElement(Inp, {
-            label: "Notes",
-            value: form.notes || "",
-            onChange: (v) =>
-              setForm({
-                ...form,
-                notes: v,
-              }),
-            placeholder: "Optional notes",
-          }),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 8,
-                marginTop: 14,
-              },
-            },
-            React.createElement(
-              Btn,
-              {
-                variant: "outline",
-                onClick: () => setModal(null),
-              },
-              "Cancel",
-            ),
-            React.createElement(
-              Btn,
-              {
-                icon: Check,
-                onClick: save,
-              },
-              modal.type === "edit" ? "Save Changes" : "Add Liability",
-            ),
-          ),
-        ),
-      ),
-    modal &&
-      modal.type === "del" &&
-      React.createElement(
-        "div",
-        {
-          style: {
-            position: "fixed",
-            inset: 0,
-            zIndex: 1e3,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,.65)",
-            backdropFilter: "blur(4px)",
-          },
-        },
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 14,
-              padding: 24,
-              width: 400,
-              textAlign: "center",
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                width: 48,
-                height: 48,
-                borderRadius: 12,
-                background: c.dangerBg,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                margin: "0 auto 12px",
-              },
-            },
-            React.createElement(Trash2, {
-              size: 22,
-              color: c.danger,
-            }),
-          ),
-          React.createElement(
-            "h3",
-            {
-              style: {
-                color: c.text,
-                fontSize: 16,
-                margin: "0 0 6px",
-              },
-            },
-            "Delete this liability?",
-          ),
-          React.createElement(
-            "p",
-            {
-              style: {
-                color: c.textSec,
-                fontSize: 12,
-                margin: "0 0 16px",
-                lineHeight: 1.5,
-              },
-            },
-            "Remove the ",
-            fmt(modal.data.amount),
-            " ",
-            modal.data.currency || "PKR",
-            " payable to ",
-            React.createElement(
-              "strong",
-              {
-                style: {
-                  color: c.text,
-                },
-              },
-              modal.data.vendor,
-            ),
-            "? This cannot be undone.",
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "center",
-                gap: 10,
-              },
-            },
-            React.createElement(
-              Btn,
-              {
-                variant: "outline",
-                onClick: () => setModal(null),
-              },
-              "Cancel",
-            ),
-            React.createElement(
-              Btn,
-              {
-                variant: "danger",
-                icon: Trash2,
-                onClick: doDel,
-              },
-              "Delete",
-            ),
-          ),
-        ),
-      ),
   );
 };

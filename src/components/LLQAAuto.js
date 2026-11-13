@@ -1884,6 +1884,18 @@ const llqaClockTick = (state) => {
       }
     }
   } catch (e) {}
+  // v77: bills — the office hears once a day of bills due soon and overdue
+  try {
+    const u = LLQAApp.ctx.user;
+    if (u && !LLQA_RUNNER && llqaCanOpen("ap") && llqaCanManage() && llqaReadyFor(["apLiabilities"])) {
+      const day = todayPK();
+      if (state.billDay !== day) {
+        state.billDay = day;
+        const x = llqaApDue(day);
+        if (x.soon.length || x.late.length) llqaToast(llqaApToast(x));
+      }
+    }
+  } catch (e) {}
   if (!runnerUp) {
     if (llqaCanOpen("students")) job(llqaLeaveStartRun);
     if (llqaCanOpen("students")) job(llqaLeaveEndRun); // v73.1
@@ -1892,6 +1904,7 @@ const llqaClockTick = (state) => {
     if (llqaCanOpen("attendance")) job(llqaAbsentRun); // v76: closing time with no sign-in → absent (unpaid), or the leave covering the day
     if (llqaCanOpen("timetable")) job(llqaCoverRunAuto);
     if (sales) job(llqaFeeRunAuto);
+    if (llqaCanOpen("ap")) job(llqaApRepeatRun); // v77: the next repeating bill
   } else
     try {
       llqaRunnerNews();
@@ -3421,7 +3434,7 @@ const llqaLogIndex = llqaMemo((log) => {
 const llqaPayIndex = llqaMemo((pays) => {
   const m = new Map();
   pays.forEach((p) => {
-    if (!p || p.studentId == null) return;
+    if (!p || p.studentId == null || p.type === "other") return; // v77: other income never pays a fee
     const k = String(p.studentId);
     if (!m.has(k)) m.set(k, []);
     m.get(k).push(p);
@@ -3782,9 +3795,11 @@ const llqaFeeStart = (s) => {
 // One paying student's fee, month by month (newest first, up to 12 months):
 // each month is due on the bill day; unpaid 5 days after = overdue; earlier
 // unpaid months stay owed.
-const llqaFeeCycle = (s, pays, today) => {
+// v77: opt.until — a family who left: only the bills that fell due by then (their fees while with the academy)
+const llqaFeeCycle = (s, pays, today, opt) => {
+  const until = opt && opt.until ? String(opt.until).slice(0, 10) : "";
   const amt = Number(s && s.fee_amount) || 0;
-  if (!s || amt <= 0 || llqaInTrial(s) || s.status === "quit" || s.fee === "n/a") return null;
+  if (!s || amt <= 0 || llqaInTrial(s) || (s.status === "quit" && !until) || s.fee === "n/a") return null;
   const t = today || llqaToday();
   const start = llqaFeeStart(s) || t;
   const startM = start.slice(0, 7);
@@ -3798,6 +3813,7 @@ const llqaFeeCycle = (s, pays, today) => {
   // the newest bill that is out (a bill is out a week before its due date)
   let curM = t.slice(0, 7);
   if (llqaAddDays(dueOf(curM), -7) > t) curM = llqaMonthAdd(curM, -1);
+  if (until) while (curM >= startM && dueOf(curM) > until) curM = llqaMonthAdd(curM, -1); // v77
   if (curM < startM)
     return { amt, cur, day, start, status: "upcoming", months: [], owed: [], current: null, due: dueOf(startM), left: 0 };
   // the bills so far (the newest 12), oldest first
@@ -3817,7 +3833,10 @@ const llqaFeeCycle = (s, pays, today) => {
   const offs = typeof llqaRewardOff === "function" ? llqaRewardOff(s.id) : null;
   const offOf = (ym) => (offs && offs.get(ym)) || 0;
   const feeOf = (b) => Math.max(0, Math.round(((b.fee || amt) - offOf(b.ym)) * 100) / 100);
-  const isFull = (b) => b.other || b.paid >= feeOf(b) - 0.005;
+  // v77: fees written off settle what is still unpaid on a month (a payment after all shrinks the write-off)
+  const woMap = llqaWoOf(s);
+  const woOf = (b) => Math.max(0, Math.min(woMap.get(b.ym) || 0, feeOf(b) - b.paid));
+  const isFull = (b) => b.other || b.paid + woOf(b) >= feeOf(b) - 0.005;
   const put = (b, p, v) => {
     if (!b.fee && Number(p.feeAmount) > 0) b.fee = Number(p.feeAmount);
     b.paid += v;
@@ -3865,9 +3884,10 @@ const llqaFeeCycle = (s, pays, today) => {
     const fee = feeOf(b);
     const over = llqaAddDays(b.due, LLQA_FEE_GRACE);
     const paid = Math.round(b.paid * 100) / 100;
-    const full = b.other || paid >= fee - 0.005;
+    const wo = Math.round(woOf(b) * 100) / 100; // v77
+    const full = b.other || paid + wo >= fee - 0.005;
     const state = full ? "paid" : t >= over ? "overdue" : paid > 0 ? "partial" : t < b.due ? "upcoming" : "due";
-    return { ym: b.ym, due: b.due, over, paid, fee, off: offOf(b.ym), left: full ? 0 : Math.round((fee - paid) * 100) / 100, state, pays: b.pays };
+    return { ym: b.ym, due: b.due, over, paid, fee, off: offOf(b.ym), wo, left: full ? 0 : Math.round((fee - paid - wo) * 100) / 100, state, pays: b.pays };
   });
   const current = months[0];
   const owed = months.filter((m) => m.state === "overdue");
@@ -3945,6 +3965,7 @@ const llqaRecordPayment = (s, f) => {
     notes: f.notes || "",
     source: "fee-cycle",
     feeAmount: Number(s.fee_amount) || 0, // the monthly fee when this was paid
+    ...llqaPayStamp(f.currency || s.currency || "USD", f.paidDate || todayPK(), f.pkrReceived), // v77: receipt, who, when, rate
   };
   ctx.setArPayments((prev) => [...(prev || []), rec]);
   // Fee Status follows straight away (the automatic check would do it later)
@@ -4101,7 +4122,11 @@ const llqaAutopilotRaw = (opt) => {
     // v67: step-by-step reminders — each stage once, by days since the oldest unpaid bill fell due
     const cy = llqaFeeCycle(s, ctx.arPayments, today);
     const fs = cy && cy.current ? llqaFeeStage(s, cy, today) : null;
-    if (fs && !s.feeHold) {
+    // v77: an admin stopped the reminders, or the family gave a date (they wait; on the day, one reminder)
+    const chase = cy ? llqaChaseNow(s, today) : null;
+    if (chase && chase.promiseDue && !s.feeHold && cy.months.some((m) => m.left > 0 && m.due <= today))
+      add(s, "feePromise", chase.key, "Promised to pay by " + llqaDateLabel(chase.promise.date) + ": " + llqaOwedText(cy), { fee: llqaOwedText(cy), promise: llqaDateLabel(chase.promise.date) }, 1);
+    if (fs && !s.feeHold && !(chase && chase.hold)) {
       add(s, fs.tpl, fs.key,
         fs.name + " (" + (fs.days ? fs.days + " day" + (fs.days === 1 ? "" : "s") + " since " : "due ") + llqaDateLabel(fs.oldest.due) + "): " + fs.owed + " " + cy.cur,
         { fee: llqaFeeText(fs, cy), deadline: llqaDateLabel(llqaAddDays(today, 3)), stage: fs.n }, fs.n >= 2 ? 1 : 2);
@@ -4662,40 +4687,83 @@ const llqaAutoSwitch = (key, title, onText, offText) => {
 const llqaWho = (s) => [s.parent, s.name && s.name !== s.parent ? s.name : ""].filter(Boolean).join(" · ");
 
 /* ---------- record a fee payment ---------- */
+// v77: one window to record a fee payment — from Sales, Accounts Receivable, the Finance page, a family's recovery —
+// for a family with the academy or one who left owing. The month is the oldest one still owed; a receipt number is
+// given; the same payment twice is caught; a foreign payment keeps the rate of its day (or the PKR that reached you).
 const LLQAPaymentModal = ({ studentId, month, onClose }) => {
   const ctx = LLQAApp.ctx;
-  const s = llqaFindStudent(studentId) || {};
-  const cy = llqaFeeCycle(s, ctx.arPayments);
-  const first = month || llqaFeeNextMonth(cy);
-  const info = cy ? cy.months.find((m) => m.ym === first) : null;
-  const amt = cy ? cy.amt : Number(s.fee_amount) || 0;
-  const [f, setF] = useState({
-    amount: String(info ? info.left || amt : amt || ""),
-    currency: s.currency || "USD",
-    month: first,
-    paidDate: todayPK(),
-    gateway: "Bank Transfer",
-    receipt: "",
-    notes: "",
-    tell: true,
-  });
+  const [sid, setSid] = useState(studentId != null && studentId !== "" ? String(studentId) : "");
+  const s = (sid && llqaFindStudent(sid)) || null;
+  const gone = !!s && s.status === "quit";
+  const cy = !s ? null : gone ? llqaFeeGone(s) : llqaFeeCycle(s, ctx.arPayments);
+  const months = cy ? cy.months.slice().reverse() : [];
+  const firstOf = () => {
+    if (month) return month;
+    if (!cy) return todayPK().slice(0, 7);
+    const open = months.filter((m) => m.left > 0);
+    if (open.length) return open[0].ym;
+    const wo = months.filter((m) => m.wo > 0);
+    if (wo.length) return wo[0].ym; // written off, paid after all
+    return gone && months.length ? months[months.length - 1].ym : llqaFeeNextMonth(cy);
+  };
+  const blank = (m0) => {
+    const info = cy ? cy.months.find((m) => m.ym === m0) : null;
+    const amt = cy ? cy.amt : Number(s && s.fee_amount) || 0;
+    return { amount: String(info ? info.left || info.wo || amt : amt || ""), currency: (cy && cy.cur) || (s && s.currency) || "USD", month: m0, paidDate: todayPK(), gateway: "Bank Transfer", receipt: "", pkrReceived: "", notes: "", tell: true };
+  };
+  const [f, setF] = useState(() => blank(firstOf()));
+  const [dupeOk, setDupeOk] = useState(false);
+  const pickFamily = (v) => {
+    setSid(v);
+    const x = v ? llqaFindStudent(v) : null;
+    const c2 = !x ? null : x.status === "quit" ? llqaFeeGone(x) : llqaFeeCycle(x, ctx.arPayments);
+    const ms = c2 ? c2.months.slice().reverse() : [];
+    const open = ms.filter((m) => m.left > 0);
+    const m0 = open.length ? open[0].ym : c2 ? llqaFeeNextMonth(c2) : todayPK().slice(0, 7);
+    const info = c2 ? c2.months.find((m) => m.ym === m0) : null;
+    const amt = c2 ? c2.amt : Number(x && x.fee_amount) || 0;
+    setF({ ...f, amount: String(info ? info.left || amt : amt || ""), currency: (c2 && c2.cur) || (x && x.currency) || "USD", month: m0 });
+    setDupeOk(false);
+  };
   const opts = [];
   const seen = new Set();
   const addM = (ym) => {
     if (!ym || seen.has(ym)) return;
     seen.add(ym);
     const m = cy ? cy.months.find((x) => x.ym === ym) : null;
-    opts.push({ value: ym, label: llqaMonthLabel(ym) + (m ? (m.left > 0 ? " — " + m.left + " " + (cy.cur || "") + " left" : " — paid") : "") });
+    opts.push({ value: ym, label: llqaMonthLabel(ym) + (m ? (m.left > 0 ? " — " + m.left + " " + (cy.cur || "") + " left" : m.wo > 0 ? " — written off" : " — paid") : "") });
   };
-  (cy ? cy.months.slice().reverse() : []).forEach((m) => addM(m.ym));
-  addM(first);
-  const base = cy && cy.current ? cy.current.ym : todayPK().slice(0, 7);
-  addM(llqaMonthAdd(base, 1));
-  addM(llqaMonthAdd(base, 2));
-  const digits = llqaPhone(s.phone, s.country);
+  months.forEach((m) => addM(m.ym));
+  addM(f.month);
+  if (!gone) {
+    const base = cy && cy.current ? cy.current.ym : todayPK().slice(0, 7);
+    addM(llqaMonthAdd(base, 1));
+    addM(llqaMonthAdd(base, 2));
+  }
+  // families with the academy, then families who left owing
+  const fams = studentId != null && studentId !== ""
+    ? []
+    : [
+        ...(ctx.students || []).filter((x) => x && x.status !== "quit").sort((a, b) => String(a.name).localeCompare(String(b.name))).map((x) => ({ value: String(x.id), label: x.name + (x.parent ? " — " + x.parent : "") + (x.code ? " (" + x.code + ")" : "") })),
+        ...(ctx.students || []).filter((x) => x && x.status === "quit" && llqaFeeLeft(x)).sort((a, b) => String(a.name).localeCompare(String(b.name))).map((x) => ({ value: String(x.id), label: x.name + (x.parent ? " — " + x.parent : "") + " (left, owes " + llqaOwedText(llqaFeeLeft(x)) + ")" })),
+      ];
+  const digits = s ? llqaPhone(s.phone, s.country) : "";
+  const foreign = llqaCurOf(f.currency) !== "PKR";
+  // v71: the hint shows what the amount is at your rate
+  const rx = llqaToPKR(Number(f.amount) || 0, f.currency, llqaRates(ctx.appSettings));
+  const rateHint = rx.how === "rate" ? "at your rate: " + llqaPKR(rx.pkr) : "no " + llqaCurOf(f.currency) + " rate set";
+  const dupe = s && Number(f.amount) > 0 ? llqaPayDupe(f, s.id) : null;
   const save = () => {
+    if (!s) {
+      alert("Choose the family.");
+      return;
+    }
     if (!(Number(f.amount) > 0)) {
       alert("Enter the amount received.");
+      return;
+    }
+    if (dupe && !dupeOk) {
+      setDupeOk(true);
       return;
     }
     const rec = llqaRecordPayment(s, f);
@@ -4704,38 +4772,58 @@ const LLQAPaymentModal = ({ studentId, month, onClose }) => {
       return;
     }
     onClose();
-    if (f.tell && digits)
-      llqaOpen("message", { studentId: s.id, template: "feeReceipt", extra: { amount: rec.amount + " " + rec.currency, month: llqaMonthLabel(rec.month) } });
-    else llqaToast({ kind: "info", ttl: 6000, text: "✓ Payment recorded: " + rec.amount + " " + rec.currency + " for " + llqaMonthLabel(rec.month) + " (" + s.name + ")." });
+    const amountTxt = rec.amount + " " + rec.currency + (rec.receiptNo ? " (receipt " + rec.receiptNo + ")" : "");
+    if (f.tell && digits) llqaOpen("message", { studentId: s.id, template: "feeReceipt", extra: { amount: amountTxt, month: llqaMonthLabel(rec.month) } });
+    else
+      llqaToast({
+        kind: "info",
+        ttl: 9000,
+        text: "✓ Payment recorded: " + rec.amount + " " + rec.currency + " for " + llqaMonthLabel(rec.month) + " (" + s.name + ")" + (rec.receiptNo ? " — receipt " + rec.receiptNo : "") + ".",
+        actions: digits ? [{ label: "Send receipt", run: () => llqaOpen("message", { studentId: s.id, template: "feeReceipt", extra: { amount: amountTxt, month: llqaMonthLabel(rec.month) } }) }] : [],
+      });
   };
+  const head = !s
+    ? "Choose the family, then the amount and the month it pays."
+    : (s.parent ? s.parent + " · " : "") +
+      (gone ? "Left " + llqaDateLabel(String(s.qDate).slice(0, 10)) + " · " : "") +
+      (cy ? "Fee " + cy.amt + " " + cy.cur + " a month, due on day " + cy.day + (cy.left ? " · " + cy.left + " " + cy.cur + " owed now" : " · nothing owed") : "No monthly fee set for this student");
   return llqaShell(
-    "💰 Record payment — " + (s.name || ""),
-    (s.parent ? s.parent + " · " : "") + (cy ? "Fee " + cy.amt + " " + cy.cur + " a month, due on day " + cy.day + (cy.left ? " · " + cy.left + " " + cy.cur + " owed now" : " · nothing owed") : "No monthly fee set for this student"),
+    "💰 Record payment" + (s ? " — " + s.name : ""),
+    head,
     React.createElement(
       "div",
       null,
+      fams.length ? React.createElement(Inp, { label: "Family", value: sid, onChange: pickFamily, options: fams }) : null,
       React.createElement(
         "div",
         { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0 10px" } },
-        React.createElement(Inp, { label: "Amount received", type: "number", value: f.amount, onChange: (v) => setF({ ...f, amount: v }) }),
-        React.createElement(Inp, { label: "Currency", value: f.currency, onChange: (v) => setF({ ...f, currency: v }), options: ["USD", "CAD", "GBP", "EUR", "AED", "PKR"] }),
+        React.createElement(Inp, { label: "Amount received", type: "number", value: f.amount, onChange: (v) => (setF({ ...f, amount: v }), setDupeOk(false)) }),
+        React.createElement(Inp, { label: "Currency", value: f.currency, onChange: (v) => setF({ ...f, currency: v }), options: ["USD", "CAD", "GBP", "EUR", "AED", "AUD", "SAR", "PKR"] }),
         React.createElement(Inp, { label: "For month", value: f.month, onChange: (v) => setF({ ...f, month: v }), options: opts }),
-        React.createElement(Inp, { label: "Date received", type: "date", value: f.paidDate, onChange: (v) => setF({ ...f, paidDate: v }) }),
+        React.createElement(Inp, { label: "Date received", type: "date", value: f.paidDate, onChange: (v) => (setF({ ...f, paidDate: v }), setDupeOk(false)) }),
         React.createElement(Inp, { label: "Paid by", value: f.gateway, onChange: (v) => setF({ ...f, gateway: v }), options: LLQA_GATEWAYS }),
-        React.createElement(Inp, { label: "Receipt / reference (optional)", value: f.receipt, onChange: (v) => setF({ ...f, receipt: v }) }),
+        React.createElement(Inp, { label: "Bank / gateway reference (optional)", value: f.receipt, onChange: (v) => (setF({ ...f, receipt: v }), setDupeOk(false)) }),
+        foreign ? React.createElement(Inp, { label: "PKR received (optional)", type: "number", value: f.pkrReceived, onChange: (v) => setF({ ...f, pkrReceived: v }), placeholder: rateHint }) : null,
       ),
       React.createElement(Inp, { label: "Note (optional)", value: f.notes, onChange: (v) => setF({ ...f, notes: v }) }),
+      dupe
+        ? React.createElement(
+            "div",
+            { style: { background: c.warnBg, border: "1px solid " + llqaAlpha(c.warn, "55"), borderRadius: 8, padding: "8px 10px", color: c.warn, fontSize: 12, marginBottom: 10 } },
+            llqaLabel("⚠ Already saved? " + llqaAmt(dupe.amount, dupe.currency) + " from " + (dupe.studentName || dupe.payer || "this family") + " on " + llqaDateLabel(dupe.paidDate) + (dupe.receiptNo ? " (" + dupe.receiptNo + ")" : "") + (dupe.receipt ? ", reference " + dupe.receipt : "") + ". " + (dupeOk ? "Press Save again to save it as another payment." : "Check before saving.")),
+          )
+        : null,
       React.createElement(
         "label",
         { style: { display: "flex", gap: 8, alignItems: "center", color: digits ? c.text : c.textMuted, fontSize: 12, cursor: "pointer" } },
         React.createElement("input", { type: "checkbox", checked: f.tell && !!digits, disabled: !digits, onChange: (e) => setF({ ...f, tell: e.target.checked }) }),
-        digits ? "Then send a thank-you / receipt on WhatsApp" : "No usable WhatsApp number for this family",
+        !s ? "Then send a thank-you / receipt on WhatsApp" : digits ? "Then send a thank-you / receipt on WhatsApp" : "No usable WhatsApp number for this family",
       ),
-      React.createElement("div", { style: { color: c.textMuted, fontSize: 10, marginTop: 8 } }, "Saved in Accounts Receivable too. The Fee Status follows the fee cycle by itself."),
+      React.createElement("div", { style: { color: c.textMuted, fontSize: 10, marginTop: 8 } }, "Saved in Accounts Receivable with a receipt number; the Fee Status, the Parent Portal and the Finance page follow by themselves."),
     ),
     [
       llqaMini("Cancel", onClose, { key: "x", big: true }),
-      llqaMini("✓ Save payment", save, { key: "ok", big: true, solid: true, tone: "success" }),
+      llqaMini(dupe && dupeOk ? "✓ Save anyway" : "✓ Save payment", save, { key: "ok", big: true, solid: true, tone: "success" }),
     ],
     { onClose, width: 640 },
   );
@@ -5394,7 +5482,7 @@ const LLQAFeeCycleTab = (props) => {
   // v67: Remind sends what is due now — not a stage already sent, not a family on fee hold
   const sentKeys = llqaLogIndex(ctx.messageLog).keys;
   const remind = shown.filter((x) => {
-    if (!(x.cy.status === "overdue" || x.cy.status === "due" || x.cy.status === "partial") || !llqaPhone(x.s.phone, x.s.country) || x.s.feeHold) return false;
+    if (!(x.cy.status === "overdue" || x.cy.status === "due" || x.cy.status === "partial") || !llqaPhone(x.s.phone, x.s.country) || x.s.feeHold || llqaChaseHeld(x.s, today)) return false; // v77: stopped, or a pay-by date
     const fs = typeof llqaFeeStage === "function" ? llqaFeeStage(x.s, x.cy, today) : null;
     return !fs || !sentKeys.has(fs.key);
   });
@@ -6763,7 +6851,7 @@ const llqaRevenue = (n) => {
       });
     });
     pays.forEach((p) => {
-      if (!p || p.type === "reward") return;
+      if (!p || p.type === "reward" || p.type === "other") return; // v77: other income isn't a fee
       const row = M.get(String(p.paidDate || "").slice(0, 7));
       if (row) addTo(row.collected, p.currency || "USD", Number(p.amount) || 0);
     });
@@ -6990,7 +7078,13 @@ const llqaLinkReferrer = (ref, stuId) => {
 const llqaPilotMore = (ctx, today, add, last) => {
   (ctx.students || []).forEach((s) => {
     if (!s) return;
-    const wb = llqaWinbackDue(s, today);
+    // v77: a family who left owing fees — reminded until they pay (win-back waits until then)
+    const lf = s.status === "quit" ? llqaFeeLeft(s, today) : null;
+    const lfd = lf ? llqaLeftDue(s, lf, today) : null;
+    if (lfd) add(s, lfd.tpl, lfd.key, lfd.reason, lfd.extra, 2);
+    // win-back waits while the CRM chases the fees (not when the chasing is off, or an admin stopped it for them)
+    const chasing = !!lf && llqaOpt("leftChase") !== false && !llqaChase(s).stop;
+    const wb = chasing ? null : llqaWinbackDue(s, today);
     if (wb) add(s, wb.tpl, wb.key, "Left " + llqaDateLabel(String(s.qDate).slice(0, 10)) + (s.qReason ? " (" + s.qReason + ")" : "") + " — win-back " + wb.n + " of 3", { offer: llqaWinbackOffer() }, 3);
   });
   (ctx.rewards || []).forEach((r) => {
@@ -8527,4 +8621,1215 @@ const llqaTopCountries = (list, n) => {
   (list || []).forEach((s) => { if (s && s.country) by[s.country] = (by[s.country] || 0) + 1; });
   const top = Object.entries(by).sort((a, b) => b[1] - a[1]);
   return top.slice(0, k).map(([name]) => name).join(", ") + (top.length > k ? " +" + (top.length - k) : "") || "—";
+};
+
+/* ============================================================
+   v77 — Finance, all connected. Accounts Receivable on the fee
+   cycle (the same as Sales, Fee Status and the Parent Portal);
+   families who left owing stay owed and are reminded until they
+   pay, an admin stops it, or writes it off; a date the family
+   gives holds the reminders until then. Receipts, who did what,
+   removed payments kept. Accounts Payable: payments on each bill,
+   bills that repeat, reminders, salaries from Payroll. The Finance
+   page: money in and out, P&L, cash flow and the next days.
+   ============================================================ */
+Object.assign(LLQA_V67_DEFAULTS, {
+  leftChase: true, // remind families who left owing
+  leftEvery: 14, // every n days
+  billRemind: 3, // bills: tell the office n days before they are due
+  billAhead: 7, // repeating bills: the next one appears n days before it is due
+  receiptPrefix: "LLQA-R",
+  budgets: {}, // category → a month's budget (PKR)
+  cashStart: null, // { date, amount } the money in hand on a day (Cash Flow starts there)
+});
+const llqaR2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+// the line icons for the money buttons and notes (v69: a leading emoji becomes a line icon)
+Object.assign(LLQA_EMOJI_ICON, { "💸": "hand-coins", "🧾": "receipt", "🗑": "trash-2", "⬇": "download", "⎙": "printer", "↺": "undo-2" }); // ("✖" stays a sign: other screens start text with it)
+// who may stop or resume a family's reminders, set the date they gave, write fees off, put back a removed payment
+const llqaCanChase = (u) => {
+  const x = u || (LLQAApp.ctx || {}).user;
+  return !!x && (x.role === "superadmin" || llqaUserCan(x, "Fee Recovery"));
+};
+const llqaStuPatch = (s, fields) => {
+  const ctx = LLQAApp.ctx;
+  if (!s || typeof ctx.setStudents !== "function") return false;
+  ctx.setStudents((prev) => (prev || []).map((x) => (String(x.id) === String(s.id) ? { ...x, ...fields } : x)));
+  if (typeof ctx.upsertSalesMaster === "function") ctx.upsertSalesMaster([{ ...s, ...fields }]);
+  return true;
+};
+
+/* ---------- fees written off, families who left owing ---------- */
+// the amounts written off a family's bills: month → amount
+const llqaWoOf = (s) => {
+  const m = new Map();
+  (Array.isArray(s && s.feeWo) ? s.feeWo : []).forEach((w) => {
+    if (w && w.ym && Number(w.amt) > 0) m.set(String(w.ym), llqaR2((m.get(String(w.ym)) || 0) + Number(w.amt)));
+  });
+  return m;
+};
+// a family who left: their bills up to the day they left (the ones that fell due while they were with the academy)
+const llqaFeeGone = (s, today) => {
+  if (!s || s.status !== "quit" || !llqaIsDay(String(s.qDate || "").slice(0, 10))) return null;
+  return llqaFeeCycle(s, (LLQAApp.ctx || {}).arPayments, today || todayPK(), { until: String(s.qDate).slice(0, 10) });
+};
+// …with something still owed (null = nothing)
+const llqaFeeLeft = (s, today) => {
+  const cy = llqaFeeGone(s, today);
+  return cy && cy.left > 0 ? cy : null;
+};
+// every family's fee cycle: with the academy, or who left (billed up to the day they left)
+const llqaAllCycles = (today) => {
+  const ctx = LLQAApp.ctx;
+  const t = today || todayPK();
+  return llqaCached("v77cy", [ctx.students, ctx.arPayments, ctx.rewards, t, llqaLen(ctx.students), llqaLen(ctx.arPayments)], () =>
+    (ctx.students || [])
+      .map((s) => {
+        if (!s) return null;
+        const gone = s.status === "quit";
+        const cy = gone ? llqaFeeGone(s, t) : llqaFeeCycle(s, ctx.arPayments, t);
+        return cy ? { s, cy, gone } : null;
+      })
+      .filter(Boolean),
+  );
+};
+
+/* ---------- a family's reminders: stopped, or waiting for the date they gave ---------- */
+const llqaChase = (s) => (s && s.feeChase && typeof s.feeChase === "object" ? s.feeChase : {});
+// hold: no fee reminders today. promiseDue: the date the family gave has come (one reminder, up to a week)
+const llqaChaseNow = (s, today) => {
+  const t = today || todayPK();
+  const ch = llqaChase(s);
+  if (ch.stop) return { hold: true, stop: ch.stop };
+  const p = ch.promise && llqaIsDay(ch.promise.date) ? ch.promise : null;
+  if (p && p.date > t) return { hold: true, promise: p };
+  if (p && (llqaDays(p.date, t) || 0) <= 7) return { hold: false, promise: p, promiseDue: true, key: "fee:promise:" + s.id + ":" + p.date };
+  return { hold: false, promise: p };
+};
+const llqaChaseHeld = (s, today) => llqaChaseNow(s, today).hold;
+// what the family owes, for a message: "95 USD (Sep 2026, Oct 2026)"
+const llqaOwedText = (cy) => {
+  const open = (cy && cy.months ? cy.months : []).filter((m) => m.left > 0);
+  const owed = llqaR2(open.reduce((a, m) => a + m.left, 0));
+  return owed + " " + ((cy && cy.cur) || "") + (open.length ? " (" + open.map((m) => llqaMonthLabel(m.ym)).reverse().join(", ") + ")" : "");
+};
+const llqaLeftEvery = () => Math.max(3, parseInt(llqaOpt("leftEvery"), 10) || 14);
+// a family who left owing: the reminder due today (the date they gave; else every n days from 3 days after leaving)
+const llqaLeftDue = (s, cy, today) => {
+  if (!s || !cy || !(cy.left > 0) || llqaOpt("leftChase") === false) return null;
+  const t = today || todayPK();
+  const ch = llqaChaseNow(s, t);
+  const fee = llqaOwedText(cy);
+  if (ch.promiseDue) return { tpl: "feePromise", key: ch.key, reason: "Promised to pay by " + llqaDateLabel(ch.promise.date) + ": " + fee, extra: { fee, promise: llqaDateLabel(ch.promise.date) } };
+  if (ch.hold) return null;
+  const days = llqaDays(String(s.qDate).slice(0, 10), t);
+  if (days == null || days < 3) return null;
+  const n = Math.floor((days - 3) / llqaLeftEvery()) + 1;
+  return { tpl: "feeLeft", key: "feeleft:" + s.id + ":" + n, n, reason: "Left " + llqaDateLabel(String(s.qDate).slice(0, 10)) + " owing " + fee + " — reminder " + n, extra: { fee } };
+};
+const llqaChaseLog = (s, what) => [...(Array.isArray(s && s.feeChaseLog) ? s.feeChaseLog : []), { at: new Date().toISOString(), by: llqaPayActor(), what }].slice(-30);
+const llqaChaseStop = (s, why) => {
+  if (!llqaCanChase() || !s) return false;
+  const w = String(why || "").trim();
+  return llqaStuPatch(s, { feeChase: { ...llqaChase(s), stop: { by: llqaPayActor(), at: new Date().toISOString(), why: w } }, feeChaseLog: llqaChaseLog(s, "Fee reminders stopped" + (w ? " — " + w : "")) });
+};
+const llqaChaseResume = (s) => {
+  if (!llqaCanChase() || !s) return false;
+  return llqaStuPatch(s, { feeChase: { ...llqaChase(s), stop: null }, feeChaseLog: llqaChaseLog(s, "Fee reminders on again") });
+};
+const llqaChasePromise = (s, date, note) => {
+  if (!llqaCanChase() || !s) return false;
+  const d = llqaIsDay(date) ? date : "";
+  const n = String(note || "").trim();
+  return llqaStuPatch(s, {
+    feeChase: { ...llqaChase(s), promise: d ? { date: d, by: llqaPayActor(), at: new Date().toISOString(), note: n } : null },
+    feeChaseLog: llqaChaseLog(s, d ? "Will pay by " + llqaDateLabel(d) + (n ? " — " + n : "") : "Pay-by date cleared"),
+  });
+};
+// every month still owed is written off at what is left on it
+const llqaChaseWriteOff = (s, cy, why) => {
+  if (!llqaCanChase() || !s || !cy) return false;
+  const w = String(why || "").trim();
+  const at = new Date().toISOString();
+  const by = llqaPayActor();
+  const add = cy.months.filter((m) => m.left > 0).map((m) => ({ ym: m.ym, amt: llqaR2(m.left), cur: cy.cur, by, at, why: w }));
+  if (!add.length) return false;
+  return llqaStuPatch(s, {
+    feeWo: [...(Array.isArray(s.feeWo) ? s.feeWo : []), ...add],
+    feeChase: { ...llqaChase(s), promise: null },
+    feeChaseLog: llqaChaseLog(s, "Written off: " + llqaOwedText(cy) + (w ? " — " + w : "")),
+  });
+};
+const llqaChaseUndoWo = (s) => {
+  if (!llqaCanChase() || !s || !(Array.isArray(s.feeWo) && s.feeWo.length)) return false;
+  const was = llqaR2(s.feeWo.reduce((a, w) => a + (Number(w.amt) || 0), 0));
+  return llqaStuPatch(s, { feeWo: [], feeChaseLog: llqaChaseLog(s, "Write-off undone (" + was + " " + (s.feeWo[0].cur || s.currency || "") + " owed again)") });
+};
+// a family's reminders in words (lists, windows)
+const llqaChaseText = (s, today) => {
+  const ch = llqaChaseNow(s, today);
+  if (ch.stop) return "Reminders stopped by " + (ch.stop.by || "an admin") + (ch.stop.why ? " — " + ch.stop.why : "");
+  if (ch.promise && ch.hold) return "Will pay by " + llqaDateLabel(ch.promise.date) + " (reminders wait)";
+  if (ch.promiseDue) return "Pay-by date " + llqaDateLabel(ch.promise.date) + " has come";
+  return "";
+};
+
+/* ---------- payments: receipts, who and when, the rate of the day, removed ones kept ---------- */
+const llqaFinDoc = () => ((LLQAApp.ctx && LLQAApp.ctx.finance) || {});
+const llqaSetFin = (fn) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setFinance !== "function") return false;
+  ctx.setFinance((prev) => fn(prev && typeof prev === "object" ? prev : {}));
+  return true;
+};
+const llqaReceiptPrefix = () => String(llqaOpt("receiptPrefix") || "LLQA-R").trim().replace(/\s+/g, "-") || "LLQA-R";
+// the next receipt number of that year: LLQA-R-2026-0001
+const llqaNextReceipt = (date) => {
+  const pre = llqaReceiptPrefix() + "-" + String(date || todayPK()).slice(0, 4) + "-";
+  let n = 0;
+  [...((LLQAApp.ctx || {}).arPayments || []), ...(llqaFinDoc().arRemoved || [])].forEach((p) => {
+    const r = String((p && p.receiptNo) || "");
+    if (r.startsWith(pre)) n = Math.max(n, parseInt(r.slice(pre.length), 10) || 0);
+  });
+  return pre + String(n + 1).padStart(4, "0");
+};
+// the fields every payment saved from v77 carries
+const llqaPayStamp = (cur, paidDate, got) => {
+  const cu = llqaCurOf(cur);
+  const rate = cu !== "PKR" ? Number(llqaRates((LLQAApp.ctx || {}).appSettings)[cu]) || 0 : 0;
+  const recv = cu !== "PKR" && Number(got) > 0 ? Math.round(Number(got)) : 0;
+  return {
+    receiptNo: llqaNextReceipt(paidDate),
+    postedBy: llqaPayActor(),
+    postedAt: new Date().toISOString(),
+    ...(recv ? { pkrReceived: recv } : rate > 0 ? { pkrRate: rate } : {}),
+  };
+};
+// a payment in PKR: the PKR that reached you, else the rate of its day, else today's rate
+const llqaFinRates = () => llqaRates((LLQAApp.ctx || {}).appSettings);
+const llqaPayPKR = (p, R) => llqaToPKR(p.amount, p.currency || "USD", R || llqaFinRates(), p.pkrReceived, p.pkrRate);
+const llqaPayPick = (p) => ({ amount: p.amount, currency: p.currency, fallback: "USD", received: p.pkrReceived, rate: p.pkrRate });
+// the same payment twice? same family, amount and day — or the same bank reference
+const llqaPayDupe = (f, sid) => {
+  const pays = (LLQAApp.ctx || {}).arPayments || [];
+  const ref = String(f.receipt || "").trim().toLowerCase();
+  return (
+    pays.find((p) => p && sid != null && String(p.studentId) === String(sid) && Math.abs((Number(p.amount) || 0) - (Number(f.amount) || 0)) < 0.005 && String(p.paidDate) === String(f.paidDate)) ||
+    (ref ? pays.find((p) => p && String(p.receipt || "").trim().toLowerCase() === ref) : null) ||
+    null
+  );
+};
+const LLQA_INCOME_TYPES = ["Registration fee", "Certificate fee", "Books & materials", "Donation", "Other"];
+// income that isn't a monthly fee (registration, certificates, donations…): counted as money in, never against a fee
+const llqaRecordIncome = (f) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setArPayments !== "function") return null;
+  const s = f.studentId != null && f.studentId !== "" ? llqaFindStudent(f.studentId) : null;
+  const paidDate = f.paidDate || todayPK();
+  const cur = f.currency || "PKR";
+  const rec = {
+    id: Date.now(),
+    type: "other",
+    category: f.category || "Other",
+    payer: String(f.payer || (s && (s.parent || s.name)) || "").trim(),
+    studentId: s ? s.id : null,
+    studentName: s ? s.name : String(f.payer || "").trim(),
+    parent: s ? s.parent || "" : "",
+    amount: llqaR2(f.amount),
+    currency: cur,
+    paidDate,
+    gateway: f.gateway || "Bank Transfer",
+    receipt: f.receipt || "",
+    notes: f.notes || "",
+    source: "income",
+    ...llqaPayStamp(cur, paidDate, f.pkrReceived),
+  };
+  ctx.setArPayments((prev) => [...(prev || []), rec]);
+  return rec;
+};
+const llqaPayEdit = (p, patch) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setArPayments !== "function" || !p) return false;
+  const keep = ["amount", "currency", "paidDate", "month", "gateway", "receipt", "notes", "pkrReceived", "category", "payer"];
+  const was = {};
+  keep.forEach((k) => {
+    if (patch[k] !== undefined && String(patch[k]) !== String(p[k] == null ? "" : p[k])) was[k] = p[k] == null ? "" : p[k];
+  });
+  if (!Object.keys(was).length) return true;
+  const edit = { by: llqaPayActor(), at: new Date().toISOString(), was };
+  ctx.setArPayments((prev) => (prev || []).map((x) => (x && x.id === p.id ? { ...x, ...patch, editedBy: edit.by, editedAt: edit.at, edits: [...(Array.isArray(x.edits) ? x.edits : []), edit].slice(-10) } : x)));
+  return true;
+};
+// removed with a reason, kept (Accounts Receivable → Payment Posting Sheet → Removed), and can be put back
+const llqaPayRemove = (p, why) => {
+  const ctx = LLQAApp.ctx;
+  const w = String(why || "").trim();
+  if (typeof ctx.setArPayments !== "function" || !p || !w) return false;
+  const gone = { ...p, removedBy: llqaPayActor(), removedAt: new Date().toISOString(), removedWhy: w };
+  if (!llqaSetFin((d) => ({ ...d, arRemoved: [...(Array.isArray(d.arRemoved) ? d.arRemoved : []), gone].slice(-500) }))) return false;
+  ctx.setArPayments((prev) => (prev || []).filter((x) => !(x && x.id === p.id)));
+  return true;
+};
+const llqaPayRestore = (r) => {
+  const ctx = LLQAApp.ctx;
+  if (!llqaCanChase() || typeof ctx.setArPayments !== "function" || !r) return false;
+  const back = { ...r };
+  ["removedBy", "removedAt", "removedWhy"].forEach((k) => delete back[k]);
+  back.restoredBy = llqaPayActor();
+  back.restoredAt = new Date().toISOString();
+  if (!llqaSetFin((d) => ({ ...d, arRemoved: (Array.isArray(d.arRemoved) ? d.arRemoved : []).filter((x) => !(x && x.id === r.id && x.removedAt === r.removedAt)) }))) return false;
+  ctx.setArPayments((prev) => [...(prev || []).filter((x) => !(x && x.id === r.id)), back]);
+  return true;
+};
+// payments that cleared a bill already overdue when they came in (recovery), or saved as recovery
+const llqaRecoveryIds = (today) => {
+  const ctx = LLQAApp.ctx;
+  const t = today || todayPK();
+  return llqaCached("v77rec", [ctx.students, ctx.arPayments, ctx.rewards, t], () => {
+    const ids = new Set();
+    (ctx.arPayments || []).forEach((p) => p && p.type === "recovery" && ids.add(p.id));
+    llqaAllCycles(t).forEach(({ cy }) =>
+      cy.months.forEach((m) => (m.pays || []).forEach((p) => {
+        if (p && String(p.paidDate || "") >= m.over) ids.add(p.id);
+      })),
+    );
+    return ids;
+  });
+};
+// which months a payment paid ("Sep 2026, Oct 2026")
+const llqaPayFor = (p, today) => {
+  if (!p || p.type === "other") return "";
+  const ctx = LLQAApp.ctx;
+  const t = today || todayPK();
+  const map = llqaCached("v77for", [ctx.students, ctx.arPayments, ctx.rewards, t], () => {
+    const m = new Map();
+    llqaAllCycles(t).forEach(({ cy }) =>
+      cy.months.forEach((b) => (b.pays || []).forEach((x) => {
+        if (!x) return;
+        const k = x.id;
+        if (!m.has(k)) m.set(k, []);
+        m.get(k).push(b.ym);
+      })),
+    );
+    return m;
+  });
+  const yms = [...new Set(map.get(p.id) || [])].sort();
+  return yms.length ? yms.map(llqaMonthLabel).join(", ") : p.month ? llqaMonthLabel(String(p.month).slice(0, 7)) : "";
+};
+
+/* ---------- Accounts Payable: payments on a bill, repeating bills, salaries from Payroll ---------- */
+const LLQA_AP_METHODS = ["Bank Transfer", "Cash", "Cheque", "Credit Card", "JazzCash", "EasyPaisa", "Auto-pay", "Online", "Other"];
+const LLQA_AP_REPEAT = { month: 1, quarter: 3, year: 12 };
+const LLQA_AP_REPEAT_NAME = { month: "Every month", quarter: "Every 3 months", year: "Every year" };
+// what has been paid on a bill: its payments (v77), else the paid amount / status kept before
+const llqaApPaid = (l) => {
+  if (!l) return 0;
+  if (Array.isArray(l.pays) && l.pays.length) return llqaR2(l.pays.reduce((a, p) => a + (Number(p && p.amount) || 0), 0));
+  return l.status === "paid" ? Number(l.amount) || 0 : l.status === "partial" ? Number(l.paidAmount) || 0 : 0;
+};
+const llqaApLeft = (l) => Math.max(0, llqaR2((Number(l && l.amount) || 0) - llqaApPaid(l)));
+const llqaApState = (l, today) => {
+  const t = today || todayPK();
+  const amt = Number(l && l.amount) || 0;
+  const paid = llqaApPaid(l);
+  if (amt > 0 && paid >= amt - 0.005) return "paid";
+  if (llqaIsDay(l && l.dueDate) && l.dueDate < t) return "overdue";
+  return paid > 0 ? "partial" : "unpaid";
+};
+const LLQA_AP_STATES = { paid: ["Paid", "success"], partial: ["Part paid", "warn"], unpaid: ["Unpaid", "textSec"], overdue: ["Overdue", "danger"] };
+// the fields older screens and reports read (status, paid amount, paid date) follow the payments
+const llqaApSync = (l) => {
+  if (!l || !(Array.isArray(l.pays) && l.pays.length)) return l;
+  const paid = llqaApPaid(l);
+  const amt = Number(l.amount) || 0;
+  const last = l.pays.slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).pop();
+  return { ...l, paidAmount: paid, status: amt > 0 && paid >= amt - 0.005 ? "paid" : paid > 0 ? "partial" : "unpaid", paidDate: last ? last.date : "" };
+};
+const llqaApSave = (bill) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setApLiabilities !== "function" || !bill) return null;
+  const by = llqaPayActor();
+  const at = new Date().toISOString();
+  let out = null;
+  if (bill.id != null && (ctx.apLiabilities || []).some((x) => x && x.id === bill.id)) {
+    ctx.setApLiabilities((prev) => (prev || []).map((x) => (x && x.id === bill.id ? (out = llqaApSync({ ...x, ...bill, editedBy: by, editedAt: at })) : x)));
+  } else {
+    out = llqaApSync({ pays: [], ...bill, id: bill.id != null ? bill.id : llqaUid("ap"), createdBy: by, createdAt: at });
+    ctx.setApLiabilities((prev) => [...(prev || []), out]);
+  }
+  return out;
+};
+const llqaApPay = (l, f) => {
+  const ctx = LLQAApp.ctx;
+  const amt = llqaR2(f && f.amount);
+  if (typeof ctx.setApLiabilities !== "function" || !l || !(amt > 0)) return null;
+  const pay = { id: llqaUid("bp"), date: llqaIsDay(f.date) ? f.date : todayPK(), amount: amt, method: f.method || "Bank Transfer", ref: String(f.ref || "").trim(), note: String(f.note || "").trim(), by: llqaPayActor(), at: new Date().toISOString() };
+  ctx.setApLiabilities((prev) =>
+    (prev || []).map((x) => {
+      if (!(x && x.id === l.id)) return x;
+      // a bill paid before v77 (a paid amount, no payments): that amount becomes its first payment
+      const had = Array.isArray(x.pays) && x.pays.length ? x.pays : llqaApPaid(x) > 0 ? [{ id: llqaUid("bp"), date: x.paidDate || x.dueDate || pay.date, amount: llqaApPaid(x), method: "", ref: "", by: "", at: "", before: true }] : [];
+      return llqaApSync({ ...x, pays: [...had, pay] });
+    }),
+  );
+  return pay;
+};
+const llqaApUnpay = (l, payId) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setApLiabilities !== "function" || !l) return false;
+  ctx.setApLiabilities((prev) => (prev || []).map((x) => (x && x.id === l.id ? llqaApSync({ ...x, pays: (x.pays || []).filter((p) => p.id !== payId), editedBy: llqaPayActor(), editedAt: new Date().toISOString() }) : x)));
+  return true;
+};
+const llqaApApprove = (l) => {
+  const ctx = LLQAApp.ctx;
+  if (typeof ctx.setApLiabilities !== "function" || !l || !llqaCanManage()) return false;
+  ctx.setApLiabilities((prev) => (prev || []).map((x) => (x && x.id === l.id ? { ...x, approvedBy: llqaPayActor(), approvedAt: new Date().toISOString() } : x)));
+  return true;
+};
+const llqaApRemove = (l, why) => {
+  const ctx = LLQAApp.ctx;
+  const w = String(why || "").trim();
+  if (typeof ctx.setApLiabilities !== "function" || !l || !w) return false;
+  const gone = { ...l, removedBy: llqaPayActor(), removedAt: new Date().toISOString(), removedWhy: w };
+  if (!llqaSetFin((d) => ({ ...d, apRemoved: [...(Array.isArray(d.apRemoved) ? d.apRemoved : []), gone].slice(-500) }))) return false;
+  ctx.setApLiabilities((prev) => (prev || []).filter((x) => !(x && x.id === l.id)));
+  return true;
+};
+const llqaApRestore = (r) => {
+  const ctx = LLQAApp.ctx;
+  if (!llqaCanManage() || typeof ctx.setApLiabilities !== "function" || !r) return false;
+  const back = { ...r };
+  ["removedBy", "removedAt", "removedWhy"].forEach((k) => delete back[k]);
+  if (!llqaSetFin((d) => ({ ...d, apRemoved: (Array.isArray(d.apRemoved) ? d.apRemoved : []).filter((x) => !(x && x.id === r.id && x.removedAt === r.removedAt)) }))) return false;
+  ctx.setApLiabilities((prev) => [...(prev || []).filter((x) => !(x && x.id === r.id)), back]);
+  return true;
+};
+// a vendor's details, kept once (phone, bank, account)
+const llqaApVendor = (name) => ((llqaFinDoc().vendors || {})[String(name || "").trim().toLowerCase()] || null);
+const llqaApSetVendor = (name, info) => {
+  const k = String(name || "").trim().toLowerCase();
+  if (!k) return false;
+  return llqaSetFin((d) => ({ ...d, vendors: { ...(d.vendors || {}), [k]: { ...info, name: String(name).trim(), by: llqaPayActor(), at: new Date().toISOString() } } }));
+};
+// the due date after this one, on the same day of the month (the last day in a shorter month)
+const llqaApNextDue = (l) => {
+  const m = LLQA_AP_REPEAT[l && l.repeat && l.repeat.every];
+  if (!m || !llqaIsDay(l.dueDate)) return "";
+  const ym = llqaMonthAdd(l.dueDate.slice(0, 7), m);
+  const day = Math.min(llqaYmDays(ym), Math.max(1, parseInt(l.repeat.day, 10) || parseInt(l.dueDate.slice(8, 10), 10) || 1));
+  return ym + "-" + String(day).padStart(2, "0");
+};
+// the newest bill of each repeating series (a series stops when its newest bill no longer repeats)
+const llqaApSeries = (bills) => {
+  const by = new Map();
+  (bills || []).forEach((l) => {
+    if (!l || !(l.seriesId != null || l.repeat)) return;
+    const k = String(l.seriesId != null ? l.seriesId : l.id);
+    const cur = by.get(k);
+    if (!cur || String(l.dueDate || "") > String(cur.dueDate || "")) by.set(k, l);
+  });
+  return by;
+};
+// the bills of the series still to come up to a day (not created yet)
+const llqaApUpcoming = (bills, until) => {
+  const out = [];
+  llqaApSeries(bills).forEach((l, k) => {
+    if (!l.repeat || !LLQA_AP_REPEAT[l.repeat.every]) return;
+    let prev = l;
+    const sid = l.seriesId != null ? l.seriesId : l.id;
+    for (let i = 0; i < 36; i++) {
+      const next = llqaApNextDue(prev);
+      if (!next || next > until || (l.repeat.until && next > l.repeat.until)) break;
+      out.push({ k, sid, from: l, dueDate: next });
+      prev = { ...prev, dueDate: next };
+    }
+  });
+  return out;
+};
+// the clock's job: the next bill of each repeating series appears (Settings → Finance: n days before it is due)
+const llqaApRepeatRun = () => {
+  const ctx = LLQAApp.ctx;
+  if (!ctx.user || !llqaCanManage() || typeof ctx.setApLiabilities !== "function" || !llqaReadyFor(["apLiabilities"])) return false;
+  const today = todayPK();
+  const ahead = Math.max(0, parseInt(llqaOpt("billAhead"), 10) || 0);
+  const bills = ctx.apLiabilities || [];
+  const have = new Set(bills.map((b) => b && String(b.seriesId != null ? b.seriesId : b.id) + "|" + b.dueDate));
+  const at = new Date().toISOString();
+  const add = llqaApUpcoming(bills, llqaAddDays(today, ahead))
+    .filter((x) => !have.has(x.k + "|" + x.dueDate))
+    .map((x) => ({
+      // the same id on every computer: two admins' screens adding it at the same time save one bill, not two
+      id: "aprep_" + String(x.k).replace(/[^A-Za-z0-9_-]/g, "") + "_" + x.dueDate,
+      seriesId: x.sid,
+      vendor: x.from.vendor || "",
+      category: x.from.category || "Other",
+      amount: Number(x.from.amount) || 0,
+      currency: x.from.currency || "PKR",
+      dueDate: x.dueDate,
+      reference: "",
+      notes: "",
+      repeat: { ...x.from.repeat },
+      estimate: !!x.from.repeat.varies,
+      pays: [],
+      status: "unpaid",
+      paidAmount: 0,
+      paidDate: "",
+      auto: true,
+      createdBy: llqaByName() || "CRM",
+      createdAt: at,
+    }));
+  if (!add.length) return false;
+  ctx.setApLiabilities((prev) => {
+    const now = new Set((prev || []).map((b) => b && String(b.seriesId != null ? b.seriesId : b.id) + "|" + b.dueDate));
+    return [...(prev || []), ...add.filter((a) => !now.has(String(a.seriesId) + "|" + a.dueDate))];
+  });
+  llqaToast({
+    kind: "info",
+    key: "aprepeat",
+    text: "🧾 Repeating bills added: " + add.slice(0, 4).map((a) => a.vendor + " " + llqaAmt(a.amount, a.currency) + " due " + llqaDateLabel(a.dueDate) + (a.estimate ? " (amount to confirm)" : "")).join(", ") + (add.length > 4 ? " and " + (add.length - 4) + " more" : "") + ".",
+    actions: [{ label: "Accounts Payable", run: () => llqaGo("ap") }],
+  });
+  return true;
+};
+// each month's teachers' salaries from Payroll, as one bill (Payroll approves and pays them)
+const llqaApPayroll = (today) => {
+  const ctx = LLQAApp.ctx;
+  const t = today || todayPK();
+  if (typeof llqaPayMonthState !== "function") return [];
+  return llqaCached("v77appay", [ctx.teachers, ctx.payrollHistory, ctx.attendanceHistory, ctx.qcViolations, ctx.appSettings, t], () => {
+    const out = [];
+    for (let ym = LLQA_PAY_FROM; ym <= t.slice(0, 7); ym = llqaMonthAdd(ym, 1)) {
+      let st = null;
+      try {
+        st = llqaPayMonthState(ym);
+      } catch (e) {
+        st = null;
+      }
+      if (!st) continue;
+      const rows = st.rows.filter((x) => x.r && Number(x.r.net) > 0);
+      if (!rows.length) continue;
+      const amount = llqaR2(rows.reduce((a, x) => a + Number(x.r.net), 0));
+      const pays = rows.filter((x) => x.r.status === "paid").map((x) => ({ id: "pr:" + ym + ":" + x.t.id, date: x.r.paidDate || st.due, amount: llqaR2(x.r.net), method: x.r.paymentMethod || "", ref: x.t.name, by: x.r.paidBy || "", at: x.r.paidAt || "" }));
+      out.push({
+        id: "payroll:" + ym,
+        payroll: true,
+        ym,
+        vendor: "Teachers' salaries (Payroll)",
+        category: "Salaries",
+        amount,
+        currency: "PKR",
+        dueDate: st.due,
+        pays,
+        teachers: rows.length,
+        toApprove: st.toApprove.length,
+        toPay: st.toPay.length,
+        estimate: st.toApprove.length > 0,
+        notes: llqaMonthLabel(ym) + " · " + rows.length + " teacher" + (rows.length === 1 ? "" : "s"),
+      });
+    }
+    return out;
+  });
+};
+// every bill: the ones typed in Accounts Payable and the salaries from Payroll
+const llqaApAll = (today) => [...((LLQAApp.ctx || {}).apLiabilities || []).filter(Boolean), ...llqaApPayroll(today)];
+// bills to pay soon and overdue (not salaries: Payroll tells about those)
+const llqaApDue = (today) => {
+  const t = today || todayPK();
+  const d = Math.max(0, parseInt(llqaOpt("billRemind"), 10) || 0);
+  const list = ((LLQAApp.ctx || {}).apLiabilities || []).filter((l) => l && llqaApLeft(l) > 0 && llqaIsDay(l.dueDate) && l.dueDate <= llqaAddDays(t, d));
+  return { soon: list.filter((l) => l.dueDate >= t).sort((a, b) => a.dueDate.localeCompare(b.dueDate)), late: list.filter((l) => l.dueDate < t).sort((a, b) => a.dueDate.localeCompare(b.dueDate)) };
+};
+const llqaApToast = (x) => {
+  const nm = (l) => l.vendor + " " + llqaAmt(llqaApLeft(l), l.currency || "PKR") + " (" + (l.dueDate < todayPK() ? "was due " : "due ") + llqaDateLabel(l.dueDate) + ")";
+  const parts = [];
+  if (x.late.length) parts.push(x.late.length + " overdue: " + x.late.slice(0, 3).map(nm).join(", ") + (x.late.length > 3 ? "…" : ""));
+  if (x.soon.length) parts.push(x.soon.length + " due soon: " + x.soon.slice(0, 3).map(nm).join(", ") + (x.soon.length > 3 ? "…" : ""));
+  return { kind: "bills", key: "bills", text: "🧾 Bills to pay — " + parts.join(" · ") + ".", actions: [{ label: "Accounts Payable", run: () => llqaGo("ap") }] };
+};
+
+/* ---------- the Finance page: money in and out, what is owed, P&L, the next days ---------- */
+const llqaApPKR = (l, n, R) => llqaToPKR(n, l.currency || "PKR", R || llqaFinRates()).pkr;
+// money in and out in a month (by the day it moved), in PKR
+const llqaFinCash = (ym) => {
+  const ctx = LLQAApp.ctx;
+  const R = llqaFinRates();
+  const inM = (d) => String(d || "").slice(0, 7) === ym;
+  const pays = (ctx.arPayments || []).filter((p) => p && inM(p.paidDate));
+  const fees = llqaSumPKR(pays.filter((p) => p.type !== "other"), R, llqaPayPick);
+  const other = {};
+  pays.filter((p) => p.type === "other").forEach((p) => (other[p.category || "Other"] = (other[p.category || "Other"] || 0) + llqaPayPKR(p, R).pkr));
+  const out = {};
+  let missing = 0;
+  llqaApAll().forEach((l) =>
+    (l.pays || []).forEach((p) => {
+      if (!p || !inM(p.date)) return;
+      const x = llqaToPKR(p.amount, l.currency || "PKR", R);
+      if (x.how === "missing") missing++;
+      out[l.category || "Other"] = (out[l.category || "Other"] || 0) + x.pkr;
+    }),
+  );
+  // bills paid before v77 (no payments kept): their paid amount on the day they were paid
+  (ctx.apLiabilities || []).forEach((l) => {
+    if (!l || (Array.isArray(l.pays) && l.pays.length) || !inM(l.paidDate) || !(llqaApPaid(l) > 0)) return;
+    out[l.category || "Other"] = (out[l.category || "Other"] || 0) + llqaApPKR(l, llqaApPaid(l), R);
+  });
+  const inOther = Object.values(other).reduce((a, v) => a + v, 0);
+  const outAll = Object.values(out).reduce((a, v) => a + v, 0);
+  return { ym, fees, inFees: fees.pkr, other, inOther, inAll: fees.pkr + inOther, out, outAll, net: fees.pkr + inOther - outAll, missing };
+};
+// what a month earned and cost: fees billed for it (+ other income), salaries for it, bills due in it, fees written off
+const llqaFinPnl = (ym) => {
+  const ctx = LLQAApp.ctx;
+  const R = llqaFinRates();
+  const t = todayPK();
+  let fees = 0;
+  let missing = 0;
+  let wo = 0;
+  llqaAllCycles(t).forEach(({ cy }) =>
+    cy.months.forEach((m) => {
+      if (m.ym !== ym) return;
+      const x = llqaToPKR(m.fee, cy.cur, R);
+      if (x.how === "missing") missing++;
+      fees += x.pkr;
+    }),
+  );
+  (ctx.students || []).forEach((s) =>
+    (Array.isArray(s && s.feeWo) ? s.feeWo : []).forEach((w) => {
+      if (String(w.at || "").slice(0, 7) === ym) wo += llqaToPKR(w.amt, w.cur || s.currency || "USD", R).pkr;
+    }),
+  );
+  const cash = llqaFinCash(ym);
+  const cost = {};
+  (ctx.apLiabilities || []).forEach((l) => {
+    if (!l || String(l.dueDate || "").slice(0, 7) !== ym) return;
+    cost[l.category || "Other"] = (cost[l.category || "Other"] || 0) + llqaApPKR(l, l.amount, R);
+  });
+  const pr = llqaApPayroll(t).find((x) => x.ym === ym);
+  // before Payroll ran (v75), or nothing in Payroll: the basic salaries of the teachers working — only for a month the
+  // CRM has money for (a month from before the academy used it would show a loss it never made)
+  const active = fees > 0 || cash.inAll > 0 || cash.outAll > 0 || Object.keys(cost).length > 0;
+  const salaries = pr ? pr.amount : active ? (ctx.teachers || []).filter((x) => x && x.status !== "resigned" && x.status !== "terminated").reduce((a, x) => a + (Number(x.salary) || 0), 0) : 0;
+  const revenue = fees + cash.inOther;
+  const costAll = salaries + Object.values(cost).reduce((a, v) => a + v, 0) + wo;
+  return { ym, fees, other: cash.other, revenue, salaries, salariesEst: !pr || pr.estimate, cost, wo, costAll, net: revenue - costAll, margin: revenue > 0 ? Math.round(((revenue - costAll) / revenue) * 1000) / 10 : null, missing };
+};
+// what families owe the academy today (with the academy, or who left), by how late
+const llqaFinOwed = (today) => {
+  const t = today || todayPK();
+  const R = llqaFinRates();
+  const rows = [];
+  llqaAllCycles(t).forEach(({ s, cy, gone }) => {
+    const open = cy.months.filter((m) => m.left > 0 && m.due <= t);
+    if (!open.length) return;
+    const left = llqaR2(open.reduce((a, m) => a + m.left, 0));
+    const oldest = open[open.length - 1];
+    const days = llqaDays(oldest.due, t) || 0;
+    const x = llqaToPKR(left, cy.cur, R);
+    rows.push({ s, cy, gone, open, left, cur: cy.cur, pkr: x.pkr, missing: x.how === "missing", oldest, days, overdue: open.some((m) => m.state === "overdue"), bucket: days <= 30 ? 0 : days <= 60 ? 1 : days <= 90 ? 2 : 3 });
+  });
+  const buckets = [0, 0, 0, 0];
+  rows.forEach((r) => (buckets[r.bucket] += r.pkr));
+  return { rows: rows.sort((a, b) => b.days - a.days || b.pkr - a.pkr), buckets, total: buckets.reduce((a, v) => a + v, 0) };
+};
+const LLQA_AGE_NAMES = ["1–30 days", "31–60 days", "61–90 days", "Over 90 days"];
+// the days ahead: fees falling due, bills due (and repeating ones still to come), salaries due
+const llqaFinAhead = (days, today) => {
+  const ctx = LLQAApp.ctx;
+  const t = today || todayPK();
+  const end = llqaAddDays(t, days);
+  const R = llqaFinRates();
+  const fees = [];
+  llqaAllCycles(t).forEach(({ s, cy, gone }) => {
+    if (gone) return;
+    cy.months.forEach((m) => {
+      if (m.left > 0 && m.due > t && m.due <= end) fees.push({ s, date: m.due, amount: m.left, cur: cy.cur });
+    });
+    for (let k = 0; k <= Math.ceil(days / 28) + 1; k++) {
+      const ym = llqaMonthAdd(t.slice(0, 7), k);
+      if (cy.months.some((m) => m.ym === ym)) continue;
+      const due = ym + "-" + String(Math.min(cy.day, llqaYmDays(ym))).padStart(2, "0");
+      if (due > t && due <= end && due >= cy.start) fees.push({ s, date: due, amount: cy.amt, cur: cy.cur });
+    }
+  });
+  const bills = (ctx.apLiabilities || []).filter((l) => l && llqaApLeft(l) > 0 && llqaIsDay(l.dueDate) && l.dueDate > t && l.dueDate <= end).map((l) => ({ l, date: l.dueDate, amount: llqaApLeft(l), cur: l.currency || "PKR", what: l.vendor }));
+  llqaApUpcoming(ctx.apLiabilities || [], end).forEach((x) => {
+    if (x.dueDate > t && !(ctx.apLiabilities || []).some((b) => b && String(b.seriesId != null ? b.seriesId : b.id) === x.k && b.dueDate === x.dueDate))
+      bills.push({ l: x.from, date: x.dueDate, amount: Number(x.from.amount) || 0, cur: x.from.currency || "PKR", what: x.from.vendor, projected: true });
+  });
+  const pr = llqaApPayroll(t);
+  const salaries = pr.filter((p) => llqaApLeft(p) > 0 && p.dueDate > t && p.dueDate <= end).map((p) => ({ date: p.dueDate, amount: llqaApLeft(p), cur: "PKR", what: "Salaries " + llqaMonthLabel(p.ym), estimate: p.estimate }));
+  // months after the ones Payroll has: the last month's salaries again
+  const lastPr = pr[pr.length - 1];
+  if (lastPr)
+    for (let k = 1; k <= Math.ceil(days / 28) + 1; k++) {
+      const ym = llqaMonthAdd(lastPr.ym, k);
+      const due = typeof llqaPayDue === "function" ? llqaPayDue(ym, ctx.appSettings) : "";
+      if (due && due > t && due <= end) salaries.push({ date: due, amount: lastPr.amount, cur: "PKR", what: "Salaries " + llqaMonthLabel(ym), estimate: true });
+    }
+  const pk = (list) => list.reduce((a, x) => a + llqaToPKR(x.amount, x.cur, R).pkr, 0);
+  const inPKR = pk(fees);
+  const outPKR = pk(bills) + pk(salaries);
+  return { days, end, fees: fees.sort((a, b) => a.date.localeCompare(b.date)), bills: bills.sort((a, b) => a.date.localeCompare(b.date)), salaries: salaries.sort((a, b) => a.date.localeCompare(b.date)), inPKR, outPKR, net: inPKR - outPKR };
+};
+// money in hand: the amount set on a day (Settings → Finance) + what came in − what went out since
+const llqaFinPosition = (today) => {
+  const cs = llqaOpt("cashStart");
+  if (!cs || !llqaIsDay(cs.date) || !(Number(cs.amount) >= 0 || Number(cs.amount) < 0)) return null;
+  const t = today || todayPK();
+  const ctx = LLQAApp.ctx;
+  const R = llqaFinRates();
+  const inR = (d) => String(d || "") >= cs.date && String(d || "") <= t;
+  let inn = 0;
+  let out = 0;
+  (ctx.arPayments || []).forEach((p) => p && inR(p.paidDate) && (inn += llqaPayPKR(p, R).pkr));
+  llqaApAll(t).forEach((l) => (l.pays || []).forEach((p) => p && inR(p.date) && (out += llqaToPKR(p.amount, l.currency || "PKR", R).pkr)));
+  (ctx.apLiabilities || []).forEach((l) => {
+    if (l && !(Array.isArray(l.pays) && l.pays.length) && inR(l.paidDate)) out += llqaApPKR(l, llqaApPaid(l), R);
+  });
+  return { from: cs.date, start: Number(cs.amount) || 0, inn, out, now: (Number(cs.amount) || 0) + inn - out };
+};
+// the months shown on the Finance page (the last n, oldest first)
+const llqaFinMonths = (n, today) => {
+  const cur = (today || todayPK()).slice(0, 7);
+  const out = [];
+  for (let i = (n || 6) - 1; i >= 0; i--) out.push(llqaMonthAdd(cur, -i));
+  return out;
+};
+// a CSV download
+const llqaCsv = (name, rows) => {
+  const safe = (v) => {
+    const s = String(v == null ? "" : v);
+    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const csv = rows.map((r) => r.map(safe).join(",")).join("\n");
+  try {
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      a.remove();
+    }, 500);
+  } catch (e) {}
+  return csv;
+};
+
+/* ---------- messages ---------- */
+(() => {
+  const fam = [
+    ["feeLeft", "Fees still owed — after leaving",
+      "Assalamu Alaikum {parent}, a reminder that {student}'s fees of {fee} are still outstanding from the time with {academy}. Please send them when you can, or reply with a date that suits you. JazakAllah Khair!"],
+    ["feePromise", "Fee — the date you gave",
+      "Assalamu Alaikum {parent}, as agreed, {student}'s fee ({fee}) is due by {promise}. Please send it when you can and let us know. JazakAllah Khair!"],
+    ["feeInvoice", "Fee invoice",
+      "Assalamu Alaikum {parent}, {student}'s fee invoice {invoice} for {month}: {fee}, due {due}. JazakAllah Khair!", "ctx"],
+  ];
+  const have = new Set(LLQA_TEMPLATES.map((x) => x[0]));
+  const at = LLQA_TEMPLATES.findIndex((x) => x[0] === "custom");
+  LLQA_TEMPLATES.splice(at < 0 ? LLQA_TEMPLATES.length : at, 0, ...fam.filter((x) => !have.has(x[0])));
+})();
+
+/* ---------- v77 windows: other income, a family's fee recovery, a payment's corrections, removing with a reason,
+   bills (add, pay, vendor), an invoice, Settings → Finance ---------- */
+const llqaV77Box = (kids, col) => React.createElement("div", { style: { background: llqaAlpha(col || c.accent, "12"), border: "1px solid " + llqaAlpha(col || c.accent, "44"), borderRadius: 8, padding: "8px 10px", fontSize: 12, color: c.text, marginBottom: 10 } }, kids);
+const llqaV77Grid = (kids) => React.createElement("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: "0 10px" } }, kids);
+
+// income that isn't a monthly fee
+const LLQAIncomeWin = ({ onClose }) => {
+  const ctx = LLQAApp.ctx;
+  const [f, setF] = useState({ category: LLQA_INCOME_TYPES[0], payer: "", studentId: "", amount: "", currency: "PKR", paidDate: todayPK(), gateway: "Bank Transfer", receipt: "", pkrReceived: "", notes: "" });
+  const stu = [{ value: "", label: "— none —" }, ...(ctx.students || []).filter((x) => x && x.status !== "quit").sort((a, b) => String(a.name).localeCompare(String(b.name))).map((x) => ({ value: String(x.id), label: x.name + (x.parent ? " — " + x.parent : "") }))];
+  const save = () => {
+    if (!(Number(f.amount) > 0)) return alert("Enter the amount received.");
+    if (!f.studentId && !String(f.payer).trim()) return alert("Enter who paid, or choose the student.");
+    const rec = llqaRecordIncome(f);
+    if (!rec) return alert("Income can't be saved from here.");
+    onClose();
+    llqaToast({ kind: "info", ttl: 8000, text: "✓ " + rec.category + " recorded: " + llqaAmt(rec.amount, rec.currency) + " from " + (rec.payer || rec.studentName) + " — receipt " + rec.receiptNo + "." });
+  };
+  return llqaShell(
+    "➕ Other income",
+    "Registration and certificate fees, books, donations — money in that isn't a monthly fee (it never counts against a fee).",
+    React.createElement(
+      "div",
+      null,
+      llqaV77Grid([
+        React.createElement(Inp, { key: "t", label: "Type", value: f.category, onChange: (v) => setF({ ...f, category: v }), options: LLQA_INCOME_TYPES }),
+        React.createElement(Inp, { key: "p", label: "Received from", value: f.payer, onChange: (v) => setF({ ...f, payer: v }), placeholder: "Name" }),
+        React.createElement(Inp, { key: "s", label: "Student (optional)", value: f.studentId, onChange: (v) => setF({ ...f, studentId: v }), options: stu }),
+        React.createElement(Inp, { key: "a", label: "Amount received", type: "number", value: f.amount, onChange: (v) => setF({ ...f, amount: v }) }),
+        React.createElement(Inp, { key: "c", label: "Currency", value: f.currency, onChange: (v) => setF({ ...f, currency: v }), options: ["PKR", "USD", "CAD", "GBP", "EUR", "AED", "AUD", "SAR"] }),
+        React.createElement(Inp, { key: "d", label: "Date received", type: "date", value: f.paidDate, onChange: (v) => setF({ ...f, paidDate: v }) }),
+        React.createElement(Inp, { key: "g", label: "Paid by", value: f.gateway, onChange: (v) => setF({ ...f, gateway: v }), options: LLQA_GATEWAYS }),
+        React.createElement(Inp, { key: "r", label: "Reference (optional)", value: f.receipt, onChange: (v) => setF({ ...f, receipt: v }) }),
+        llqaCurOf(f.currency) !== "PKR" ? React.createElement(Inp, { key: "k", label: "PKR received (optional)", type: "number", value: f.pkrReceived, onChange: (v) => setF({ ...f, pkrReceived: v }) }) : null,
+      ]),
+      React.createElement(Inp, { label: "Note (optional)", value: f.notes, onChange: (v) => setF({ ...f, notes: v }) }),
+    ),
+    [llqaMini("Cancel", onClose, { key: "x", big: true }), llqaMini("✓ Save income", save, { key: "ok", big: true, solid: true, tone: "success" })],
+    { onClose, width: 640 },
+  );
+};
+
+// a family's fees owed: the date they gave, stop / resume reminders, write off, history
+const LLQAChaseWin = ({ studentId, onClose }) => {
+  const ctx = LLQAApp.ctx;
+  const s = llqaFindStudent(studentId);
+  const today = todayPK();
+  const [date, setDate] = useState(() => (s && llqaChase(s).promise ? llqaChase(s).promise.date : llqaAddDays(today, 7)));
+  const [note, setNote] = useState("");
+  const [why, setWhy] = useState("");
+  if (!s) return llqaShell("Fee recovery", "This family is no longer in the CRM.", null, [llqaMini("Close", onClose, { key: "x", big: true })], { onClose });
+  const gone = s.status === "quit";
+  const cy = gone ? llqaFeeGone(s, today) : llqaFeeCycle(s, ctx.arPayments, today);
+  const ch = llqaChase(s);
+  const can = llqaCanChase();
+  const open = cy ? cy.months.filter((m) => m.left > 0) : [];
+  const wo = Array.isArray(s.feeWo) ? s.feeWo : [];
+  const fs = !gone && cy ? llqaFeeStage(s, cy, today) : null;
+  const lf = gone && cy ? llqaLeftDue(s, cy, today) : null;
+  const remind = () => {
+    onClose();
+    const extra = { fee: llqaOwedText(cy), deadline: llqaDateLabel(llqaAddDays(today, 3)), promise: ch.promise ? llqaDateLabel(ch.promise.date) : "" };
+    const tpl = lf ? lf.tpl : fs ? fs.tpl : gone ? "feeLeft" : "feeOverdue";
+    llqaOpen("message", { studentId: s.id, template: tpl, extra: lf ? lf.extra : fs ? { ...extra, fee: llqaFeeText(fs, cy) } : extra, msgKey: lf ? lf.key : fs ? fs.key : undefined });
+  };
+  const done = (ok, txt) => {
+    if (!ok) return alert("Only an admin, or a role given \"Fee Recovery\", can do this.");
+    llqaToast({ kind: "info", ttl: 6000, text: "✓ " + txt });
+    onClose();
+  };
+  const sec = (title, kids) => React.createElement("div", { key: title, style: { borderTop: "1px solid " + c.border, paddingTop: 10, marginTop: 10 } }, React.createElement("div", { style: { fontWeight: 700, fontSize: 12, marginBottom: 6, color: c.text } }, llqaIconize(title, { size: 13, keep: true, gap: 6 })), kids);
+  const hist = (Array.isArray(s.feeChaseLog) ? s.feeChaseLog : []).slice().reverse();
+  return llqaShell(
+    "💸 Fees owed — " + s.name,
+    (s.parent ? s.parent + " · " : "") + (gone ? "Left " + llqaDateLabel(String(s.qDate).slice(0, 10)) + (s.qReason ? " (" + s.qReason + ")" : "") : "With the academy") + (llqaPhone(s.phone, s.country) ? " · " + s.phone : ""),
+    React.createElement(
+      "div",
+      null,
+      llqaV77Box(
+        open.length
+          ? [React.createElement("div", { key: "o", style: { fontWeight: 700 } }, "Owed: " + llqaOwedText(cy)), llqaSmall(open.map((m) => llqaMonthLabel(m.ym) + " — " + m.left + " " + cy.cur + " left of " + m.fee + " (due " + llqaDateLabel(m.due) + ")").join(" · "), null, "m")]
+          : [React.createElement("div", { key: "o", style: { fontWeight: 700 } }, "Nothing owed now."), wo.length ? llqaSmall("Written off: " + wo.map((w) => llqaMonthLabel(w.ym) + " " + w.amt + " " + (w.cur || "")).join(", "), null, "w") : null],
+        open.length ? c.warn : c.success,
+      ),
+      llqaChaseText(s, today) ? llqaV77Box(llqaChaseText(s, today), c.accent) : null,
+      React.createElement(
+        "div",
+        { style: { display: "flex", gap: 8, flexWrap: "wrap" } },
+        llqaMini("💰 Record payment", () => llqaOpen("payment", { studentId: s.id }), { key: "pay", big: true, tone: "success" }),
+        open.length && llqaPhone(s.phone, s.country) ? llqaMini("💬 Send a reminder now", remind, { key: "rem", big: true }) : null,
+      ),
+      can && open.length
+        ? sec("📅 Will pay by a date (reminders wait until then, then one reminder that day)", [
+            llqaV77Grid([
+              React.createElement(Inp, { key: "d", label: "Will pay by", type: "date", value: date, onChange: setDate }),
+              React.createElement(Inp, { key: "n", label: "Note (optional)", value: note, onChange: setNote, placeholder: "What the family said" }),
+            ]),
+            React.createElement(
+              "div",
+              { key: "b", style: { display: "flex", gap: 8 } },
+              llqaMini("✓ Save date", () => (llqaIsDay(date) && date >= today ? done(llqaChasePromise(s, date, note), s.name + " will pay by " + llqaDateLabel(date) + " — reminders wait until then.") : alert("Choose today or a later date.")), { key: "ok", tone: "accent", solid: true }),
+              ch.promise ? llqaMini("Clear the date", () => done(llqaChasePromise(s, ""), "Pay-by date cleared for " + s.name + "."), { key: "cl" }) : null,
+            ),
+          ])
+        : null,
+      can && (open.length || ch.stop)
+        ? sec(ch.stop ? "▶ Reminders are stopped" : "⏸ Stop the reminders (an admin decides)", [
+            ch.stop
+              ? llqaMini("▶ Turn reminders on again", () => done(llqaChaseResume(s), "Reminders on again for " + s.name + "."), { key: "on", tone: "success" })
+              : React.createElement(
+                  "div",
+                  { key: "st" },
+                  React.createElement(Inp, { label: "Why (optional)", value: why, onChange: setWhy, placeholder: "e.g. paying in person, family emergency" }),
+                  llqaMini("⏸ Stop reminders", () => done(llqaChaseStop(s, why), "Reminders stopped for " + s.name + "."), { key: "stop", tone: "warn" }),
+                ),
+          ])
+        : null,
+      can && open.length
+        ? sec("✖ Write off what is owed", [
+            React.createElement(Inp, { key: "w", label: "Reason (needed)", value: why, onChange: setWhy, placeholder: "e.g. family can't pay, agreed with the admin" }),
+            llqaMini("✖ Write off " + llqaOwedText(cy), () => (String(why).trim() ? done(llqaChaseWriteOff(s, cy, why), "Written off for " + s.name + ": " + llqaOwedText(cy) + ".") : alert("Write the reason first.")), { key: "wo", tone: "danger" }),
+            llqaSmall("Reminders stop. If the family pays later, record it against the month: the write-off shrinks by what was paid.", null, "h"),
+          ])
+        : null,
+      can && wo.length ? sec("↺ Fees written off before", [llqaMini("↺ Undo the write-off (owed again)", () => done(llqaChaseUndoWo(s), "Write-off undone for " + s.name + "."), { key: "un" })]) : null,
+      hist.length ? sec("History", hist.slice(0, 8).map((h, i) => llqaSmall(llqaDateLabel(String(h.at).slice(0, 10)) + " · " + (h.by || "") + " — " + h.what, null, "h" + i))) : null,
+      !can ? llqaSmall("Only an admin, or a role given \"Fee Recovery\", can set a date, stop reminders or write fees off.", null, "na") : null,
+    ),
+    [llqaMini("Close", onClose, { key: "x", big: true })],
+    { onClose, width: 640 },
+  );
+};
+
+// correct a payment (each change kept with who and when)
+const LLQAPayEditWin = ({ payId, onClose }) => {
+  const ctx = LLQAApp.ctx;
+  const p = (ctx.arPayments || []).find((x) => x && String(x.id) === String(payId));
+  const [f, setF] = useState(() => (p ? { amount: String(p.amount), currency: p.currency || "USD", paidDate: p.paidDate || "", month: String(p.month || "").slice(0, 7), gateway: p.gateway || "Bank Transfer", receipt: p.receipt || "", pkrReceived: p.pkrReceived ? String(p.pkrReceived) : "", notes: p.notes || "", category: p.category || "", payer: p.payer || "" } : {}));
+  if (!p) return llqaShell("Payment", "This payment is no longer here.", null, [llqaMini("Close", onClose, { key: "x", big: true })], { onClose });
+  const other = p.type === "other";
+  const save = () => {
+    if (!(Number(f.amount) > 0)) return alert("Enter the amount.");
+    const patch = { amount: llqaR2(f.amount), currency: f.currency, paidDate: f.paidDate, gateway: f.gateway, receipt: f.receipt, notes: f.notes, pkrReceived: llqaCurOf(f.currency) !== "PKR" && Number(f.pkrReceived) > 0 ? Math.round(Number(f.pkrReceived)) : "" };
+    if (!other && /^\d{4}-\d{2}$/.test(f.month)) patch.month = f.month;
+    if (other) Object.assign(patch, { category: f.category, payer: f.payer });
+    llqaPayEdit(p, patch);
+    onClose();
+    llqaToast({ kind: "info", ttl: 5000, text: "✓ Payment " + (p.receiptNo || "") + " corrected." });
+  };
+  const edits = (Array.isArray(p.edits) ? p.edits : []).slice().reverse();
+  return llqaShell(
+    "✎ Correct a payment" + (p.receiptNo ? " — " + p.receiptNo : ""),
+    (p.studentName || p.payer || "") + " · posted " + (p.postedBy ? "by " + p.postedBy + " " : "") + (p.postedAt ? llqaDateLabel(String(p.postedAt).slice(0, 10)) : ""),
+    React.createElement(
+      "div",
+      null,
+      llqaV77Grid([
+        other ? React.createElement(Inp, { key: "t", label: "Type", value: f.category, onChange: (v) => setF({ ...f, category: v }), options: LLQA_INCOME_TYPES }) : null,
+        other ? React.createElement(Inp, { key: "p", label: "Received from", value: f.payer, onChange: (v) => setF({ ...f, payer: v }) }) : null,
+        React.createElement(Inp, { key: "a", label: "Amount", type: "number", value: f.amount, onChange: (v) => setF({ ...f, amount: v }) }),
+        React.createElement(Inp, { key: "c", label: "Currency", value: f.currency, onChange: (v) => setF({ ...f, currency: v }), options: ["USD", "CAD", "GBP", "EUR", "AED", "AUD", "SAR", "PKR"] }),
+        React.createElement(Inp, { key: "d", label: "Date received", type: "date", value: f.paidDate, onChange: (v) => setF({ ...f, paidDate: v }) }),
+        !other ? React.createElement(Inp, { key: "m", label: "For month", type: "month", value: f.month, onChange: (v) => setF({ ...f, month: v }) }) : null,
+        React.createElement(Inp, { key: "g", label: "Paid by", value: f.gateway, onChange: (v) => setF({ ...f, gateway: v }), options: LLQA_GATEWAYS }),
+        React.createElement(Inp, { key: "r", label: "Bank / gateway reference", value: f.receipt, onChange: (v) => setF({ ...f, receipt: v }) }),
+        llqaCurOf(f.currency) !== "PKR" ? React.createElement(Inp, { key: "k", label: "PKR received (optional)", type: "number", value: f.pkrReceived, onChange: (v) => setF({ ...f, pkrReceived: v }) }) : null,
+      ]),
+      React.createElement(Inp, { label: "Note", value: f.notes, onChange: (v) => setF({ ...f, notes: v }) }),
+      edits.length ? React.createElement("div", { style: { marginTop: 6 } }, edits.slice(0, 6).map((e, i) => llqaSmall(llqaDateLabel(String(e.at).slice(0, 10)) + " · " + (e.by || "") + " changed " + Object.keys(e.was || {}).map((k) => k + " (was " + e.was[k] + ")").join(", "), null, "e" + i))) : null,
+    ),
+    [llqaMini("Cancel", onClose, { key: "x", big: true }), llqaMini("✓ Save changes", save, { key: "ok", big: true, solid: true, tone: "success" })],
+    { onClose, width: 640 },
+  );
+};
+
+// remove a payment or a bill: the reason is kept with it, and it can be put back
+const LLQARemoveWin = ({ kind, id, onClose }) => {
+  const ctx = LLQAApp.ctx;
+  const [why, setWhy] = useState("");
+  const bill = kind === "bill";
+  const x = bill ? (ctx.apLiabilities || []).find((l) => l && String(l.id) === String(id)) : (ctx.arPayments || []).find((p) => p && String(p.id) === String(id));
+  if (!x) return llqaShell("Remove", "Already removed.", null, [llqaMini("Close", onClose, { key: "x", big: true })], { onClose });
+  const what = bill ? x.vendor + " — " + llqaAmt(x.amount, x.currency || "PKR") + (x.dueDate ? " due " + llqaDateLabel(x.dueDate) : "") : (x.studentName || x.payer || "") + " — " + llqaAmt(x.amount, x.currency || "USD") + " on " + llqaDateLabel(x.paidDate) + (x.receiptNo ? " (" + x.receiptNo + ")" : "");
+  const go = () => {
+    if (!String(why).trim()) return alert("Write why it is removed.");
+    const ok = bill ? llqaApRemove(x, why) : llqaPayRemove(x, why);
+    if (!ok) return alert("It can't be removed from here.");
+    onClose();
+    llqaToast({ kind: "info", ttl: 7000, text: "🗑 Removed: " + what + ". Kept under Removed with the reason; an admin can put it back." });
+  };
+  return llqaShell(
+    "🗑 Remove " + (bill ? "a bill" : "a payment"),
+    what,
+    React.createElement("div", null, React.createElement(Inp, { label: "Why is it removed? (kept with it)", value: why, onChange: setWhy, placeholder: bill ? "e.g. entered twice, cancelled" : "e.g. entered twice, payment bounced" }), llqaSmall(bill ? "The bill leaves Accounts Payable and the Finance page." : "The payment leaves the family's fees: the months it paid are owed again.", null, "h")),
+    [llqaMini("Cancel", onClose, { key: "x", big: true }), llqaMini("🗑 Remove", go, { key: "ok", big: true, solid: true, tone: "danger" })],
+    { onClose, width: 560 },
+  );
+};
+
+// add or change a bill
+const LLQA_AP_CATS = ["Salaries", "Rent", "Utilities", "Software/SaaS", "Marketing", "Equipment", "Internet/Telecom", "Bank/Fees", "Taxes", "Vendor Services", "Other"];
+const LLQAApBillWin = ({ billId, paid, onClose }) => {
+  const ctx = LLQAApp.ctx;
+  const l = billId != null ? (ctx.apLiabilities || []).find((x) => x && String(x.id) === String(billId)) : null;
+  const rp = (l && l.repeat) || {};
+  const [f, setF] = useState(() => ({
+    vendor: l ? l.vendor || "" : "",
+    category: l ? l.category || "Other" : "Vendor Services",
+    amount: l ? String(l.amount || "") : "",
+    currency: l ? l.currency || "PKR" : "PKR",
+    dueDate: l ? l.dueDate || "" : todayPK(),
+    repeat: rp.every || "",
+    varies: !!rp.varies,
+    until: rp.until || "",
+    reference: l ? l.reference || "" : "",
+    notes: l ? l.notes || "" : "",
+    paidNow: !l && !!paid,
+    method: "Bank Transfer",
+  }));
+  const vendors = [...new Set((ctx.apLiabilities || []).map((x) => x && String(x.vendor || "").trim()).filter(Boolean))].sort();
+  const save = () => {
+    if (!String(f.vendor).trim()) return alert("Enter the vendor / payee.");
+    if (!(Number(f.amount) > 0)) return alert("Enter the amount.");
+    if (f.repeat && !llqaIsDay(f.dueDate)) return alert("A repeating bill needs its due date.");
+    const bill = {
+      ...(l || {}),
+      vendor: String(f.vendor).trim(),
+      category: f.category,
+      amount: llqaR2(f.amount),
+      currency: f.currency,
+      dueDate: f.dueDate,
+      repeat: f.repeat ? { every: f.repeat, day: parseInt(String(f.dueDate).slice(8, 10), 10) || 1, varies: !!f.varies, until: llqaIsDay(f.until) ? f.until : "" } : null,
+      estimate: false,
+      reference: f.reference,
+      notes: f.notes,
+    };
+    const out = llqaApSave(bill);
+    if (!out) return alert("Bills can't be saved from here.");
+    if (!l && f.paidNow) llqaApPay(out, { amount: out.amount, date: llqaIsDay(f.dueDate) && f.dueDate <= todayPK() ? f.dueDate : todayPK(), method: f.method });
+    onClose();
+    llqaToast({ kind: "info", ttl: 6000, text: "✓ Bill " + (l ? "updated" : "added") + ": " + bill.vendor + " " + llqaAmt(bill.amount, bill.currency) + (bill.repeat ? " — " + LLQA_AP_REPEAT_NAME[bill.repeat.every].toLowerCase() + ", the next one appears by itself" : "") + (f.paidNow && !l ? " (paid)" : "") + "." });
+  };
+  return llqaShell(
+    l ? "✎ Edit bill" : "🧾 Add a bill",
+    l && l.estimate ? "The amount was copied from the last bill — enter this time's amount." : "Rent, internet, software, electricity… A repeating bill brings the next one by itself.",
+    React.createElement(
+      "div",
+      null,
+      llqaV77Grid([
+        React.createElement(Inp, { key: "v", label: "Vendor / payee", value: f.vendor, onChange: (v) => setF({ ...f, vendor: v }), placeholder: vendors.slice(0, 3).join(", ") || "e.g. landlord, PTCL" }),
+        React.createElement(Inp, { key: "c", label: "Category", value: f.category, onChange: (v) => setF({ ...f, category: v }), options: LLQA_AP_CATS }),
+        React.createElement(Inp, { key: "a", label: "Amount", type: "number", value: f.amount, onChange: (v) => setF({ ...f, amount: v }) }),
+        React.createElement(Inp, { key: "u", label: "Currency", value: f.currency, onChange: (v) => setF({ ...f, currency: v }), options: ["PKR", "USD", "CAD", "GBP", "EUR", "AED"] }),
+        React.createElement(Inp, { key: "d", label: "Due date", type: "date", value: f.dueDate, onChange: (v) => setF({ ...f, dueDate: v }) }),
+        React.createElement(Inp, { key: "r", label: "Repeats", value: f.repeat, onChange: (v) => setF({ ...f, repeat: v }), options: [{ value: "", label: "Doesn't repeat" }, ...Object.keys(LLQA_AP_REPEAT).map((k) => ({ value: k, label: LLQA_AP_REPEAT_NAME[k] }))] }),
+        f.repeat ? React.createElement(Inp, { key: "e", label: "Ends on (optional)", type: "date", value: f.until, onChange: (v) => setF({ ...f, until: v }) }) : null,
+        React.createElement(Inp, { key: "f", label: "Reference (optional)", value: f.reference, onChange: (v) => setF({ ...f, reference: v }) }),
+      ]),
+      f.repeat
+        ? React.createElement(
+            "label",
+            { style: { display: "flex", gap: 8, alignItems: "center", color: c.text, fontSize: 12, cursor: "pointer", marginBottom: 10 } },
+            React.createElement("input", { type: "checkbox", checked: f.varies, onChange: (e) => setF({ ...f, varies: e.target.checked }) }),
+            "The amount changes each time (electricity…): the next bill copies this amount and asks you to confirm it",
+          )
+        : null,
+      React.createElement(Inp, { label: "Note (optional)", value: f.notes, onChange: (v) => setF({ ...f, notes: v }) }),
+      f.category === "Salaries" ? llqaSmall("Teachers' salaries come from Payroll by themselves — use this for staff who aren't in Payroll.", c.warn, "sal") : null,
+      !l
+        ? React.createElement(
+            "div",
+            { style: { display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginTop: 6 } },
+            React.createElement("label", { style: { display: "flex", gap: 8, alignItems: "center", color: c.text, fontSize: 12, cursor: "pointer" } }, React.createElement("input", { type: "checkbox", checked: f.paidNow, onChange: (e) => setF({ ...f, paidNow: e.target.checked }) }), "Already paid (an expense)"),
+            f.paidNow ? llqaSel(f.method, (v) => setF({ ...f, method: v }), LLQA_AP_METHODS, { key: "m", title: "Paid by" }) : null,
+          )
+        : null,
+    ),
+    [llqaMini("Cancel", onClose, { key: "x", big: true }), llqaMini("✓ Save bill", save, { key: "ok", big: true, solid: true, tone: "success" })],
+    { onClose, width: 680 },
+  );
+};
+
+// pay a bill (all or part); the payments so far; the vendor's bank details
+const LLQAApPayWin = ({ billId, onClose }) => {
+  const ctx = LLQAApp.ctx;
+  const l = (ctx.apLiabilities || []).find((x) => x && String(x.id) === String(billId));
+  const [f, setF] = useState(() => ({ amount: l ? String(llqaApLeft(l) || "") : "", date: todayPK(), method: "Bank Transfer", ref: "", note: "" }));
+  if (!l) return llqaShell("Pay a bill", "This bill is no longer here.", null, [llqaMini("Close", onClose, { key: "x", big: true })], { onClose });
+  const vd = llqaApVendor(l.vendor);
+  const pays = (Array.isArray(l.pays) ? l.pays : []).slice().sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  const go = () => {
+    if (!(Number(f.amount) > 0)) return alert("Enter the amount paid.");
+    if (Number(f.amount) > llqaApLeft(l) + 0.005 && !confirm("That is more than is left on the bill (" + llqaAmt(llqaApLeft(l), l.currency) + "). Save it anyway?")) return;
+    llqaApPay(l, f);
+    onClose();
+    llqaToast({ kind: "info", ttl: 6000, text: "✓ Paid " + llqaAmt(f.amount, l.currency || "PKR") + " to " + l.vendor + "." });
+  };
+  return llqaShell(
+    "💳 Pay — " + l.vendor,
+    (l.category || "") + " · " + llqaAmt(l.amount, l.currency || "PKR") + (l.dueDate ? " · due " + llqaDateLabel(l.dueDate) : "") + " · " + llqaAmt(llqaApLeft(l), l.currency || "PKR") + " left",
+    React.createElement(
+      "div",
+      null,
+      vd && (vd.bank || vd.account || vd.phone) ? llqaV77Box([vd.bank ? "💳 " + vd.bank + " " : "", vd.account ? "· " + vd.account + " " : "", vd.title ? "· " + vd.title + " " : "", vd.phone ? "· 📞 " + vd.phone : ""].join(""), c.accent) : null,
+      l.estimate ? llqaV77Box("The amount was copied from the last bill — check it (Edit) before paying.", c.warn) : null,
+      llqaV77Grid([
+        React.createElement(Inp, { key: "a", label: "Amount paid", type: "number", value: f.amount, onChange: (v) => setF({ ...f, amount: v }) }),
+        React.createElement(Inp, { key: "d", label: "Date paid", type: "date", value: f.date, onChange: (v) => setF({ ...f, date: v }) }),
+        React.createElement(Inp, { key: "m", label: "Paid by", value: f.method, onChange: (v) => setF({ ...f, method: v }), options: LLQA_AP_METHODS }),
+        React.createElement(Inp, { key: "r", label: "Reference (optional)", value: f.ref, onChange: (v) => setF({ ...f, ref: v }), placeholder: "Transaction / cheque no." }),
+      ]),
+      React.createElement(Inp, { label: "Note (optional)", value: f.note, onChange: (v) => setF({ ...f, note: v }) }),
+      pays.length
+        ? React.createElement(
+            "div",
+            null,
+            React.createElement("div", { style: { fontWeight: 700, fontSize: 12, margin: "6px 0" } }, "Paid so far"),
+            pays.map((p) =>
+              React.createElement(
+                "div",
+                { key: p.id, style: { display: "flex", gap: 8, alignItems: "center", fontSize: 12, padding: "3px 0" } },
+                React.createElement("span", { style: { flex: 1 } }, llqaDateLabel(p.date) + " · " + llqaAmt(p.amount, l.currency || "PKR") + (p.method ? " · " + p.method : "") + (p.ref ? " · " + p.ref : "") + (p.by ? " · by " + p.by : p.before ? " · (before)" : "")),
+                llqaCanManage() && !p.before ? llqaMini("Undo", () => confirm("Undo this payment of " + llqaAmt(p.amount, l.currency || "PKR") + "?") && (llqaApUnpay(l, p.id), onClose()), { key: "u" }) : null,
+              ),
+            ),
+          )
+        : null,
+    ),
+    [llqaMini("Cancel", onClose, { key: "x", big: true }), llqaMini("✓ Save payment", go, { key: "ok", big: true, solid: true, tone: "success" })],
+    { onClose, width: 600 },
+  );
+};
+
+// a vendor's details, kept once
+const LLQAApVendorWin = ({ name, onClose }) => {
+  const vd = llqaApVendor(name) || {};
+  const [f, setF] = useState({ phone: vd.phone || "", bank: vd.bank || "", title: vd.title || "", account: vd.account || "", notes: vd.notes || "" });
+  const save = () => {
+    if (!llqaApSetVendor(name, f)) return alert("Vendor details can't be saved from here.");
+    onClose();
+    llqaToast({ kind: "info", ttl: 5000, text: "✓ Details saved for " + name + "." });
+  };
+  return llqaShell(
+    "📋 " + name,
+    "Kept once and shown when you pay this vendor.",
+    llqaV77Grid([
+      React.createElement(Inp, { key: "p", label: "Phone", value: f.phone, onChange: (v) => setF({ ...f, phone: v }) }),
+      React.createElement(Inp, { key: "b", label: "Bank", value: f.bank, onChange: (v) => setF({ ...f, bank: v }), placeholder: "e.g. Faysal Bank" }),
+      React.createElement(Inp, { key: "t", label: "Account title", value: f.title, onChange: (v) => setF({ ...f, title: v }) }),
+      React.createElement(Inp, { key: "a", label: "Account no. / IBAN", value: f.account, onChange: (v) => setF({ ...f, account: v }) }),
+      React.createElement(Inp, { key: "n", label: "Note", value: f.notes, onChange: (v) => setF({ ...f, notes: v }) }),
+    ]),
+    [llqaMini("Cancel", onClose, { key: "x", big: true }), llqaMini("✓ Save details", save, { key: "ok", big: true, solid: true, tone: "success" })],
+    { onClose, width: 600 },
+  );
+};
+
+// a family's invoice for a month: view, print, send on WhatsApp
+const llqaInvNo = (s, ym) => "INV-" + String(ym).replace("-", "") + "-" + String((s && (s.code || s.id)) || "").replace(/[^A-Za-z0-9]/g, "");
+const llqaAcademy = () => {
+  const a = ((LLQAApp.ctx || {}).appSettings || {});
+  return a.academyName || a.orgName || a.name || "Let's Learn Quran Academy";
+};
+const LLQAInvoiceWin = ({ studentId, ym, onClose }) => {
+  const ctx = LLQAApp.ctx;
+  const s = llqaFindStudent(studentId);
+  const cy = !s ? null : s.status === "quit" ? llqaFeeGone(s) : llqaFeeCycle(s, ctx.arPayments);
+  const m = cy ? cy.months.find((x) => x.ym === ym) : null;
+  if (!s || !m) return llqaShell("Invoice", "No bill for that month.", null, [llqaMini("Close", onClose, { key: "x", big: true })], { onClose });
+  const no = llqaInvNo(s, ym);
+  const st = m.left === 0 && m.wo > 0 && m.paid < m.fee ? "Written off" : (LLQA_FEE_STATES[m.state] || [m.state])[0];
+  const lines = [
+    ["Invoice", no],
+    ["Bill to", s.parent || s.name],
+    ["Student", s.name + (s.code ? " (" + s.code + ")" : "")],
+    ["Course", s.course || ""],
+    ["Month", llqaMonthLabel(ym)],
+    ["Due", llqaDateLabel(m.due)],
+    ["Fee", m.fee + " " + cy.cur + (m.off ? " (after " + m.off + " " + cy.cur + " referral reward)" : "")],
+    ["Paid", m.paid + " " + cy.cur + ((m.pays || []).length ? " — " + m.pays.map((p) => llqaDateLabel(p.paidDate) + (p.receiptNo ? " " + p.receiptNo : "")).join(", ") : "")],
+    ...(m.wo ? [["Written off", m.wo + " " + cy.cur]] : []),
+    ["Balance", m.left + " " + cy.cur],
+    ["Status", st],
+  ];
+  const print = () => {
+    const w = window.open("", "_blank");
+    if (!w) return;
+    const esc = (t) => String(t).replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[ch]);
+    w.document.write("<html><head><title>" + esc(no) + "</title><style>body{font-family:Arial,sans-serif;padding:32px;color:#111}h1{font-size:20px;margin:0 0 4px}table{border-collapse:collapse;margin-top:18px;width:100%;max-width:560px}td{padding:7px 10px;border-bottom:1px solid #ddd;font-size:13px}td:first-child{color:#555;width:140px}</style></head><body><h1>" + esc(llqaAcademy()) + "</h1><div>Fee invoice</div><table>" + lines.map((r) => "<tr><td>" + esc(r[0]) + "</td><td>" + esc(r[1]) + "</td></tr>").join("") + "</table></body></html>");
+    w.document.close();
+    if (w.print) w.print();
+  };
+  const send = () => {
+    onClose();
+    llqaOpen("message", { studentId: s.id, template: "feeInvoice", extra: { invoice: no, month: llqaMonthLabel(ym), fee: (m.left || m.fee) + " " + cy.cur, due: llqaDateLabel(m.due) } });
+  };
+  return llqaShell(
+    "🧾 " + no,
+    llqaAcademy() + " · fee invoice",
+    llqaTable(["", ""], lines.map((r) => React.createElement("tr", { key: r[0] }, llqaTd(r[0], "a", { color: c.textSec, width: 140 }), llqaTd(r[1], "b", { fontWeight: r[0] === "Balance" ? 700 : 400 })))),
+    [
+      llqaMini("Close", onClose, { key: "x", big: true }),
+      llqaMini("⎙ Print / PDF", print, { key: "p", big: true }),
+      llqaPhone(s.phone, s.country) ? llqaMini("💬 Send on WhatsApp", send, { key: "w", big: true, solid: true, tone: "success" }) : null,
+    ],
+    { onClose, width: 600 },
+  );
+};
+
+// Settings → Finance
+const LLQAFinSettings = () => {
+  const ctx = LLQAApp.ctx;
+  const can = llqaCanManage();
+  const a = ctx.automation || {};
+  const get = (k) => (a[k] != null ? a[k] : LLQA_V67_DEFAULTS[k]);
+  const [budget, setBudget] = useState(() => ({ ...(get("budgets") || {}) }));
+  const cs = get("cashStart") || {};
+  const [cash, setCash] = useState({ date: cs.date || todayPK(), amount: cs.amount != null ? String(cs.amount) : "" });
+  const set = (patch) => (can ? llqaSetOpt(patch) : alert("Only an admin can change these."));
+  const row = (label, sub, ctl, k) =>
+    React.createElement(
+      "div",
+      { key: k, style: { display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px solid " + llqaAlpha(c.border, "66"), flexWrap: "wrap" } },
+      React.createElement("div", { style: { flex: "1 1 260px" } }, React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: c.text } }, label), sub ? llqaSmall(sub, null, "s") : null),
+      ctl,
+    );
+  const num = (k, v, min, label) =>
+    React.createElement("input", { key: k, type: "number", "aria-label": label, min, value: v, disabled: !can, onChange: (e) => set({ [k]: Math.max(min, parseInt(e.target.value, 10) || 0) }), style: { ...llqaSelectStyle, width: 80 } });
+  const onOff = (k, label) =>
+    llqaMini(get(k) !== false ? "On" : "Off", () => set({ [k]: get(k) === false }), { key: k, tone: get(k) !== false ? "success" : undefined, solid: get(k) !== false, title: label });
+  return React.createElement(
+    React.Fragment,
+    null,
+    React.createElement(
+      SettingCard,
+      { title: "Fees owed — families who left", icon: AlertTriangle },
+      row("Keep reminding families who left owing fees", "Their fees stay in Accounts Receivable → Monthly Recovery Record until paid. An admin can stop it for a family, set the date they will pay, or write the fees off.", onOff("leftChase", "Keep reminding families who left owing"), "lc"),
+      row("Remind them every", "Days between reminders (the first comes 3 days after they left).", React.createElement("span", { key: "le" }, num("leftEvery", get("leftEvery"), 3, "Days between reminders"), " days"), "le"),
+    ),
+    React.createElement(
+      SettingCard,
+      { title: "Bills to pay", icon: Receipt },
+      row("Tell the office about a bill", "Days before it is due (and every day once it is overdue), once a day.", React.createElement("span", { key: "br" }, num("billRemind", get("billRemind"), 0, "Days before a bill is due"), " days before"), "br"),
+      row("A repeating bill's next one appears", "Days before it is due (rent, internet, software…).", React.createElement("span", { key: "ba" }, num("billAhead", get("billAhead"), 0, "Days before a repeating bill"), " days before"), "ba"),
+    ),
+    React.createElement(
+      SettingCard,
+      { title: "Receipts and cash", icon: DollarSign },
+      row("Receipt numbers start with", "Each payment gets the next number of its year, e.g. " + llqaReceiptPrefix() + "-" + todayPK().slice(0, 4) + "-0001.", React.createElement("input", { key: "rp", "aria-label": "Receipt number prefix", value: get("receiptPrefix") || "", disabled: !can, onChange: (e) => set({ receiptPrefix: e.target.value.slice(0, 16) }), style: { ...llqaSelectStyle, width: 120 } }), "rp"),
+      row(
+        "Money in hand on a day",
+        "The Finance page's Cash Flow starts from it: this amount + money in − money out since.",
+        React.createElement(
+          "span",
+          { key: "cs", style: { display: "flex", gap: 6, alignItems: "center" } },
+          React.createElement("input", { type: "date", "aria-label": "Cash in hand on", value: cash.date, disabled: !can, onChange: (e) => setCash({ ...cash, date: e.target.value }), style: llqaSelectStyle }),
+          React.createElement("input", { type: "number", "aria-label": "Cash in hand (PKR)", value: cash.amount, disabled: !can, placeholder: "PKR", onChange: (e) => setCash({ ...cash, amount: e.target.value }), style: { ...llqaSelectStyle, width: 110 } }),
+          llqaMini("Save", () => (llqaIsDay(cash.date) && cash.amount !== "" ? set({ cashStart: { date: cash.date, amount: Number(cash.amount) || 0 } }) : set({ cashStart: null })), { key: "s" }),
+        ),
+        "cs",
+      ),
+    ),
+    React.createElement(
+      SettingCard,
+      { title: "Monthly budgets (PKR)", icon: BarChart3 },
+      React.createElement(
+        "div",
+        { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: "6px 12px" } },
+        LLQA_AP_CATS.map((k) =>
+          React.createElement(
+            "label",
+            { key: k, style: { fontSize: 11, color: c.textSec, display: "flex", flexDirection: "column", gap: 3 } },
+            k,
+            React.createElement("input", { type: "number", "aria-label": "Budget " + k, value: budget[k] != null ? budget[k] : "", disabled: !can, onChange: (e) => setBudget({ ...budget, [k]: e.target.value }), style: llqaSelectStyle }),
+          ),
+        ),
+      ),
+      React.createElement("div", { style: { marginTop: 8 } }, llqaMini("✓ Save budgets", () => set({ budgets: Object.fromEntries(Object.entries(budget).filter(([, v]) => Number(v) > 0).map(([k2, v]) => [k2, Number(v)])) }), { key: "sb", tone: "success", solid: true, disabled: !can })),
+      llqaSmall("The Finance page shows each month's spending against these (Expenses → Budget vs actual).", null, "h"),
+    ),
+  );
+};
+
+Object.assign(LLQA_MODALS3, { income: LLQAIncomeWin, chase: LLQAChaseWin, payEdit: LLQAPayEditWin, remove: LLQARemoveWin, apBill: LLQAApBillWin, apPay: LLQAApPayWin, apVendor: LLQAApVendorWin, invoice: LLQAInvoiceWin });
+
+// v77: Monthly Reports — money paid on the bills typed in Accounts Payable in a month (PKR); salaries come from Payroll
+const llqaApPaidIn = (ym, R, bills) => {
+  let n = 0;
+  (bills || ((LLQAApp.ctx || {}).apLiabilities) || []).forEach((l) => {
+    if (!l) return;
+    if (Array.isArray(l.pays) && l.pays.length) l.pays.forEach((p) => p && String(p.date || "").slice(0, 7) === ym && (n += llqaToPKR(p.amount, l.currency || "PKR", R || llqaFinRates()).pkr));
+    else if (String(l.paidDate || "").slice(0, 7) === ym && llqaApPaid(l) > 0) n += llqaToPKR(llqaApPaid(l), l.currency || "PKR", R || llqaFinRates()).pkr;
+  });
+  return n;
+};
+// a month's teachers' salaries: from Payroll (November 2026 on), else (before it, or nothing in Payroll) the basic salaries
+const llqaRepSalaries = (ym, teachers) => {
+  const pr = llqaApPayroll().find((x) => x.ym === ym);
+  if (pr) return pr.amount;
+  return (teachers || []).reduce((a, t) => a + (Number(t && t.salary) || 0), 0);
 };

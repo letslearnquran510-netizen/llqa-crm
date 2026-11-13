@@ -2417,12 +2417,15 @@ const llqaRates = (settings) => {
   return out;
 };
 // one amount → PKR. how: "pkr" (already rupees), "received" (the PKR that reached you), "rate" (your rate), "missing" (no rate)
-const llqaToPKR = (amount, cur, rates, received) => {
+const llqaToPKR = (amount, cur, rates, received, dayRate) => {
   const a = Number(amount) || 0;
   const cu = llqaCurOf(cur);
   if (cu === "PKR") return { pkr: a, how: "pkr", cur: cu };
   const got = Number(received);
   if (got > 0) return { pkr: got, how: "received", cur: cu };
+  // v77: a payment saved with the rate of its day keeps it (later rate changes don't change the past)
+  const own = Number(dayRate);
+  if (own > 0) return { pkr: a * own, how: "rate", rate: own, cur: cu };
   const r = Number((rates || {})[cu]);
   return r > 0 ? { pkr: a * r, how: "rate", rate: r, cur: cu } : { pkr: 0, how: "missing", cur: cu };
 };
@@ -2437,7 +2440,7 @@ const llqaSumPKR = (items, rates, pick) => {
     const cu = llqaCurOf(p.currency, p.fallback);
     out.byCur[cu] = (out.byCur[cu] || 0) + a;
     out.n++;
-    const x = llqaToPKR(a, cu, rates, p.received);
+    const x = llqaToPKR(a, cu, rates, p.received, p.rate); // v77: the rate of the day
     if (x.how === "missing") out.missing[cu] = (out.missing[cu] || 0) + a;
     else {
       out.pkr += x.pkr;
@@ -2541,7 +2544,7 @@ const llqaRatesNote = (sums, rates, key) => {
 };
 // copies with every amount in PKR — for totals only (each payment at the PKR received, else your rate, else 0)
 const llqaPaysInPKR = (pays, rates) =>
-  (pays || []).map((p) => ({ ...p, amount: llqaToPKR(p.amount, p.currency || "USD", rates, p.pkrReceived).pkr, currency: "PKR" }));
+  (pays || []).map((p) => ({ ...p, amount: llqaToPKR(p.amount, p.currency || "USD", rates, p.pkrReceived, p.pkrRate).pkr, currency: "PKR" })); // v77: the rate of the day
 const llqaLiasInPKR = (lias, rates) =>
   (lias || []).map((l) => {
     const f = (n) => llqaToPKR(n, l.currency || "PKR", rates).pkr;
@@ -8539,6 +8542,12 @@ const SETTINGS_SECTIONS = [
     color: "accent",
   },
   {
+    id: "finance", // v77: fees owed, bills, receipts, cash in hand, budgets
+    label: "Finance",
+    icon: Receipt,
+    color: "accent",
+  },
+  {
     id: "hr",
     label: "HR & Attendance",
     icon: Clock,
@@ -8711,6 +8720,8 @@ const PERMISSION_TO_MODULE = {
   "Set Office Times & Fines": ["attendance"], // v72: office times, the per-minute rate and the other fines
   "Mark Attendance": ["attendance"], // v72: mark days by hand, check out, correct a day (a teacher never marks their own)
   "Mark Extra Classes": ["timetable", "subjects"], // v76: a Timetable class as Extra or Regular
+  "Manage Finance": ["finance", "ar", "ap"], // v77: the Finance page, Accounts Receivable and Payable (payments, bills)
+  "Fee Recovery": ["ar"], // v77: a family's pay-by date, stop / resume fee reminders, write fees off, put back a removed payment
 };
 
 const buildAccessFromPermissions = (permissions) => {
