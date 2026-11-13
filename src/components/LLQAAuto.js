@@ -1665,10 +1665,14 @@ const LLQAToasts = () => {
             : null,
           t.kind === "leaveAsk"
             ? [
-                llqaMini("✓ Approve", () => {
+                llqaMini("✓ Paid leave", () => {
                   llqaDismiss(t.id);
-                  llqaApproveTeacherLeave(t.leaveId);
-                }, { key: "ap", tone: "success" }),
+                  llqaApproveTeacherLeave(t.leaveId, "paid");
+                }, { key: "ap", tone: "success", title: "Approve as paid leave" }),
+                llqaMini("Unpaid", () => {
+                  llqaDismiss(t.id);
+                  llqaApproveTeacherLeave(t.leaveId, "unpaid");
+                }, { key: "au", tone: "warn", title: "Approve as unpaid leave (the absent amount is cut)" }), // v76
                 llqaMini("Leave Mgmt", () => {
                   llqaDismiss(t.id);
                   llqaGo("teachers", "leave");
@@ -1839,6 +1843,28 @@ const llqaClockTick = (state) => {
       }
     }
   } catch (e) {}
+  // v76: absences — a team lead hears of their own teachers marked absent by the CRM; a teacher, of their unpaid days
+  try {
+    const u = LLQAApp.ctx.user;
+    if (u && !LLQA_RUNNER && (u.role === "teacher" || u.role === "teamlead") && llqaReadyFor(["teachers"]) && llqaAttReady()) {
+      const day = todayPK();
+      if (u.role === "teacher") {
+        const mine = llqaMyAbsents(u, day);
+        const sig = mine.map((h) => h.date + ":" + (h.fine || 0)).join(",");
+        if (mine.length && state.myAbs !== sig) {
+          state.myAbs = sig;
+          llqaToast(llqaMyAbsentToast(mine));
+        }
+      } else {
+        const list = llqaLeadAbsents(u, day);
+        const sig = list.map((x) => x.t.id + ":" + x.date).join(",");
+        if (list.length && state.leadAbs !== sig) {
+          state.leadAbs = sig;
+          llqaToast(llqaLeadAbsentToast(list));
+        }
+      }
+    }
+  } catch (e) {}
   // v75: payroll — the office hears once a day of salaries to approve or pay; a teacher, of their salary paid
   try {
     const u = LLQAApp.ctx.user;
@@ -1863,6 +1889,7 @@ const llqaClockTick = (state) => {
     if (llqaCanOpen("students")) job(llqaLeaveEndRun); // v73.1
     if (llqaCanOpen("payroll")) job(llqaSalaryDueRun); // v75
     if (llqaCanOpen("payroll")) job(llqaPayCloseRun); // v75
+    if (llqaCanOpen("attendance")) job(llqaAbsentRun); // v76: closing time with no sign-in → absent (unpaid), or the leave covering the day
     if (llqaCanOpen("timetable")) job(llqaCoverRunAuto);
     if (sales) job(llqaFeeRunAuto);
   } else
@@ -2057,6 +2084,9 @@ const LLQAHost = () => {
     k === "shiftNew" ? React.createElement(LLQAShiftNewWin, { key: m.key, onClose: llqaClose }) : null,
     k === "handover" ? React.createElement(LLQAHandoverWin, { key: m.key, onClose: llqaClose }) : null,
     k === "mypay" ? React.createElement(LLQAMyPayWin, { key: m.key, data: m.data, onClose: llqaClose }) : null,
+    k === "leaveday" ? React.createElement(LLQALeaveDayWin, { key: m.key, data: m.data, onClose: llqaClose }) : null,
+    k === "extramark" ? React.createElement(LLQAExtraMarkWin, { key: m.key, data: m.data, onClose: llqaClose }) : null,
+    k === "holiday" ? React.createElement(LLQAHolidayWin, { key: m.key, data: m.data, onClose: llqaClose }) : null,
     // v66
     k === "payment" ? React.createElement(LLQAPaymentModal, { key: m.key, ...d, onClose: llqaClose }) : null,
     k === "logRequest" ? React.createElement(LLQALogRequestModal, { key: m.key, ...d, onClose: llqaClose }) : null,
@@ -3138,7 +3168,7 @@ const LLQATodayClasses = (props) => {
                       it.covered ? React.createElement("div", { key: "f", style: { color: c.textMuted, fontSize: 10 } }, llqaLabel("🔁 covering for " + it.teacher)) : null,
                       it.tLeave && !it.covered ? React.createElement("div", { key: "l" }, llqaPill((it.kept ? "takes it · " : "on leave · ") + (it.tLeave.status || "pending") + (it.tLeave.halfDay ? " · half day" : ""), it.kept ? c.success : it.tLeave.status === "approved" ? c.warn : c.textSec, null, "lv")) : null,
                     ], "te"),
-                    td(React.createElement("span", { style: { color: it.st.col, fontWeight: 700, fontSize: 11 } }, it.st.text), "st", { whiteSpace: "nowrap" }),
+                    td([React.createElement("span", { key: "s", style: { color: it.st.col, fontWeight: 700, fontSize: 11 } }, it.st.text), llqaClsExtra(it, date) ? React.createElement("span", { key: "x", title: "An extra class — paid at the extra class rate once logged", style: { marginLeft: 6, fontSize: 9, fontWeight: 800, letterSpacing: 0.4, color: c.accent, border: "1px solid " + llqaAlpha(c.accent, "66"), borderRadius: 4, padding: "0 4px" } }, "EXTRA") : null], "st", { whiteSpace: "nowrap" }), // v76
                     td(
                       React.createElement(
                         "div",
@@ -4950,7 +4980,7 @@ const LLQALeaveCoverTab = (props) => {
             React.createElement(
               "div",
               { style: { display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" } },
-              llqaPill(l.status || "pending", l.status === "approved" ? c.success : c.warn, null, "st"),
+              llqaPill((l.status || "pending") + (l.status === "approved" && l.pay ? " · " + l.pay : ""), l.status === "approved" ? c.success : c.warn, null, "st"), // v76
               manage && bNeed.length ? llqaMini("🔁 Cover all " + bNeed.length, () => doCover([...new Set(bNeed.map((r) => r.d))]), { key: "c", tone: "danger" }) : null,
               manage && dec.some((x) => x.coverId != null) ? llqaMini("💬 Tell substitutes", () => llqaOpen("queue", { title: "Cover classes — substitutes", items: llqaCoverTeacherItems(dec) }), { key: "ts", tone: "success" }) : null,
               manage && dec.some((x) => x.sid != null) ? llqaMini("💬 Tell families", () => llqaOpen("queue", { title: b.t.name + " on leave — families", items: llqaCoverFamilyItems(dec) }), { key: "tf", tone: "success" }) : null,
@@ -5097,6 +5127,7 @@ const LLQAHolidaysTab = (props) => {
                   items: a.tchs.map((t) => ({ student: { name: t.name, parent: t.name, phone: t.phone || "", country: "Pakistan" }, template: "holidayTeachers", extra: { name: t.name, ...extra(d) } })),
                 }), { key: "t", tone: "success" })
             : null,
+          manage && d.id ? llqaMini("Edit", () => llqaOpen("holiday", { id: d.id }), { key: "e", title: "Change the name, dates or type" }) : null, // v76
           manage ? llqaMini("✕", () => del(d), { key: "x", tone: "danger", title: "Delete" }) : null,
         ),
       ),
@@ -5842,7 +5873,7 @@ const llqaMyLeaves = (u) => {
           "div",
           { key: String(l.id), style: { display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12, color: c.text, padding: "3px 0" } },
           React.createElement("span", null, (l.type || "Leave") + " · " + llqaRangeLabel(l.from, l.to) + (l.halfDay ? " (half day)" : "")),
-          llqaPill(l.status || "pending", l.status === "approved" ? c.success : l.status === "rejected" ? c.danger : c.warn, null, "s"),
+          llqaPill((l.status || "pending") + (l.status === "approved" && l.pay ? " · " + l.pay : ""), l.status === "approved" ? c.success : l.status === "rejected" ? c.danger : c.warn, null, "s"), // v76
         ),
       ),
     ],
@@ -5912,7 +5943,7 @@ const LLQATeacherLeaveModal = ({ onClose }) => {
       ),
       React.createElement(Inp, { label: "Reason", value: f.reason, onChange: (v) => setF({ ...f, reason: v }) }),
       React.createElement(Inp, { label: "Contact while away (optional)", value: f.contact, onChange: (v) => setF({ ...f, contact: v }) }),
-      React.createElement("div", { style: { color: c.textSec, fontSize: 11 } }, n + " of your class" + (n === 1 ? "" : "es") + " fall in these days."),
+      React.createElement("div", { style: { color: c.textSec, fontSize: 11 } }, n + " of your class" + (n === 1 ? "" : "es") + " fall in these days. Paid or unpaid is decided when it's approved."), // v76
     ),
     [
       llqaMini("Cancel", onClose, { key: "x", big: true }),
@@ -5922,13 +5953,11 @@ const LLQATeacherLeaveModal = ({ onClose }) => {
   );
 };
 // One-click approve from the admin's notice (as the Leave Mgmt ✓ does).
-const llqaApproveTeacherLeave = (id) => {
-  const ctx = LLQAApp.ctx;
-  const l = (ctx.leaves || []).find((x) => String(x.id) === String(id));
-  if (!l || typeof ctx.setLeaves !== "function") return false;
-  ctx.setLeaves((prev) => (prev || []).map((x) => (String(x.id) === String(id) ? { ...x, status: "approved" } : x)));
-  llqaLeaveApproved({ ...l, status: "approved" });
-  return true;
+const llqaApproveTeacherLeave = (id, pay) => {
+  // v76: approved as paid or unpaid leave (the paid-leave limit is checked; days already marked follow it)
+  const e = llqaLeaveDecide(id, "approved", pay === "unpaid" ? "unpaid" : "paid");
+  if (e && e !== "cancel") llqaToast({ kind: "info", text: e });
+  return !e;
 };
 
 /* ============================================================
@@ -7145,6 +7174,7 @@ const LLQAMakeupTab = () => {
                           { style: { display: "flex", gap: 5, justifyContent: "flex-end" } },
                           llqaMini("💬 Family", () => llqaTellMakeup(m), { key: "fm" }),
                           llqaMini("💬 Teacher", () => llqaTellMakeupTeacher(m), { key: "tm" }),
+                          llqaMakeupExtraBtn(m), // v76: a make-up as an extra class
                           m.date >= today
                             ? llqaMini("✕ Cancel", () => {
                                 if (confirm("Cancel " + m.student + "'s make-up on " + llqaMakeupWhen(m) + "? The missed class shows as owed again.")) llqaSetMakeup(m.id, { status: "cancelled", cancelledAt: new Date().toISOString(), missedKey: "" });

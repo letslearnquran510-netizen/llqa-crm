@@ -581,6 +581,18 @@ const PayslipModal = ({ t, onClose, selectedMonth, appSettings }) => {
                       color: c.success,
                     }),
                 ),
+              t.pay.extraClasses && t.pay.extraClasses.amount > 0 &&
+                React.createElement(Row, {
+                  label: "Extra classes (" + t.pay.extraClasses.n + " × Rs " + t.pay.extraClasses.rate.toLocaleString() + ")", // v76
+                  value: "+Rs " + t.pay.extraClasses.amount.toLocaleString(),
+                  color: c.success,
+                }),
+              t.pay.extraClasses && t.pay.extraClasses.amountS > 0 &&
+                React.createElement(Row, {
+                  label: "Subject extra classes (" + t.pay.extraClasses.ns + " × Rs " + t.pay.extraClasses.rateS.toLocaleString() + ")", // v76
+                  value: "+Rs " + t.pay.extraClasses.amountS.toLocaleString(),
+                  color: c.success,
+                }),
               React.createElement(
                 "div",
                 {

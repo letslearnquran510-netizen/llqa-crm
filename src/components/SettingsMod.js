@@ -4456,85 +4456,9 @@ const SettingsMod = ({
                   margin: "0 0 10px",
                 },
               },
-              "Configured holidays when classes are cancelled and teachers don't incur fines",
+              "The academy's calendar: on a holiday classes are off, nobody is marked absent, and a class taken counts as extra. Change or delete any entry.",
             ),
-            [
-              ["Eid ul-Fitr", "2026-03-31", "Islamic"],
-              ["Eid ul-Adha", "2026-06-07", "Islamic"],
-              ["Pakistan Day", "2026-03-23", "National"],
-              ["Independence Day", "2026-08-14", "National"],
-              ["Ramadan Start", "2026-02-18", "Islamic"],
-            ].map(([name, date, type]) =>
-              React.createElement(
-                "div",
-                {
-                  key: name,
-                  style: {
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "8px 0",
-                    borderBottom: "1px solid " + c.border,
-                  },
-                },
-                React.createElement(
-                  "div",
-                  null,
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        color: c.text,
-                        fontSize: 12,
-                        fontWeight: 600,
-                      },
-                    },
-                    name,
-                  ),
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        color: c.textSec,
-                        fontSize: 10,
-                      },
-                    },
-                    date,
-                  ),
-                ),
-                React.createElement(Badge, {
-                  text: type,
-                  color: type === "Islamic" ? "purple" : "cyan",
-                }),
-              ),
-            ),
-            React.createElement(
-              "button",
-              {
-                onClick: () => {
-                  setForm({
-                    holidayName: "",
-                    holidayDate: "",
-                    holidayType: "Public",
-                  });
-                  setModal({
-                    type: "addHoliday",
-                  });
-                },
-                style: {
-                  marginTop: 10,
-                  background: c.accentBg,
-                  border: "1px solid " + llqaAlpha(c.accent, "44"),
-                  borderRadius: 6,
-                  cursor: "pointer",
-                  padding: "6px 12px",
-                  color: c.accent,
-                  fontSize: 11,
-                  fontWeight: 600,
-                },
-              },
-              "+ Add Holiday",
-            ),
+            React.createElement(LLQAHolidayList, null), // v76: the real calendar (a fixed list nobody could change was shown here)
           ),
           React.createElement(
             SettingCard,
@@ -6205,6 +6129,7 @@ const SettingsMod = ({
             "Edit Fines",
             "Set Office Times & Fines",
             "Mark Attendance",
+            "Mark Extra Classes", // v76
           ].map((perm) =>
             React.createElement(
               "div",

@@ -1110,7 +1110,7 @@ const TeachMod = ({
                       },
                     },
                     React.createElement(Badge, {
-                      text: l.status,
+                      text: l.status + (l.status === "approved" && l.pay ? " · " + l.pay : ""), // v76
                       color:
                         l.status === "approved"
                           ? "success"
@@ -1133,19 +1133,8 @@ const TeachMod = ({
                         React.createElement(
                           "button",
                           {
-                            onClick: () => {
-                              setLeaves(
-                                leaves.map((x) =>
-                                  x.id === l.id
-                                    ? {
-                                        ...x,
-                                        status: "approved",
-                                      }
-                                    : x,
-                                ),
-                              );
-                              llqaLeaveApproved({ ...l, status: "approved" }); // v66
-                            },
+                            onClick: () => llqaLeaveAct(l.id, "approved", "paid"), // v76: approved as paid leave (Unpaid is next to it)
+                            title: "Approve — paid leave",
                             style: {
                               background: "none",
                               border: "none",
@@ -1161,17 +1150,17 @@ const TeachMod = ({
                         React.createElement(
                           "button",
                           {
-                            onClick: () =>
-                              setLeaves(
-                                leaves.map((x) =>
-                                  x.id === l.id
-                                    ? {
-                                        ...x,
-                                        status: "rejected",
-                                      }
-                                    : x,
-                                ),
-                              ),
+                            onClick: () => llqaLeaveAct(l.id, "approved", "unpaid"), // v76
+                            title: "Approve — unpaid leave (the absent amount is cut)",
+                            style: { background: "none", border: "1px solid " + llqaAlpha(c.warn, "66"), borderRadius: 5, cursor: "pointer", padding: "1px 5px", color: c.warn, fontSize: 10, fontWeight: 700, margin: "0 2px" },
+                          },
+                          "Unpaid",
+                        ),
+                        React.createElement(
+                          "button",
+                          {
+                            onClick: () => llqaLeaveAct(l.id, "rejected"), // v76: its days already marked become absent
+                            title: "Reject",
                             style: {
                               background: "none",
                               border: "none",

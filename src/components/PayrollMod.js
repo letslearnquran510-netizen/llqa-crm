@@ -30,9 +30,9 @@ const PayrollMod = ({
   const currentRecs = useMemo(() => {
     // v75: the month's pay from the rules — the days with the academy, the salary changes, the bonuses, the fines (v72)
     // and the advance installments; approved and paid months keep their numbers
-    const o = { hist: payHistory, qc: qcViolations, att: attendanceHistory, counts: llqaPayCounts(teachers), today: todayPK() };
+    const o = { hist: payHistory, qc: qcViolations, att: attendanceHistory, counts: llqaPayCounts(teachers), today: todayPK(), xi: selectedMonth >= LLQA_PAY_FROM ? llqaExtraIndex(selectedMonth) : null, set: appSettings }; // v76: extra classes
     return teachers.map((t) => ({ ...t, pay: llqaPayRec(t, selectedMonth, o) }));
-  }, [teachers, payHistory, selectedMonth, qcViolations, attendanceHistory]); // v72, v75
+  }, [teachers, payHistory, selectedMonth, qcViolations, attendanceHistory, appSettings, (LLQAApp.ctx || {}).dailyProgress, (LLQAApp.ctx || {}).students, (LLQAApp.ctx || {}).makeups, (LLQAApp.ctx || {}).covers, (LLQAApp.ctx || {}).leaves, (LLQAApp.ctx || {}).calendar]); // v72, v75, v76: a class logged updates the pay
   const stats = useMemo(() => {
     const recs = currentRecs.filter((t) => t.pay);
     const totalGross = recs.reduce((s, t) => s + t.pay.gross, 0);

@@ -1610,6 +1610,7 @@ const TimetableMod = ({
                           React.createElement(
                             "div",
                             null,
+                            llqaCellBadge(currentTeacher, day, cell), // v76: EXTRA on a class that counts as extra
                             cell.s !== "Self" && cell.l
                               ? React.createElement(
                                   "div",
@@ -3839,6 +3840,7 @@ const TimetableMod = ({
                 React.createElement(Btn, { variant: "outline", onClick: () => { const id = cellModal.cell.sid; setCellModal(null); llqaOpen("reschedule", { studentId: id }); } }, "📅 Change classes"),
               llqaCanManage() && cellModal.cell.sid != null && cellModal.cell.sid !== "" &&
                 React.createElement(Btn, { variant: "outline", onClick: () => { const id = cellModal.cell.sid; setCellModal(null); llqaOpen("message", { studentId: id }); } }, "💬 Message"),
+              React.createElement(LLQAExtraBtn, { t: cellModal.teacher, day: cellModal.day, slot: cellModal.slot, cell: cellModal.cell, onDone: () => setCellModal(null) }), // v76: Mark as Extra / Regular
               React.createElement(
                 Btn,
                 {

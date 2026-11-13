@@ -3280,6 +3280,7 @@ const SubjectsMod = ({
               },
               "Copy",
             ),
+            React.createElement(LLQAExtraBtn, { t: cellModal.teacher, day: llqaSubjDayKey(cellModal.day), slot: SUBJ_SLOTS[parseInt(cellModal.slotIdx) - 4], cell: cellModal.cell, onDone: () => setCellModal(null) }), // v76
             React.createElement(
               Btn,
               {
