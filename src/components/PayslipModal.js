@@ -86,10 +86,11 @@ const PayslipModal = ({ t, onClose, selectedMonth, appSettings }) => {
   <div class="grid-2">
     <div>
       <div class="section-title earn-title">Earnings</div>
-      <div class="row"><span class="row-label">Basic Salary</span><span class="row-val earn-val">Rs ${t.pay.baseSalary.toLocaleString()}</span></div>
+      ${t.pay.baseSalary > 0 || !(t.pay.classPay > 0) ? `<div class="row"><span class="row-label">Basic Salary</span><span class="row-val earn-val">Rs ${t.pay.baseSalary.toLocaleString()}</span></div>` : ""}
       ${t.pay.bonusBreakdown && t.pay.bonusBreakdown.tenure > 0 ? `<div class="row"><span class="row-label">Tenure Bonus</span><span class="row-val earn-val">+Rs ${t.pay.bonusBreakdown.tenure.toLocaleString()}</span></div>` : ""}
       ${t.pay.bonusBreakdown && t.pay.bonusBreakdown.performance > 0 ? `<div class="row"><span class="row-label">Performance Bonus</span><span class="row-val earn-val">+Rs ${t.pay.bonusBreakdown.performance.toLocaleString()}</span></div>` : ""}
       ${t.pay.bonusBreakdown && t.pay.bonusBreakdown.students > 0 ? `<div class="row"><span class="row-label">Student Count Bonus</span><span class="row-val earn-val">+Rs ${t.pay.bonusBreakdown.students.toLocaleString()}</span></div>` : ""}
+      ${llqaSlipHtml(t.pay)}
       <div class="total-row"><span class="row-label" style="color:#006838;">TOTAL GROSS</span><span class="row-val earn-val">Rs ${t.pay.gross.toLocaleString()}</span></div>
     </div>
     
@@ -550,10 +551,11 @@ const PayslipModal = ({ t, onClose, selectedMonth, appSettings }) => {
             React.createElement(
               "div",
               { style: { padding: "0 8px" } },
-              React.createElement(Row, {
-                label: "Basic Salary" + (t.pay.days && t.pay.monthDays && t.pay.days < t.pay.monthDays ? " (" + t.pay.days + " of " + t.pay.monthDays + " days)" : ""), // v75
-                value: "Rs " + t.pay.baseSalary.toLocaleString(),
-              }),
+              (t.pay.baseSalary > 0 || !(t.pay.classPay > 0)) && // v78: none for a teacher paid by the class
+                React.createElement(Row, {
+                  label: "Basic Salary" + (t.pay.days && t.pay.monthDays && t.pay.days < t.pay.monthDays ? " (" + t.pay.days + " of " + t.pay.monthDays + " days)" : ""), // v75
+                  value: "Rs " + t.pay.baseSalary.toLocaleString(),
+                }),
               t.pay.bonusBreakdown &&
                 React.createElement(
                   React.Fragment,
@@ -593,6 +595,7 @@ const PayslipModal = ({ t, onClose, selectedMonth, appSettings }) => {
                   value: "+Rs " + t.pay.extraClasses.amountS.toLocaleString(),
                   color: c.success,
                 }),
+              ...llqaSlipClassRows(t.pay).map(([label, value], i) => React.createElement(Row, { key: "cls" + i, label, value, color: c.success })), // v78: the classes taken
               React.createElement(
                 "div",
                 {

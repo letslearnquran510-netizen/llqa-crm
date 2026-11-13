@@ -144,7 +144,7 @@ const ViewDetail = ({
           ["Team Lead", t.teamLead, Shield],
           ["Join Date", t.joinDate, Calendar],
           ["Status", t.status, UserCheck],
-          ["Salary", "Rs " + String(t.salary || 0), CreditCard],
+          ["Pay", llqaPayShort(t), CreditCard], // v78: a salary or a rate per class
           ["Phone", t.phone, Phone],
           ["CNIC", t.cnic, Hash],
           ["Bank", t.bank, CreditCard],
@@ -237,32 +237,7 @@ const ViewDetail = ({
             marginBottom: 16,
           },
         },
-        [
-          [
-            "Rating",
-            (t.perfRating || 0).toFixed(1) + "★",
-            t.perfRating >= 4.5
-              ? c.success
-              : t.perfRating >= 3.5
-                ? c.warn
-                : c.danger,
-          ],
-          [
-            "Completion",
-            t.classCompletion + "%",
-            t.classCompletion >= 95 ? c.success : c.warn,
-          ],
-          [
-            "Satisfaction",
-            t.studentSatisfaction + "%",
-            t.studentSatisfaction >= 90 ? c.success : c.warn,
-          ],
-          [
-            "Attendance",
-            t.attendanceRate + "%",
-            t.attendanceRate >= 96 ? c.success : c.warn,
-          ],
-        ].map(([l, v, col]) =>
+        llqaPerfRows(t).map(([l, v, col]) =>
           React.createElement(
             "div",
             {

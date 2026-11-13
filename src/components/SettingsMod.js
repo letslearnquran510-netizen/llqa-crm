@@ -2602,7 +2602,7 @@ const SettingsMod = ({
               },
               React.createElement("input", {
                 type: "number",
-                value: settings.annualLeave,
+                value: settings.annualLeave != null && settings.annualLeave !== "" ? settings.annualLeave : 14, // v78: the days the balances use
                 onChange: (e) => update("annualLeave", e.target.value),
                 style: {
                   width: 60,
@@ -2624,7 +2624,7 @@ const SettingsMod = ({
               },
               React.createElement("input", {
                 type: "number",
-                value: settings.sickLeave,
+                value: settings.sickLeave != null && settings.sickLeave !== "" ? settings.sickLeave : 10, // v78
                 onChange: (e) => update("sickLeave", e.target.value),
                 style: {
                   width: 60,
@@ -2653,6 +2653,7 @@ const SettingsMod = ({
               }),
             ),
           ),
+          React.createElement(LLQAHrSettings, { settings, update }), // v78: per-class pay, bonuses, probation, lateness warnings
         ),
       section === "security" &&
         React.createElement(
@@ -6131,6 +6132,7 @@ const SettingsMod = ({
             "Set Office Times & Fines",
             "Mark Attendance",
             "Mark Extra Classes", // v76
+            "Edit Scores & Bonuses", // v78
             "Manage Finance", // v77
             "Fee Recovery", // v77
           ].map((perm) =>
