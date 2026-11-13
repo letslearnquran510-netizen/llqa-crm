@@ -2196,6 +2196,7 @@ const SettingsMod = ({
           ),
           React.createElement(LLQAFxCard, { settings, update }), // v71: your real rates (this card showed fixed sample rates "updated today")
         ),
+      section === "finance" && React.createElement(LLQAFinSettings, null), // v77
       section === "pricing" &&
         React.createElement(
           React.Fragment,
@@ -6130,6 +6131,8 @@ const SettingsMod = ({
             "Set Office Times & Fines",
             "Mark Attendance",
             "Mark Extra Classes", // v76
+            "Manage Finance", // v77
+            "Fee Recovery", // v77
           ].map((perm) =>
             React.createElement(
               "div",

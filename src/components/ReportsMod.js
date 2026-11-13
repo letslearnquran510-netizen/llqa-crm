@@ -49,13 +49,8 @@ const ReportsMod = ({
     (a, p) => a + num(p.amount),
     0,
   );
-  const monthlySalaries = activeT.reduce((a, t) => a + num(t.salary), 0);
-  const monthAPpaid = LIA.filter(
-    (l) => l.status !== "unpaid" && inMonth(l.paidDate),
-  ).reduce(
-    (a, l) => a + (l.status === "paid" ? num(l.amount) : num(l.paidAmount)),
-    0,
-  );
+  const monthlySalaries = llqaRepSalaries(month, activeT); // v77: from Payroll (the basic salaries before it ran)
+  const monthAPpaid = llqaApPaidIn(month, RATES, apLiabilities); // v77: each payment on a bill on its own day
   const monthExpenses = monthlySalaries + monthAPpaid;
   const monthNet = monthRevenue - monthExpenses;
   const apOutstanding = LIA.reduce(
@@ -207,15 +202,8 @@ const ReportsMod = ({
         const rev = PAY.filter(
           (p) => String(p.paidDate || "").slice(0, 7) === m,
         ).reduce((a, p) => a + num(p.amount), 0);
-        const ap = LIA.filter(
-          (l) =>
-            l.status !== "unpaid" && String(l.paidDate || "").slice(0, 7) === m,
-        ).reduce(
-          (a, l) =>
-            a + (l.status === "paid" ? num(l.amount) : num(l.paidAmount)),
-          0,
-        );
-        const exp = ap + monthlySalaries;
+        const ap = llqaApPaidIn(m, RATES, apLiabilities); // v77
+        const exp = ap + llqaRepSalaries(m, activeT); // v77: each month's own salaries
         return {
           m,
           rev,
@@ -1124,7 +1112,7 @@ const ReportsMod = ({
       ),
     ),
     llqaRatesNote([ // v71: everything the reports could not put into PKR
-      llqaSumPKR(arPayments, RATES, (p) => ({ amount: p.amount, currency: p.currency, fallback: "USD", received: p.pkrReceived })),
+      llqaSumPKR(arPayments, RATES, (p) => ({ amount: p.amount, currency: p.currency, fallback: "USD", received: p.pkrReceived, rate: p.pkrRate })), // v77
       llqaSumPKR(apLiabilities, RATES, (l) => ({ amount: l.amount, currency: l.currency, fallback: "PKR" })),
     ], RATES),
     content,
