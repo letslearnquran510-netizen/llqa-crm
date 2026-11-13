@@ -329,13 +329,15 @@ const PayrollMod = ({
                 "Net Salary (Rs)",
                 "Month",
               ];
-              const rows = teachers.map((t, i) => [
+              const due = currentRecs.filter((t) => t.pay && t.pay.status === "approved" && Number(t.pay.net) > 0); // v78: approved, not paid yet
+              if (!due.length) return llqaToast({ kind: "info", ttl: 7000, text: "Nothing approved to pay for " + llqaYmName(selectedMonth) + " — approve the month's pay first (Approve, or Process Payroll)." });
+              const rows = due.map((t, i) => [
                 i + 1,
                 t.name || "",
                 t.name || "",
                 t.bank || "",
-                t.cnic || "-",
-                t.salary || 0,
+                t.accountNo || "-",
+                Math.round(Number(t.pay.net) || 0),
                 selectedMonth || "Current",
               ]);
               const csv = [headers, ...rows]
@@ -363,9 +365,7 @@ const PayrollMod = ({
               a.click();
               document.body.removeChild(a);
               URL.revokeObjectURL(url);
-              alert(
-                "Bank disbursement file downloaded. Upload to your bank portal.",
-              );
+              llqaToast({ kind: "info", ttl: 7000, text: "✓ Bank file for " + llqaYmName(selectedMonth) + ": " + due.length + " teacher" + (due.length === 1 ? "" : "s") + ", " + llqaRs(due.reduce((s, t) => s + (Number(t.pay.net) || 0), 0)) + ". Upload it to your bank portal, then mark them paid." }); // v78
             },
           },
           "Bank File",
@@ -375,27 +375,20 @@ const PayrollMod = ({
           {
             icon: CreditCard,
             onClick: () => {
-              const total = teachers.reduce(
-                (sum, t) => sum + (t.salary || 0),
-                0,
+              // v78: Payroll's own numbers; pending → approved, then approved → paid
+              const rows = currentRecs.filter((t) => t.pay);
+              const pend = rows.filter((t) => t.pay.status === "pending");
+              const list = pend.length ? pend : rows.filter((t) => t.pay.status === "approved");
+              if (!list.length) return llqaToast({ kind: "info", ttl: 6000, text: "Nothing to process for " + llqaYmName(selectedMonth) + " — every salary is paid." });
+              const total = list.reduce((s, t) => s + (Number(t.pay.net) || 0), 0);
+              llqaConfirm(
+                (pend.length ? "Approve " : "Mark as paid ") + list.length + " teacher" + (list.length === 1 ? "'s" : "s'") + " pay for " + llqaYmName(selectedMonth) + ": " + llqaRs(total) + " in all." + (pend.length ? "\nApproved pay keeps its numbers. Send the money (Bank File), then Process Payroll again to mark it paid." : "\nOnly once the money is sent."),
+                () => {
+                  list.forEach((t) => (pend.length ? approvePayment(t.id) : markAsPaid(t.id)));
+                  llqaToast({ kind: "info", ttl: 6000, text: "✓ " + list.length + " " + (pend.length ? "approved" : "marked paid") + " — " + llqaRs(total) + "." });
+                },
+                { yes: pend.length ? "Approve all" : "Mark all paid", title: "Process payroll — " + llqaYmName(selectedMonth) },
               );
-              if (
-                confirm(
-                  "Process payroll for " +
-                    teachers.length +
-                    " teachers?\nTotal payout: Rs " +
-                    total.toLocaleString() +
-                    "\n\nThis will mark all salaries as paid for " +
-                    (selectedMonth || "the current month") +
-                    ".",
-                )
-              )
-                alert(
-                  "Payroll processed successfully for " +
-                    teachers.length +
-                    " teachers.\nTotal disbursed: Rs " +
-                    total.toLocaleString(),
-                );
             },
           },
           "Process Payroll",
@@ -880,7 +873,7 @@ const PayrollMod = ({
                       },
                     },
                     "Rs ",
-                    t.pay.baseSalary.toLocaleString(),
+                    (t.pay.baseSalary + (t.pay.classPay || 0)).toLocaleString(), // v78: and the classes taken
                   ),
                   React.createElement(
                     "td",
@@ -1080,7 +1073,7 @@ const PayrollMod = ({
                       "button",
                       {
                         onClick: () => openRevision(t),
-                        title: "Revise Salary",
+                        title: "Revise pay (salary or per class)", // v78
                         style: {
                           background: "none",
                           border: "none",
@@ -1231,7 +1224,7 @@ const PayrollMod = ({
                         },
                       },
                       "Rs ",
-                      r.baseSalary.toLocaleString(),
+                      ((Number(r.baseSalary) || 0) + (Number(r.classPay) || 0)).toLocaleString(), // v78
                     ),
                     React.createElement(
                       "td",
@@ -2142,186 +2135,6 @@ const PayrollMod = ({
           setModal(null);
         },
       }),
-    modal &&
-      modal.type === "revision" &&
-      React.createElement(
-        "div",
-        {
-          style: {
-            position: "fixed",
-            inset: 0,
-            zIndex: 1000,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            background: "rgba(0,0,0,.65)",
-            backdropFilter: "blur(4px)",
-          },
-        },
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              backdropFilter: "blur(16px)",
-              boxShadow: c.shadow3d,
-              border: "1px solid " + c.border,
-              borderRadius: 14,
-              padding: 24,
-              width: 440,
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                marginBottom: 14,
-              },
-            },
-            React.createElement(
-              "h3",
-              {
-                style: {
-                  color: c.text,
-                  fontSize: 16,
-                  margin: 0,
-                },
-              },
-              "Revise Salary",
-            ),
-            React.createElement(
-              "button",
-              {
-                onClick: () => setModal(null),
-                style: {
-                  background: "none",
-                  border: "none",
-                  cursor: "pointer",
-                  color: c.textSec,
-                },
-              },
-              React.createElement(X, {
-                size: 18,
-              }),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.purpleBg,
-                borderRadius: 8,
-                padding: "8px 12px",
-                marginBottom: 12,
-                color: c.purple,
-                fontSize: 11,
-              },
-            },
-            "Teacher: ",
-            modal.data.name,
-            " \xB7 Current Rs ",
-            modal.data.salary.toLocaleString(),
-          ),
-          React.createElement(Inp, {
-            label: "New Salary (PKR) *",
-            value: payForm.newSalary || "",
-            onChange: (v) =>
-              setPayForm({
-                ...payForm,
-                newSalary: v,
-              }),
-            type: "number",
-          }),
-          React.createElement(Inp, {
-            label: "Effective From",
-            value: payForm.effective || "",
-            onChange: (v) =>
-              setPayForm({
-                ...payForm,
-                effective: v,
-              }),
-            type: "date",
-          }),
-          React.createElement(Inp, {
-            label: "Reason *",
-            value: payForm.reason || "",
-            onChange: (v) =>
-              setPayForm({
-                ...payForm,
-                reason: v,
-              }),
-            placeholder: "Annual increment / Promotion / Performance...",
-          }),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgDeep,
-                borderRadius: 8,
-                padding: "8px 12px",
-                marginBottom: 10,
-                fontSize: 10,
-                color: c.textSec,
-              },
-            },
-            "Change: ",
-            React.createElement(
-              "span",
-              {
-                style: {
-                  color:
-                    Number(payForm.newSalary) > modal.data.salary
-                      ? c.success
-                      : c.danger,
-                  fontWeight: 700,
-                },
-              },
-              Number(payForm.newSalary) > modal.data.salary ? "+" : "",
-              "Rs ",
-              (Number(payForm.newSalary) - modal.data.salary).toLocaleString(),
-            ),
-            " (",
-            Math.round(
-              ((Number(payForm.newSalary) - modal.data.salary) /
-                (modal.data.salary || Number(payForm.newSalary) || 1)) *
-                100,
-            ),
-            "%)",
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 8,
-              },
-            },
-            React.createElement(
-              Btn,
-              {
-                variant: "outline",
-                onClick: () => setModal(null),
-              },
-              "Cancel",
-            ),
-            React.createElement(
-              Btn,
-              {
-                onClick: () => {
-                  const err = llqaSalaryRevise(modal.data, payForm); // v75: kept on the teacher, from its day (it did nothing)
-                  if (err) return alert(err);
-                  setModal(null);
-                },
-                icon: Award,
-              },
-              "Approve Revision",
-            ),
-          ),
-        ),
-      ),
+    modal && modal.type === "revision" && React.createElement(LLQAPayReviseWin, { t: modal.data, onClose: () => setModal(null) }), // v78: a salary or a rate per class, from a day
   );
 };

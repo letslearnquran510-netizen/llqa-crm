@@ -16,6 +16,18 @@ const ShiftingMod = ({
   const [fDate, setFDate] = useState("all");
   const [modal, setModal] = useState(null);
   const [f, setF] = useState({});
+  React.useEffect(() => {
+    // v78: a teacher who is leaving — their students to move
+    const go = () => {
+      const w = llqaShiftTake();
+      if (!w) return;
+      setF({ fromT: "", bulkFromT: w, reason: "Teacher Resigned", date: todayPK() });
+      setModal({ type: "bulk" });
+    };
+    go();
+    window.addEventListener("llqa-want", go);
+    return () => window.removeEventListener("llqa-want", go);
+  }, []);
   const today = new Date();
   const filtered = useMemo(() => {
     let d = shifts;
@@ -3781,13 +3793,7 @@ const ShiftingMod = ({
                     },
                     "-- Select From Teacher --",
                   ),
-                  (teachers || [])
-                    .filter(
-                      (t) =>
-                        t.status !== "resigned" &&
-                        t.status !== "quit" &&
-                        t.status !== "terminated",
-                    )
+                  (teachers || []) // v78: a teacher who left with classes still booked is here too
                     .map((t) => {
                       const cf = computeFree(t);
                       const booked = cf.total - cf.free;
@@ -3802,7 +3808,8 @@ const ShiftingMod = ({
                           " \u2014 " +
                           booked +
                           " booked" +
-                          (t.location ? " (" + t.location + ")" : ""),
+                          (t.location ? " (" + t.location + ")" : "") +
+                          (t.status === "resigned" || t.status === "quit" || t.status === "terminated" ? " \u2014 left" : ""),
                       );
                     })
                     .filter(Boolean),

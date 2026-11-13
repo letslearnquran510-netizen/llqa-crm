@@ -92,6 +92,7 @@ const AttendanceMod = ({
   }, [teachers, todayRecords]);
   const monthlySummary = useMemo(() => {
     const sum = {};
+    const pms = llqaHrPayMap(selectedMonth); // v78: Payroll's net pay
     teachers.forEach((t) => {
       const recs = (history[t.id] || []).filter((h) =>
         h.date.startsWith(selectedMonth),
@@ -118,7 +119,7 @@ const AttendanceMod = ({
         totalDays,
         workedDays,
         attPct,
-        netPay: t.salary - totalFine,
+        netPay: pms.has(String(t.id)) ? pms.get(String(t.id)) : (Number(t.salary) || 0) - totalFine, // v78: as Payroll works it out
       };
     });
     return sum;
@@ -346,7 +347,7 @@ const AttendanceMod = ({
                 h.regularized ? "Corrected: " + (h.regReason || "") : "",
               ]);
             if (rows.length === 0) {
-              alert("No attendance data to export.");
+              llqaToast({ kind: "info", ttl: 5000, text: "No attendance to export for this month." }); // v78
               return;
             }
             const csv = [headers, ...rows]
@@ -745,7 +746,7 @@ const AttendanceMod = ({
                   llqaToast({ text: "Every teacher already has attendance for today — nothing changed." });
                   return;
                 }
-                if (!confirm("Mark " + todo.length + " teacher" + (todo.length === 1 ? "" : "s") + " with nothing marked yet today as Present (on time)? Teachers already marked or signed in keep what they have.")) return;
+                llqaConfirm("Mark " + todo.length + " teacher" + (todo.length === 1 ? "" : "s") + " with nothing marked yet today as Present (on time)? Teachers already marked or signed in keep what they have.", () => { // v78: the CRM's own window
                 setHistory((prev) => {
                   const next = { ...(prev || {}) };
                   todo.forEach((t) => {
@@ -760,6 +761,7 @@ const AttendanceMod = ({
                   return next;
                 });
                 llqaToast({ text: todo.length + " teacher" + (todo.length === 1 ? "" : "s") + " marked Present." });
+                }, { yes: "Mark present", title: "Mark everyone present" });
               },
               title: "Mark everyone with nothing marked yet today as Present", // v72
               style: {
@@ -1548,9 +1550,8 @@ const AttendanceMod = ({
                         t.code,
                         " \xB7 ",
                         t.shift,
-                        " Shift \xB7 Rs ",
-                        Number(t.salary || 0).toLocaleString("en-US"), // v72
-                        "/mo",
+                        " Shift \xB7 ",
+                        llqaPayShort(t) + (llqaIsPerClass(t) ? "" : "/mo"), // v78: or a rate per class
                       ),
                     ),
                     React.createElement(
@@ -2403,8 +2404,7 @@ const AttendanceMod = ({
                           color: c.textSec,
                         },
                       },
-                      "Rs ",
-                      Number(t.salary || 0).toLocaleString("en-US"), // v72
+                      llqaPayShort(t), // v78: a salary, or a rate per class
                     ),
                     React.createElement(
                       "td",
@@ -2440,6 +2440,7 @@ const AttendanceMod = ({
       React.createElement(
         React.Fragment,
         null,
+        React.createElement(LLQAWarnCard, { teachers }), // v78: lateness warnings
         React.createElement(
           "div",
           {
