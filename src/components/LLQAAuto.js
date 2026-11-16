@@ -5199,6 +5199,13 @@ const LLQAHolidaysTab = (props) => {
       setMsg("The calendar can't be saved here.");
       return;
     }
+    {
+      const clash = llqaCalClash(f); // v79
+      if (clash) {
+        setMsg(llqaCalClashText(clash));
+        return;
+      }
+    }
     const u = ctx.user || {};
     const rec = { id: llqaUid("h"), name: String(f.name).trim(), from: f.from, to: f.to || f.from, kind: f.kind, note: String(f.note || "").trim(), at: new Date().toISOString(), by: u.name || u.role || "" };
     ctx.setCalendar((prev) => ({ ...(prev || {}), days: [...((prev && prev.days) || []), rec] }));
@@ -6024,8 +6031,16 @@ const LLQATeacherLeaveModal = ({ onClose }) => {
     });
   const send = () => {
     if (!f.from || (f.to && f.to < f.from)) {
-      alert("Please check the dates.");
+      llqaToast({ kind: "info", ttl: 7000, text: "⚠ Please check the dates — the last day can't be before the first." }); // v79: a notice, not a browser pop-up
       return;
+    }
+    {
+      // v79: days they already asked for (or have) are refused
+      const bad = llqaLeaveCheck(t.id, "You", f).replace(/^You already has /, "You already have ");
+      if (bad) {
+        llqaToast({ kind: "info", ttl: 9000, key: "lvclash", text: "⚠ " + bad });
+        return;
+      }
     }
     if (typeof ctx.setLeaves !== "function") {
       alert("Leave can't be requested from here.");
@@ -7776,6 +7791,11 @@ const LLQALeadModal = ({ leadId, onClose }) => {
     }
     if (!String(f.phone || "").trim()) {
       setErr("Enter a phone / WhatsApp number — follow-ups need it.");
+      return;
+    }
+    const dupe = llqaLeadDupe({ ...f, id: old ? old.id : undefined }); // v79
+    if (dupe) {
+      setErr("This number is already an open lead: " + (dupe.parent || dupe.name || "a family") + (dupe.next ? " (follow-up " + llqaDateLabel(dupe.next) + ")" : "") + ". Add a note to that lead instead.");
       return;
     }
     const rec = llqaSaveLead({ ...f, status: old ? old.status : "new" });
@@ -11004,3 +11024,31 @@ const llqaSlipHtml = (p) => {
 };
 
 Object.assign(LLQA_MODALS3, { confirm: LLQAConfirmWin, probation: LLQAProbWin, perfEdit: LLQAPerfEditWin });
+
+
+/* ============================================================
+   v79 — the same thing twice is refused: a teacher's leave on days they already have leave, an open lead's number
+   again, a holiday on days already in the calendar, a teacher's code changed to another teacher's.
+   ============================================================ */
+// a teacher's leave (waiting or approved) that shares a day with from..to
+const llqaLeaveClash = (teacherId, from, to, skipId) =>
+  (((LLQAApp.ctx || {}).leaves) || []).find(
+    (l) => l && String(l.teacherId) === String(teacherId) && (l.status === "pending" || l.status === "approved") && String(l.id) !== String(skipId == null ? "" : skipId) && llqaIsDay(l.from) && l.from <= (to || from) && (l.to || l.from) >= from,
+  ) || null;
+// a leave request's own check: "" or what is wrong
+const llqaLeaveCheck = (teacherId, name, f) => {
+  if (!f.type) return "Choose the leave type.";
+  if (!llqaIsDay(f.from)) return "Choose the first day.";
+  if (f.to && (!llqaIsDay(f.to) || f.to < f.from)) return "The last day can't be before the first.";
+  const c = llqaLeaveClash(teacherId, f.from, f.to || f.from);
+  return c ? (name || "This teacher") + " already has " + (c.type || "leave") + " " + llqaRangeLabel(c.from, c.to || c.from) + " (" + (c.status === "approved" ? "approved" : "waiting for approval") + "). Change that request, or pick other days." : "";
+};
+// an open lead (new or contacted) with the same WhatsApp number
+const llqaLeadDupe = (f) => {
+  const d = llqaPhone(f.phone, f.country);
+  if (!d) return null;
+  return llqaLeads().find((l) => l && l.id !== f.id && /^(new|contacted)$/.test(llqaLeadStatus(l)) && llqaPhone(l.phone, l.country) === d) || null;
+};
+// a calendar entry of the same kind that shares a day with from..to
+const llqaCalClash = (f, skipId) => llqaCalendar().find((d) => d && d.id !== skipId && (d.kind || "holiday") === (f.kind || "holiday") && llqaIsDay(d.from) && d.from <= (f.to || f.from) && (d.to || d.from) >= f.from) || null;
+const llqaCalClashText = (d) => "Those days are already in the calendar: " + (d.name || "a holiday") + " (" + llqaRangeLabel(d.from, d.to || d.from) + "). Change that one, or pick other days.";
