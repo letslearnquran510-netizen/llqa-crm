@@ -10,7 +10,7 @@ const SubjectsMod = ({
         sno: i + 1,
         subjects: t.subjects || ALL_SUBJECTS,
         grades: t.grades || "", // v70: a grade range is not set in HR
-        rating: Number(t.perfRating != null ? t.perfRating : t.rating) || 0, // v74: HR's rating first (an old copy was saved on the teacher) // v70: HR keeps it as perfRating
+        rating: llqaPerfLatest(t) || 0, // v78: the CRM's score // v74: HR's rating first (an old copy was saved on the teacher) // v70: HR keeps it as perfRating
         mon: {},
         tue: {},
         wed: {},

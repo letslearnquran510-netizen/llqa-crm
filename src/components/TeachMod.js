@@ -13,6 +13,19 @@ const TeachMod = ({
   const [fs, setFs] = useState("all");
   const [modal, setModal] = useState(null);
   const [form, setForm] = useState({});
+  React.useEffect(() => {
+    // v78: a new hire from HR comes in with their name, CNIC, bank and joining date (status "new": on probation)
+    const go = () => {
+      const h = llqaTeachTake();
+      if (!h) return;
+      setSt("list");
+      oA();
+      setForm((f) => ({ ...f, name: h.name || "", cnic: h.cnic || "", bank: h.bankDetails || "", joinDate: llqaIsDay(h.joiningDate) ? h.joiningDate : todayPK(), status: "new", _hireId: h.id }));
+    };
+    go();
+    window.addEventListener("llqa-want", go);
+    return () => window.removeEventListener("llqa-want", go);
+  }, []);
   const cats = {
     All: teachers,
     "Male IBA": teachers.filter(
@@ -81,6 +94,9 @@ const TeachMod = ({
       languages: "Urdu, English",
       notes: "",
       status: "active",
+      payType: "month", // v78: a monthly salary, or paid by the class
+      classRate: "",
+      classRateS: "",
     });
     setModal({
       type: "add",
@@ -90,6 +106,7 @@ const TeachMod = ({
     setForm({
       ...t,
       salary: String(t.salary),
+      ...llqaPayFormOf(t), // v78: the pay in force today
     });
     setModal({
       type: "edit",
@@ -158,7 +175,7 @@ const TeachMod = ({
       ["status", "Status"],
       ["shift", "Shift"],
       ["joinDate", "Join Date"],
-      ["salary", "Salary"],
+      form.payType === "class" ? ["classRate", "Rate per class"] : ["salary", "Salary"], // v78
       ["phone", "Phone"],
       ["emergencyContact", "Emergency Contact"],
     ];
@@ -167,10 +184,11 @@ const TeachMod = ({
       return v === undefined || v === null || String(v).trim() === "";
     });
     if (missing.length > 0) {
-      alert(
-        "\u26A0 Please fill all required fields:\n\n\u2022 " +
-          missing.map((m) => m[1]).join("\n\u2022 "),
-      );
+      setForm({ ...form, _err: "Fill in: " + missing.map((m) => m[1]).join(", ") + "." }); // v78: said in the form, not a browser pop-up
+      return;
+    }
+    if (form.payType === "class" && !(Number(form.classRate) > 0)) {
+      setForm({ ...form, _err: "Enter the rate for one class (Rs)." });
       return;
     }
     if (modal.type === "add") {
@@ -181,30 +199,19 @@ const TeachMod = ({
         (t) => (t.name || "").trim().toLowerCase() === nLower,
       );
       if (codeDup) {
-        alert(
-          '⚠ Code already exists.\n\nThe code "' +
-            codeStr +
-            '" is already assigned to:\n• ' +
-            codeDup.name +
-            "\n\nPlease choose a different code.",
-        );
+        setForm({ ...form, _err: 'The code "' + codeStr + '" is already ' + codeDup.name + "'s — choose another code." });
         return;
       }
-      if (nameDup) {
-        if (
-          !confirm(
-            '⚠ A teacher with the name "' +
-              form.name +
-              '" already exists (code: ' +
-              nameDup.code +
-              ").\n\nClick OK to save anyway (different person with same name), or Cancel to go back.",
-          )
-        )
-          return;
+      if (nameDup && !form._dupOk) {
+        setForm({ ...form, _dupOk: true, _err: 'A teacher named "' + form.name.trim() + '" already exists (code ' + nameDup.code + "). If this is a different person, press Add again." });
+        return;
       }
     }
     const t = {
-      ...form,
+      ...llqaFormClean(form), // v78: the form's own notes are not saved
+      payType: form.payType === "class" ? "class" : "month", // v78
+      classRate: Math.round(Number(form.classRate)) || 0,
+      classRateS: Math.round(Number(form.classRateS)) || 0,
       salary: Number(form.salary) || 0,
       students: form.students || 0,
       freeSlots: form.freeSlots || 16,
@@ -231,6 +238,13 @@ const TeachMod = ({
             : x,
         ),
       );
+    if (modal.type === "add" && form._hireId != null) llqaHireLink(form._hireId, t.id); // v78: HR's new hire is now a teacher
+    if ((t.status === "resigned" || t.status === "terminated") && !(modal.type === "edit" && llqaTeacherGone(modal.data))) {
+      // v78: a teacher leaving with students booked — move them
+      const n = llqaPayCounts(teachers).get(String(modal.type === "edit" ? modal.data.id : t.id)) || 0;
+      if (n)
+        llqaToast({ kind: "info", key: "leaver-" + t.name, text: "📦 " + t.name + " has " + n + " student" + (n === 1 ? "" : "s") + " booked" + (llqaIsDay(t.leftOn) ? " (last day " + llqaDayMon(t.leftOn) + ")" : "") + ". Move them to other teachers so no class is missed.", actions: [{ label: "Move students", run: () => llqaShiftBulk(t.name) }] });
+    }
     setModal(null);
   };
   const dl = () => {
@@ -339,8 +353,8 @@ const TeachMod = ({
                   const cf = computeFree(t);
                   return cf.total;
                 })(),
-                t.perfRating || "",
-                t.salary || "",
+                llqaPerfLatest(t) || "", // v78
+                llqaPayShort(t),
                 t.phone || "",
                 t.cnic || "",
                 t.bank || "",
@@ -413,13 +427,11 @@ const TeachMod = ({
       React.createElement(SC, {
         icon: Star,
         label: "Avg Rating",
-        value: !at.some((t) => t.perfRating > 0) ? "\u2014" : ( // v70: nobody rated yet is not "0.0"
-          at
-            .filter((t) => t.perfRating > 0)
-            .reduce((s, t) => s + t.perfRating, 0) /
-          (at.filter((t) => t.perfRating > 0).length || 1)
-        ).toFixed(1),
-        sub: at.some((t) => t.perfRating > 0) ? at.filter((t) => t.perfRating > 0).length + " of " + at.length + " rated" : "no ratings yet",
+        ...(() => {
+          // v78: the CRM's scores
+          const rs = at.map((t) => llqaPerfLatest(t)).filter((r) => r != null && r > 0);
+          return { value: rs.length ? (rs.reduce((s, r) => s + r, 0) / rs.length).toFixed(1) : "\u2014", sub: rs.length ? rs.length + " of " + at.length + " scored (this month, else last month)" : "no scores yet" };
+        })(),
         color: c.warn,
       }),
     ),
@@ -808,24 +820,7 @@ const TeachMod = ({
                         padding: "8px 10px",
                       },
                     },
-                    t.perfRating > 0
-                      ? React.createElement(
-                          "span",
-                          {
-                            style: {
-                              color:
-                                t.perfRating >= 4.5
-                                  ? c.success
-                                  : t.perfRating >= 3.5
-                                    ? c.warn
-                                    : c.danger,
-                              fontWeight: 600,
-                            },
-                          },
-                          t.perfRating.toFixed(1),
-                          "\u2605",
-                        )
-                      : "—",
+                    llqaRatingCell(llqaPerfLatest(t)), // v78: worked out by the CRM
                   ),
                   React.createElement(
                     "td",
@@ -845,6 +840,7 @@ const TeachMod = ({
                               ? "warn"
                               : "danger",
                     }),
+                    llqaTeachStatusNote(t), // v78: probation, the leaving day
                   ),
                   React.createElement(
                     "td",
@@ -929,6 +925,7 @@ const TeachMod = ({
       React.createElement(
         React.Fragment,
         null,
+        React.createElement(LLQALeaveBalances, { teachers: at }), // v78: the year's paid leave left
         React.createElement(
           "div",
           {
@@ -1181,417 +1178,7 @@ const TeachMod = ({
           ),
         ),
       ),
-    st === "perf" && !at.some((t) => t.perfRating > 0 || t.classCompletion > 0 || t.studentSatisfaction > 0) && llqaEmptyState({ key: "perf-none", icon: "star", title: "No performance data yet", text: "No rating, class completion or student satisfaction is recorded for any teacher yet. The ranking and charts show here once they are." }), // v70
-    st === "perf" && at.some((t) => t.perfRating > 0 || t.classCompletion > 0 || t.studentSatisfaction > 0) &&
-      React.createElement(
-        React.Fragment,
-        null,
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "flex",
-              gap: 10,
-              flexWrap: "wrap",
-              marginBottom: 14,
-            },
-          },
-          React.createElement(SC, {
-            icon: Star,
-            label: "Top",
-            value:
-              at
-                .filter((t) => t.perfRating > 0)
-                .sort((a, b) => b.perfRating - a.perfRating)[0]
-                ?.name.split(" ")
-                .slice(-2)
-                .join(" ") || "-",
-            color: c.success,
-          }),
-          React.createElement(SC, {
-            icon: TrendingUp,
-            label: "Avg Completion",
-            value:
-              Math.round(
-                at
-                  .filter((t) => t.classCompletion > 0)
-                  .reduce((s, t) => s + t.classCompletion, 0) /
-                  (at.filter((t) => t.classCompletion > 0).length || 1),
-              ) + "%",
-            color: c.accent,
-          }),
-          React.createElement(SC, {
-            icon: UserCheck,
-            label: "Avg Satisfaction",
-            value:
-              Math.round(
-                at
-                  .filter((t) => t.studentSatisfaction > 0)
-                  .reduce((s, t) => s + t.studentSatisfaction, 0) /
-                  (at.filter((t) => t.studentSatisfaction > 0).length || 1),
-              ) + "%",
-            color: c.purple,
-          }),
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: 14,
-              marginBottom: 14,
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgCard,
-                backdropFilter: "blur(16px)",
-                boxShadow: c.shadow3d,
-                border: "1px solid " + c.border,
-                borderRadius: 12,
-                padding: 16,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.text,
-                  margin: "0 0 10px",
-                  fontSize: 12,
-                },
-              },
-              "Top 10 Rating",
-            ),
-            React.createElement(
-              ResponsiveContainer,
-              {
-                width: "100%",
-                height: 220,
-              },
-              React.createElement(
-                BarChart,
-                {
-                  data: pd,
-                  layout: "vertical",
-                },
-                React.createElement(CartesianGrid, {
-                  strokeDasharray: "3 3",
-                  stroke: c.border,
-                }),
-                React.createElement(XAxis, {
-                  type: "number",
-                  domain: [0, 5],
-                  stroke: c.textMuted,
-                  fontSize: 10,
-                }),
-                React.createElement(YAxis, {
-                  type: "category",
-                  dataKey: "name",
-                  stroke: c.textMuted,
-                  fontSize: 10,
-                  width: 72,
-                }),
-                React.createElement(Tooltip, {
-                  contentStyle: {
-                    background: c.bgCard,
-                    backdropFilter: "blur(16px)",
-                    boxShadow: c.shadow3d,
-                    border: "1px solid " + c.border,
-                    borderRadius: 8,
-                    fontSize: 11,
-                    color: c.text,
-                  },
-                }),
-                React.createElement(Bar, {
-                  dataKey: "rating",
-                  fill: c.accent,
-                  radius: [0, 4, 4, 0],
-                }),
-              ),
-            ),
-          ),
-          React.createElement(
-            "div",
-            {
-              style: {
-                background: c.bgCard,
-                backdropFilter: "blur(16px)",
-                boxShadow: c.shadow3d,
-                border: "1px solid " + c.border,
-                borderRadius: 12,
-                padding: 16,
-              },
-            },
-            React.createElement(
-              "h4",
-              {
-                style: {
-                  color: c.text,
-                  margin: "0 0 10px",
-                  fontSize: 12,
-                },
-              },
-              "Completion %",
-            ),
-            React.createElement(
-              ResponsiveContainer,
-              {
-                width: "100%",
-                height: 220,
-              },
-              React.createElement(
-                BarChart,
-                {
-                  data: pd,
-                  layout: "vertical",
-                },
-                React.createElement(CartesianGrid, {
-                  strokeDasharray: "3 3",
-                  stroke: c.border,
-                }),
-                React.createElement(XAxis, {
-                  type: "number",
-                  domain: [60, 100],
-                  stroke: c.textMuted,
-                  fontSize: 10,
-                }),
-                React.createElement(YAxis, {
-                  type: "category",
-                  dataKey: "name",
-                  stroke: c.textMuted,
-                  fontSize: 10,
-                  width: 72,
-                }),
-                React.createElement(Tooltip, {
-                  contentStyle: {
-                    background: c.bgCard,
-                    backdropFilter: "blur(16px)",
-                    boxShadow: c.shadow3d,
-                    border: "1px solid " + c.border,
-                    borderRadius: 8,
-                    fontSize: 11,
-                    color: c.text,
-                  },
-                }),
-                React.createElement(Bar, {
-                  dataKey: "completion",
-                  fill: c.success,
-                  radius: [0, 4, 4, 0],
-                }),
-              ),
-            ),
-          ),
-        ),
-        React.createElement(
-          "div",
-          {
-            style: {
-              overflowX: "auto",
-              borderRadius: 10,
-              border: "1px solid " + c.border,
-            },
-          },
-          React.createElement(
-            "table",
-            {
-              style: {
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: 11,
-              },
-            },
-            React.createElement(
-              "thead",
-              null,
-              React.createElement(
-                "tr",
-                null,
-                [
-                  "Teacher",
-                  "Students",
-                  "Rating",
-                  "Completion",
-                  "Satisfaction",
-                  "Attendance",
-                ].map((h) =>
-                  React.createElement(
-                    "th",
-                    {
-                      key: h,
-                      style: {
-                        padding: "9px 10px",
-                        textAlign: "left",
-                        color: c.textSec,
-                        fontWeight: 600,
-                        fontSize: 10,
-                        textTransform: "uppercase",
-                        borderBottom: "1px solid " + c.border,
-                        background: c.bgDeep,
-                      },
-                    },
-                    h,
-                  ),
-                ),
-              ),
-            ),
-            React.createElement(
-              "tbody",
-              null,
-              llqaEmptyRow("No teacher has a performance rating yet", "Ratings are not recorded for any teacher yet."), // v70: shows only when the table is empty
-              at
-                .filter((t) => t.perfRating > 0)
-                .sort((a, b) => b.perfRating - a.perfRating)
-                .map((t, i) =>
-                  React.createElement(
-                    "tr",
-                    {
-                      key: t.id,
-                      style: {
-                        borderBottom: "1px solid " + c.border,
-                        background: i % 2 ? llqaAlpha(c.bgDeep, "88") : "transparent",
-                      },
-                    },
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px 10px",
-                          fontWeight: 600,
-                        },
-                      },
-                      t.name,
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px 10px",
-                          color: c.success,
-                          fontWeight: 700,
-                        },
-                      },
-                      llqaTeacherStudents(t), // v70
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px 10px",
-                        },
-                      },
-                      React.createElement(
-                        "span",
-                        {
-                          style: {
-                            color:
-                              t.perfRating >= 4.5
-                                ? c.success
-                                : t.perfRating >= 3.5
-                                  ? c.warn
-                                  : c.danger,
-                            fontWeight: 700,
-                          },
-                        },
-                        t.perfRating.toFixed(1),
-                        "\u2605",
-                      ),
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px 10px",
-                        },
-                      },
-                      React.createElement(
-                        "div",
-                        {
-                          style: {
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 5,
-                          },
-                        },
-                        React.createElement(PBar, {
-                          value: t.classCompletion,
-                          color: t.classCompletion >= 95 ? c.success : c.warn,
-                        }),
-                        React.createElement(
-                          "span",
-                          {
-                            style: {
-                              fontSize: 10,
-                              color: c.textSec,
-                            },
-                          },
-                          t.classCompletion,
-                          "%",
-                        ),
-                      ),
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px 10px",
-                        },
-                      },
-                      React.createElement(
-                        "div",
-                        {
-                          style: {
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 5,
-                          },
-                        },
-                        React.createElement(PBar, {
-                          value: t.studentSatisfaction,
-                          color:
-                            t.studentSatisfaction >= 90 ? c.success : c.warn,
-                        }),
-                        React.createElement(
-                          "span",
-                          {
-                            style: {
-                              fontSize: 10,
-                              color: c.textSec,
-                            },
-                          },
-                          t.studentSatisfaction,
-                          "%",
-                        ),
-                      ),
-                    ),
-                    React.createElement(
-                      "td",
-                      {
-                        style: {
-                          padding: "8px 10px",
-                        },
-                      },
-                      React.createElement(
-                        "span",
-                        {
-                          style: {
-                            color: t.attendanceRate >= 96 ? c.success : c.warn,
-                            fontWeight: 600,
-                          },
-                        },
-                        t.attendanceRate,
-                        "%",
-                      ),
-                    ),
-                  ),
-                ),
-            ),
-          ),
-        ),
-      ),
+    st === "perf" && React.createElement(LLQAPerfTab, { teachers: at }), // v78: worked out from the CRM's own records
     st === "feedback" &&
       React.createElement(
         "div",
@@ -1957,16 +1544,7 @@ const TeachMod = ({
                 }),
               type: "date",
             }),
-            React.createElement(Inp, {
-              label: "Salary *",
-              value: form.salary || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  salary: v,
-                }),
-              type: "number",
-            }),
+            React.createElement(LLQAPayFields, { form, setForm, edit: modal.type === "edit", orig: modal.type === "edit" ? modal.data : null }), // v78: a monthly salary, or a rate per class
             React.createElement(Inp, {
               label: "Phone *",
               value: form.phone || "",
@@ -2162,6 +1740,7 @@ const TeachMod = ({
               }),
             placeholder: "Optional notes about this teacher",
           }),
+          form._err ? llqaV77Box(form._err, c.danger) : null, // v78
           React.createElement(
             "div",
             {
@@ -2539,7 +2118,7 @@ const TeachMod = ({
                   fontSize: 11,
                 },
               },
-              "Balance",
+              "Paid leave left", // v78
             ),
             React.createElement(
               "span",
@@ -2549,8 +2128,7 @@ const TeachMod = ({
                   fontWeight: 700,
                 },
               },
-              modal.data.leaveBalance,
-              " days",
+              llqaLeaveBalText(modal.data, String(form.from || todayPK()).slice(0, 4)), // v78: worked out from the leave taken
             ),
           ),
           React.createElement(Inp, {

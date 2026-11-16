@@ -103,14 +103,13 @@ const HRMod = ({
       });
     } catch (err) {
       console.error(err);
-      alert("Failed to parse CV. Ensure it is a valid PDF.");
-      setForm({ isParsing: false, parsingStatus: "" });
+      setForm({ isParsing: false, parsingStatus: "", _err: "The CV couldn't be read — check it is a PDF, or fill in the details by hand." }); // v78
     }
   };
 
   const saveInterview = (e) => {
     e.preventDefault();
-    if (!form.name) return alert("Candidate Name is required");
+    if (!form.name) return setForm({ ...form, _err: "Write the candidate's name." }); // v78: in the form
     const rec = {
       id: form.id || Date.now() + Math.floor(Math.random() * 1000),
       name: form.name,
@@ -128,13 +127,14 @@ const HRMod = ({
     } else {
       setHrInterviews([...(hrInterviews || []), rec]);
     }
+    llqaHireAdd(rec); // v78: Hired → New Hiring (once)
     setModal(null);
     setForm({});
   };
 
   const saveHiring = (e) => {
     e.preventDefault();
-    if (!form.name) return alert("Candidate Name is required");
+    if (!form.name) return setForm({ ...form, _err: "Write the candidate's name." }); // v78: in the form
     const rec = {
       id: form.id || Date.now() + Math.floor(Math.random() * 1000),
       name: form.name,
@@ -145,26 +145,26 @@ const HRMod = ({
       bankDetails: form.bankDetails || "",
       docsSubmitted: form.docsSubmitted || false,
       stage: form.stage || "Offer Sent",
+      ...(form.interviewId != null ? { interviewId: form.interviewId } : {}), // v78: kept on an edit
+      ...(form.teacherId != null ? { teacherId: form.teacherId, joinedOn: form.joinedOn || "" } : {}),
     };
     if (form.id) {
       setHrHiring((hrHiring || []).map((h) => (h.id === form.id ? rec : h)));
     } else {
       setHrHiring([...(hrHiring || []), rec]);
     }
+    if ((rec.stage === "Active" || rec.stage === "Training") && rec.teacherId == null)
+      llqaToast({ kind: "info", key: "hire-" + rec.id, text: "🎓 " + rec.name + " is " + (rec.stage === "Active" ? "joining" : "in training") + " — add them to Teachers (name, CNIC, bank and joining date are filled in).", actions: [{ label: "Add as teacher", run: () => llqaTeachAddFrom(rec) }] }); // v78
     setModal(null);
     setForm({});
   };
 
   const deleteInterview = (id) => {
-    if (confirm("Are you sure you want to delete this interview record?")) {
-      setHrInterviews((hrInterviews || []).filter((i) => i.id !== id));
-    }
+    llqaConfirm("Delete this interview record?", () => setHrInterviews((hrInterviews || []).filter((i) => i.id !== id)), { yes: "Delete", danger: true, title: "Delete interview" }); // v78
   };
 
   const deleteHiring = (id) => {
-    if (confirm("Are you sure you want to delete this new hire record?")) {
-      setHrHiring((hrHiring || []).filter((h) => h.id !== id));
-    }
+    llqaConfirm("Delete this new hire record?", () => setHrHiring((hrHiring || []).filter((h) => h.id !== id)), { yes: "Delete", danger: true, title: "Delete new hire" }); // v78
   };
 
   const getDecisionColor = (d) => {
@@ -709,6 +709,11 @@ const HRMod = ({
                         },
                         React.createElement(Edit2, { size: 16 }),
                       ),
+                      h.teacherId != null
+                        ? llqaSmall("✓ In Teachers", c.success, "in")
+                        : h.stage === "Active" || h.stage === "Training"
+                          ? llqaMini("Add as teacher", () => llqaTeachAddFrom(h), { key: "add", tone: "accent" }) // v78
+                          : null,
                       React.createElement(
                         "button",
                         {
@@ -1325,6 +1330,7 @@ const HRMod = ({
               ),
             ),
 
+          form._err ? llqaV77Box(form._err, c.danger) : null, // v78
           React.createElement(
             "div",
             {
