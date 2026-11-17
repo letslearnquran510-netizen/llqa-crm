@@ -14,8 +14,11 @@ const ParentMod = ({
 }) => {
   const isParent = user && user.role === "parent";
   const allStudents = students || [];
+  // v80: a family with several children sees each of them
+  const myKids = isParent ? llqaFamKids(allStudents, user) : [];
+  const [kidId, setKidId] = useState(() => llqaFamKidPick(myKids));
   const myStudent = isParent
-    ? allStudents.find((s) => s.parentId === user.parentId)
+    ? myKids.find((s) => String(s.id) === String(kidId)) || myKids[0] || allStudents.find((s) => s.parentId === user.parentId) || null
     : null;
   const [selectedStuId, setSelectedStuId] = useState(
     allStudents[0] ? allStudents[0].id : null,
@@ -103,8 +106,7 @@ const ParentMod = ({
     setFbCat("Excellent Teaching");
   };
   const deleteFeedback = (id) => {
-    if (!confirm("Delete this feedback?")) return;
-    setTeacherFeedback((teacherFeedback || []).filter((n) => n.id !== id));
+    llqaConfirm("Delete this feedback?", () => setTeacherFeedback((prev) => (prev || []).filter((n) => n.id !== id)), { yes: "Delete", title: "Feedback" }); // v80: the CRM's window
   };
   const generateParentId = () => {
     const existing = new Set(
@@ -124,11 +126,7 @@ const ParentMod = ({
           : s,
       ),
     );
-    alert(
-      "Parent ID generated:\n\n" +
-        id +
-        "\n\nShare this with the parent. They use this ID to log in.",
-    );
+    llqaToast({ kind: "info", ttl: 15000, text: "🆔 Parent ID made: " + id + " — share it with the parent; they sign in with it." }); // v80
   };
   const printInvoice = (inv) => {
     const w = window.open("", "invoice", "width=800,height=900");
@@ -1026,6 +1024,7 @@ const ParentMod = ({
             ),
           ),
         ),
+        llqaFamInboxBtn(), // v80: every family's messages
       ),
     (function () {
       const initials = (stu.name || "?")
@@ -1742,6 +1741,7 @@ const ParentMod = ({
           : null,
       );
     })(),
+    isParent ? llqaKidBar(myKids, stu, (id) => { setKidId(id); llqaFamKidKeep(id); }) : null, // v80
     llqaParentAskBanner(stu, user, tab, () => setTab("requests")), // v66
     React.createElement(
       "div",
@@ -1758,7 +1758,8 @@ const ParentMod = ({
         ["progress", "Daily Progress"],
         ["attendance", "Attendance"],
         ["invoices", "Invoices"],
-        ["notes", "Notes (" + myNotes.length + ")"],
+        ["notes", llqaFamMsgLabel(stu, user)], // v80: messages with the academy and the teacher
+        ["reports", "Monthly Reports"], // v80
         ["feedback", "Teacher Feedback"],
         ["requests", "Requests" + (llqaParentAskCount(stu, user) ? " · " + llqaParentAskCount(stu, user) : "")], // v66 · v69: no emoji, like the other tabs
       ].map(([k, l]) =>
@@ -1784,10 +1785,13 @@ const ParentMod = ({
       ),
     ),
     tab === "requests" && React.createElement(LLQAParentRequests, { stu, user }), // v66
+    tab === "reports" && React.createElement(LLQAFamReports, { key: "rep" + stu.id, stu }), // v80
     tab === "overview" &&
       React.createElement(
         "div",
         null,
+        React.createElement(LLQAFamRate, { key: "rate" + stu.id, stu, user }), // v80: the month's rating
+        React.createElement(LLQAFamClasses, { stu }), // v80: the coming classes in the family's time
         React.createElement(
           "div",
           {
@@ -3198,6 +3202,7 @@ const ParentMod = ({
       React.createElement(
         "div",
         null,
+        React.createElement(LLQAFamPay, { key: "pay" + stu.id, stu, user }), // v80: how to pay, "I've paid", receipts
         React.createElement(
           "table",
           {
@@ -3353,192 +3358,7 @@ const ParentMod = ({
           ),
         ),
       ),
-    tab === "notes" &&
-      React.createElement(
-        "div",
-        null,
-        React.createElement(
-          "div",
-          {
-            style: {
-              background: c.bgCard,
-              border: "1px solid " + c.border,
-              borderRadius: 10,
-              padding: 14,
-              marginBottom: 14,
-            },
-          },
-          React.createElement(
-            "div",
-            {
-              style: {
-                color: c.textSec,
-                fontSize: 10,
-                fontWeight: 600,
-                marginBottom: 6,
-                textTransform: "uppercase",
-                letterSpacing: 0.5,
-              },
-            },
-            isParent
-              ? "Share a note with the academy"
-              : "Add note for the parent",
-          ),
-          React.createElement("textarea", {
-            value: noteText,
-            onChange: (e) => setNoteText(e.target.value),
-            placeholder: isParent
-              ? "Share an observation, question, or concern with your child\u0027s teacher..."
-              : "Note from admin/teacher to parent...",
-            rows: 3,
-            style: {
-              width: "100%",
-              padding: "10px 12px",
-              background: c.bgInput,
-              border: "1px solid " + c.border,
-              borderRadius: 6,
-              color: c.text,
-              fontSize: 12,
-              outline: "none",
-              boxSizing: "border-box",
-              fontFamily: "inherit",
-              resize: "vertical",
-            },
-          }),
-          React.createElement(
-            "div",
-            {
-              style: {
-                display: "flex",
-                justifyContent: "flex-end",
-                marginTop: 8,
-              },
-            },
-            React.createElement(
-              "button",
-              {
-                onClick: addNote,
-                disabled: !noteText.trim(),
-                style: {
-                  padding: "7px 14px",
-                  background: noteText.trim() ? c.accentFill : c.bgDeep,
-                  border: "none",
-                  borderRadius: 6,
-                  color: noteText.trim() ? c.accentText : c.textMuted,
-                  fontSize: 11,
-                  fontWeight: 600,
-                  cursor: noteText.trim() ? "pointer" : "not-allowed",
-                },
-              },
-              "Send Note",
-            ),
-          ),
-        ),
-        myNotes.length === 0
-          ? React.createElement(
-              "div",
-              {
-                style: {
-                  background: c.bgDeep,
-                  border: "1px dashed " + c.border,
-                  borderRadius: 10,
-                  padding: 24,
-                  textAlign: "center",
-                  color: c.textMuted,
-                  fontSize: 11,
-                },
-              },
-              llqaLabel("💬 No notes yet. Share an observation, question, or concern about your child\u0027s progress and the academy will see it instantly."),
-            )
-          : React.createElement(
-              "div",
-              null,
-              myNotes.map((n) =>
-                React.createElement(
-                  "div",
-                  {
-                    key: n.id,
-                    style: {
-                      background: c.bgCard,
-                      border: "1px solid " + c.border,
-                      borderLeft:
-                        "3px solid " +
-                        (n.authorRole === "parent" ? c.cyan : c.purple),
-                      borderRadius: 8,
-                      padding: 12,
-                      marginBottom: 8,
-                    },
-                  },
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        marginBottom: 6,
-                      },
-                    },
-                    React.createElement(
-                      "div",
-                      null,
-                      React.createElement(
-                        "strong",
-                        {
-                          style: {
-                            color:
-                              n.authorRole === "parent" ? c.cyan : c.purple,
-                            fontSize: 11,
-                          },
-                        },
-                        n.author,
-                      ),
-                      React.createElement(
-                        "span",
-                        {
-                          style: {
-                            color: c.textMuted,
-                            fontSize: 9,
-                            marginLeft: 8,
-                          },
-                        },
-                        new Date(n.createdAt).toLocaleString(),
-                      ),
-                    ),
-                    (isParent && n.authorRole === "parent") || !isParent
-                      ? React.createElement(
-                          "button",
-                          {
-                            onClick: () => deleteNote(n.id),
-                            style: {
-                              background: "none",
-                              border: "none",
-                              color: c.danger,
-                              fontSize: 10,
-                              cursor: "pointer",
-                              padding: "2px 6px",
-                            },
-                          },
-                          "Delete",
-                        )
-                      : null,
-                  ),
-                  React.createElement(
-                    "div",
-                    {
-                      style: {
-                        color: c.text,
-                        fontSize: 12,
-                        lineHeight: 1.5,
-                        whiteSpace: "pre-wrap",
-                      },
-                    },
-                    n.text,
-                  ),
-                ),
-              ),
-            ),
-      ),
+    tab === "notes" && React.createElement(LLQAFamMsgs, { key: "msg" + stu.id, stu, user }), // v80: the family, the office and the teacher
     tab === "feedback" &&
       React.createElement(
         "div",

@@ -215,6 +215,12 @@ const TeachMod = ({
         setForm({ ...form, _err: 'The code "' + codeStr + '" is already ' + codeDup.name + "'s — choose another code." });
         return;
       }
+      // v80: a teacher on probation is made active once onboarding is completed (Settings → Training)
+      const was = teachers.find((t) => t.id === modal.data.id);
+      if (was && was.status === "new" && form.status === "active" && llqaOnbBlock(was)) {
+        setForm({ ...form, _err: llqaOnbBlock(was) });
+        return;
+      }
     }
     const t = {
       ...llqaFormClean(form), // v78: the form's own notes are not saved

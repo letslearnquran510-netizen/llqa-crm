@@ -21,6 +21,7 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
     (t) => t.status !== "resigned" && t.status !== "terminated",
   );
   const progs = trainingPrograms || [];
+  const canEdit = llqaCanTrain((LLQAApp.ctx || {}).user); // v80: an admin, a team lead, a role given "Manage Training"
   const num = (n) => Number(n || 0);
   const today = todayPK();
   const thisMonth = today.slice(0, 7);
@@ -45,6 +46,7 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
   const complRate =
     totalEnroll > 0 ? Math.round((certified.length / totalEnroll) * 100) : 0;
   const oAdd = () => {
+    if (!canEdit) return llqaTrainNoEdit(); // v80
     setForm({
       topic: "",
       category: "Onboarding",
@@ -55,6 +57,9 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
       materials: "",
       notes: "",
       attendees: [],
+      start: "", // v80: the session's hours (PKT) and where it is
+      end: "",
+      place: "",
     });
     setAttInput("");
     setModal({
@@ -62,6 +67,7 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
     });
   };
   const oEdit = (p) => {
+    if (!canEdit) return llqaTrainNoEdit(); // v80
     setForm({
       ...p,
       attendees: (p.attendees || []).map((a) => ({
@@ -75,14 +81,14 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
     });
   };
   const save = () => {
-    if (!form.topic || !form.topic.trim()) {
-      alert("Please enter a training topic.");
+    // v80: what is wrong is said in the form; the hours come from the times; a typed name that is a teacher is
+    // linked to them; everyone marked after its day → Completed, with certificate numbers
+    const bad = llqaTrainCheck(form);
+    if (bad) {
+      setForm({ ...form, _err: bad });
       return;
     }
-    const rec = {
-      ...form,
-      duration: num(form.duration),
-    };
+    const rec = llqaTrainPrep(llqaFormClean(form), modal.type === "edit" ? modal.data : null);
     if (modal.type === "edit")
       setTrainingPrograms(progs.map((p) => (p.id === form.id ? rec : p)));
     else
@@ -96,7 +102,7 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
     setModal(null);
   };
   const oDel = (p) =>
-    setModal({
+    !canEdit ? llqaTrainNoEdit() : setModal({
       type: "del",
       data: p,
     });
@@ -107,7 +113,11 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
   const addAtt = () => {
     const nm = attInput.trim();
     if (!nm) return;
-    const t = tList.find((x) => x.name === nm);
+    const t = tList.find((x) => llqaLow(x.name) === llqaLow(nm)); // v80: the same person twice is refused
+    if ((form.attendees || []).some((a) => (t ? llqaAttIs(a, t) : llqaLow(a.name) === llqaLow(nm)))) {
+      setForm({ ...form, _err: (t ? t.name : nm) + " is already on this program." });
+      return;
+    }
     setForm({
       ...form,
       attendees: [
@@ -128,6 +138,9 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
       ...arr[i],
       [k]: v,
     };
+    // v80: a score marks Completed or Failed by the pass mark (Settings); who marked it is kept
+    if (k === "score") arr[i] = { ...arr[i], status: llqaScoreStatus(arr[i], v) };
+    if (k === "score" || k === "status") arr[i] = { ...arr[i], markedBy: llqaPayActor(), markedAt: new Date().toISOString() };
     setForm({
       ...form,
       attendees: arr,
@@ -363,10 +376,10 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
   const matrixData = () => {
     const g = {};
     allAtt.forEach((a) => {
-      const k = a.name || "\u2014";
+      const k = a.teacherId != null && a.teacherId !== "" ? "t" + a.teacherId : a.name || "\u2014"; // v80: a teacher by their id
       if (!g[k])
         g[k] = {
-          name: k,
+          name: llqaAttName(a),
           enrolled: 0,
           completed: 0,
           hours: 0,
@@ -463,7 +476,7 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
           },
           {
             h: "Date",
-            render: (p) => p.date || "\u2014",
+            render: (p) => llqaTrainWhen(p), // v80: the hours, and "mark who attended" once it's over
           },
           {
             h: "Hrs",
@@ -867,8 +880,7 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
     );
   } else if (tab === "matrix") {
     const data = matrixData().filter((x) => matchS([x.name]));
-    const trainedNames = new Set(allAtt.map((a) => a.name));
-    const untrained = tList.filter((t) => !trainedNames.has(t.name)).length;
+    const untrained = tList.filter((t) => !allAtt.some((a) => llqaAttIs(a, t))).length; // v80: by id
     content = React.createElement(
       "div",
       null,
@@ -1351,14 +1363,16 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
             flexWrap: "wrap",
           },
         },
-        React.createElement(
-          Btn,
-          {
-            icon: Plus,
-            onClick: oAdd,
-          },
-          "New Program",
-        ),
+        canEdit // v80
+          ? React.createElement(
+              Btn,
+              {
+                icon: Plus,
+                onClick: oAdd,
+              },
+              "New Program",
+            )
+          : null,
         React.createElement(
           Btn,
           {
@@ -1490,6 +1504,8 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
             ],
           ),
       ),
+    tab === "programs" ? React.createElement(LLQATrainTodoCard, { canEdit, onOpen: oEdit }) : null, // v80: what to do now
+    tab === "matrix" ? React.createElement(LLQATrainReqCard, { teachers: tList }) : null, // v80: required training
     content,
     modal &&
       (modal.type === "add" || modal.type === "edit") &&
@@ -1647,6 +1663,9 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
               type: "number",
               placeholder: "e.g. 2",
             }),
+            React.createElement(Inp, { label: "Starts (PKT)", type: "time", value: form.start || "", onChange: (v) => setForm({ ...form, start: v, _err: "" }) }), // v80
+            React.createElement(Inp, { label: "Ends (PKT)", type: "time", value: form.end || "", onChange: (v) => setForm({ ...form, end: v, _err: "" }) }),
+            React.createElement(Inp, { label: "Place or meeting link", value: form.place || "", onChange: (v) => setForm({ ...form, place: v }), placeholder: "Room 2 / https://zoom.us/…" }),
             React.createElement(Inp, {
               label: "Materials (link)",
               value: form.materials || "",
@@ -1668,6 +1687,7 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
               }),
             placeholder: "Agenda / objectives",
           }),
+          React.createElement(LLQATrainFormExtra, { form, setForm, teachers: tList }), // v80: errors, add teachers, clashes
           React.createElement(
             "div",
             {
@@ -1785,7 +1805,7 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
                             whiteSpace: "nowrap",
                           },
                         },
-                        a.name,
+                        a.name + llqaTrainWho(a), // v80
                       ),
                       React.createElement(
                         NativeSelectWrapper,
@@ -1828,6 +1848,7 @@ const TrainingMod = ({ teachers, trainingPrograms, setTrainingPrograms }) => {
                           fontSize: 11,
                         },
                       }),
+                      llqaCertBtn(form, a), // v80: the certificate
                       React.createElement(
                         "button",
                         {
