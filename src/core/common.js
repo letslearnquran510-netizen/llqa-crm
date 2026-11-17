@@ -7647,6 +7647,10 @@ const LLQAHolidayWin = ({ data, onClose }) => {
     if (!String(f.name || "").trim()) return setErr("Give it a name (e.g. Eid ul Fitr).");
     if (!llqaIsDay(f.from) || (f.to && (!llqaIsDay(f.to) || f.to < f.from))) return setErr("Check the dates — the last day can't be before the first.");
     if (typeof ctx.setCalendar !== "function" || !llqaCanManage()) return setErr("The calendar can't be changed here.");
+    {
+      const clash = llqaCalClash(f, cur ? cur.id : undefined); // v79
+      if (clash) return setErr(llqaCalClashText(clash));
+    }
     const u = ctx.user || {};
     const by = u.name || u.role || "";
     const at = new Date().toISOString();

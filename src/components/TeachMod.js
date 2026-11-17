@@ -207,6 +207,15 @@ const TeachMod = ({
         return;
       }
     }
+    if (modal.type === "edit") {
+      // v79: the code is one teacher's only
+      const codeStr = String(form.code).trim();
+      const codeDup = teachers.find((t) => t.id !== modal.data.id && String(t.code).trim() === codeStr);
+      if (codeDup) {
+        setForm({ ...form, _err: 'The code "' + codeStr + '" is already ' + codeDup.name + "'s — choose another code." });
+        return;
+      }
+    }
     const t = {
       ...llqaFormClean(form), // v78: the form's own notes are not saved
       payType: form.payType === "class" ? "class" : "month", // v78
@@ -252,13 +261,20 @@ const TeachMod = ({
     setModal(null);
   };
   const sL = () => {
-    if (!form.type || !form.from || !form.to) return;
+    // v79: what is wrong is said in the form; the same days twice are refused; the days are counted from the dates
+    const bad = llqaLeaveCheck(form.teacherId, form.teacherName, form) || (!String(form.reason || "").trim() ? "Write the reason." : "");
+    if (bad) {
+      setForm({ ...form, _err: bad });
+      return;
+    }
+    const to = form.to || form.from;
     setLeaves([
       ...leaves,
       {
         id: Date.now(),
-        ...form,
-        days: Number(form.days) || 1,
+        ...llqaFormClean(form),
+        to,
+        days: form.halfDay ? 0.5 : (llqaDays(form.from, to) || 0) + 1,
         status: "pending",
       },
     ]);
@@ -2180,16 +2196,16 @@ const TeachMod = ({
                 gap: "0 14px",
               },
             },
-            React.createElement(Inp, {
-              label: "Days",
-              value: form.days || "",
-              onChange: (v) =>
-                setForm({
-                  ...form,
-                  days: v,
-                }),
-              type: "number",
-            }),
+            React.createElement(
+              "div",
+              { style: { marginBottom: 12 } },
+              React.createElement("label", { style: { display: "block", color: c.textSec, fontSize: 10, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 } }, "Days"),
+              React.createElement(
+                "div",
+                { title: "Counted from the dates", style: { padding: "8px 10px", background: c.bgDeep, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 12 } },
+                llqaIsDay(form.from) && (!form.to || form.to >= form.from) ? String((llqaDays(form.from, form.to || form.from) || 0) + 1) : "\u2014", // v79
+              ),
+            ),
             React.createElement(Inp, {
               label: "Status",
               value: form.status || "pending",
@@ -2251,6 +2267,7 @@ const TeachMod = ({
               }),
             placeholder: "Drive/Dropbox link to medical certificate or proof",
           }),
+          form._err ? llqaV77Box(form._err, c.danger) : null, // v79
           React.createElement(
             "div",
             {
