@@ -1951,6 +1951,7 @@ const SettingsMod = ({
         React.createElement(
           React.Fragment,
           null,
+          React.createElement(LLQAFamPaySettings, { settings, update }), // v80: what families see under "Paying the fee"
           React.createElement(
             SettingCard,
             {
@@ -2654,6 +2655,7 @@ const SettingsMod = ({
             ),
           ),
           React.createElement(LLQAHrSettings, { settings, update }), // v78: per-class pay, bonuses, probation, lateness warnings
+          React.createElement(LLQATrainSettings, { settings, update }), // v80: pass mark, onboarding, required training
         ),
       section === "security" &&
         React.createElement(
@@ -6133,6 +6135,8 @@ const SettingsMod = ({
             "Mark Attendance",
             "Mark Extra Classes", // v76
             "Edit Scores & Bonuses", // v78
+            "Manage Training", // v80
+            "Parents Portal", // v80
             "Manage Finance", // v77
             "Fee Recovery", // v77
           ].map((perm) =>

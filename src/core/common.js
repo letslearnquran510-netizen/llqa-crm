@@ -8767,6 +8767,8 @@ const PERMISSION_TO_MODULE = {
   "Mark Attendance": ["attendance"], // v72: mark days by hand, check out, correct a day (a teacher never marks their own)
   "Mark Extra Classes": ["timetable", "subjects"], // v76: a Timetable class as Extra or Regular
   "Edit Scores & Bonuses": ["teachers", "payroll"], // v78: a teacher's score or performance bonus for a month, confirm scores
+  "Manage Training": ["training"], // v80: Training & Dev — programs, attendance, scores, certificates
+  "Parents Portal": ["parent"], // v80: families' portals and their messages
   "Manage Finance": ["finance", "ar", "ap"], // v77: the Finance page, Accounts Receivable and Payable (payments, bills)
   "Fee Recovery": ["ar"], // v77: a family's pay-by date, stop / resume fee reminders, write fees off, put back a removed payment
 };
