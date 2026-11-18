@@ -10992,6 +10992,8 @@ const llqaSignIn = async (key, secret, what) => {
   try {
     L = await llqaLoginGet(key);
   } catch (e) {
+    // v81.1: the list of sign-ins is refused before a sign-in only while Firebase still has the old access rules
+    if (/permission/.test(String((e && e.code) || ""))) return { error: "The list of sign-ins can't be read — the CRM's new access rules aren't in Firebase yet (Firestore → Rules)." };
     const m = llqaAuthMsg(e);
     return { error: m === "wrong" ? "Sign-in failed." : m };
   }
@@ -11821,4 +11823,43 @@ const llqaStampList = (name, list) => {
     return { ...p, _tids: t };
   });
   return changed ? out : list;
+};
+
+/* ---------- v81.1: the App's own referrals ---------- */
+// a student "referred by" someone gets a referral (Enrolled) — worked out from the latest list. A referral already
+// logged for that child (same name and referrer, no student yet) is linked and marked Enrolled instead of a second copy
+// (on the real cloud the App's copy came first and the referral stayed "New" next to an "Enrolled" copy).
+const llqaRefAuto = (prev, add, today, now) => {
+  const list = prev || [];
+  const ex = new Set(list.map((r) => String(r && r.studentId)));
+  const todo = (add || []).filter((s) => s && !ex.has(String(s.id)));
+  if (!todo.length) return prev;
+  const norm = (x) => String(x || "").trim().toLowerCase();
+  const linked = new Set();
+  const kept = list.map((r) => {
+    if (!r || (r.studentId != null && String(r.studentId) !== "")) return r;
+    const s = todo.find((st) => !linked.has(st.id) && norm(st.name) === norm(r.studentName) && norm(st.referredBy) === norm(r.referredBy));
+    if (!s) return r;
+    linked.add(s.id);
+    return { ...r, status: "Enrolled", studentId: s.id, enrolledDate: r.enrolledDate || today };
+  });
+  const rest = todo.filter((s) => !linked.has(s.id));
+  return [
+    ...kept,
+    ...rest.map((s, i) => ({
+      id: (now || Date.now()) + i,
+      studentId: s.id,
+      studentName: s.name,
+      referredBy: s.referredBy,
+      relationship: s.refRelationship || "",
+      contact: s.phone || "",
+      country: s.country || "",
+      course: s.course || "",
+      date: s.dor || today,
+      status: "Enrolled",
+      reward: "",
+      notes: "Auto-added from student registration",
+      _auto: true,
+    })),
+  ];
 };

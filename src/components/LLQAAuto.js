@@ -12341,34 +12341,80 @@ const llqaUserFromAcct = async (a) => {
 const llqaOwnerHint = (v) =>
   v.owner === false
     ? "First sign-in: choose the Super Admin password (at least 8 characters). It opens everything — keep it safe. A recovery email lets you reset it if it's forgotten."
-    : "Sign in with your password.";
+    : v.owner === "unknown"
+      ? "The list of sign-ins can't be read. If the CRM was just updated, its new access rules may not be in Firebase yet (Firestore → Rules). Otherwise check the internet."
+      : "Sign in with your password.";
 const llqaFieldStyle = { width: "100%", padding: "10px 12px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 13, outline: "none", boxSizing: "border-box" };
 const llqaSignLabel = (t) => React.createElement("label", { style: { display: "block", color: c.textSec, fontSize: 10, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 } }, t);
-const LLQASecretField = ({ label, pin, value, onChange, onEnter }) =>
-  React.createElement(
+// v81.1: an eye button shows what was typed (and hides it again)
+const LLQAEyeOff = (() => {
+  try {
+    window.__ICONS__["eye-off"] =
+      window.__ICONS__["eye-off"] ||
+      '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49" /> <path d="M14.084 14.158a3 3 0 0 1-4.242-4.242" /> <path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143" /> <path d="m2 2 20 20" />';
+  } catch (e) {}
+  return makeIcon("eye-off");
+})();
+const LLQASecretField = ({ label, pin, value, onChange, onEnter }) => {
+  const [show, setShow] = React.useState(false);
+  const what = (show ? "Hide " : "Show ") + (pin ? "PIN" : "password");
+  return React.createElement(
     "div",
     { style: { marginBottom: 12 } },
     llqaSignLabel(label),
-    React.createElement("input", {
-      type: "password",
-      value: value || "",
-      "aria-label": label,
-      autoComplete: pin ? "off" : "current-password",
-      inputMode: pin ? "numeric" : undefined,
-      maxLength: pin ? 6 : 128,
-      placeholder: pin ? "6-digit PIN" : "Password",
-      onChange: (e) => onChange(pin ? String(e.target.value).replace(/\D/g, "").slice(0, 6) : e.target.value),
-      onKeyDown: (e) => {
-        if (e.key === "Enter" && onEnter) onEnter();
-      },
-      style: { ...llqaFieldStyle, letterSpacing: pin ? 3 : 0 },
-    }),
+    React.createElement(
+      "div",
+      { style: { display: "flex", alignItems: "stretch" } },
+      React.createElement("input", {
+        type: show ? "text" : "password",
+        value: value || "",
+        "aria-label": label,
+        autoComplete: pin ? "off" : "current-password",
+        inputMode: pin ? "numeric" : undefined,
+        maxLength: pin ? 6 : 128,
+        placeholder: pin ? "6-digit PIN" : "Password",
+        spellCheck: false,
+        onChange: (e) => onChange(pin ? String(e.target.value).replace(/\D/g, "").slice(0, 6) : e.target.value),
+        onKeyDown: (e) => {
+          if (e.key === "Enter" && onEnter) onEnter();
+        },
+        style: { ...llqaFieldStyle, flex: 1, minWidth: 0, borderTopRightRadius: 0, borderBottomRightRadius: 0, letterSpacing: pin ? 3 : 0 },
+      }),
+      React.createElement(
+        "button",
+        {
+          type: "button",
+          "aria-label": what,
+          "aria-pressed": show,
+          title: what,
+          onClick: () => setShow(!show),
+          style: { flex: "0 0 40px", display: "flex", alignItems: "center", justifyContent: "center", background: c.bgInput, border: "1px solid " + c.border, borderLeft: "none", borderTopRightRadius: 6, borderBottomRightRadius: 6, color: c.textSec, cursor: "pointer", padding: 0 },
+        },
+        React.createElement(show ? LLQAEyeOff : Eye, { size: 16 }),
+      ),
+    ),
   );
+};
 const LLQAOwnerFields = ({ v81, v81Set, dir, pwd, setPwd, onEnter }) => {
+  // v81.1: when the list can't be read, it says so (it used to guess "Sign in with your password")
+  const check = () => llqaOwnerExists().then((x) => v81Set({ owner: x === null ? "unknown" : x }));
   React.useEffect(() => {
-    if (v81.owner === null) llqaOwnerExists().then((x) => v81Set({ owner: x === null ? true : x }));
+    if (v81.owner === null) check();
   }, []);
   if (v81.owner === null) return llqaSmall("Checking…", null, "ck");
+  if (v81.owner === "unknown")
+    return React.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: () => {
+          v81Set({ owner: null });
+          check();
+        },
+        style: { ...llqaFieldStyle, width: "auto", cursor: "pointer", marginBottom: 12 },
+      },
+      "Try again",
+    );
   if (v81.owner === false)
     return React.createElement(
       "div",
