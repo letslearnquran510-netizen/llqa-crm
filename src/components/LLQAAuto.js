@@ -347,9 +347,9 @@ const llqaPhone = (phone, country) => {
 /* ---------- message templates ---------- */
 const LLQA_TEMPLATES = [
   ["welcome", "Welcome + class times",
-    "Assalamu Alaikum {parent},\n\nWelcome to {academy}! 🌙 {student}'s classes are booked ({zone} time):\n{schedule}\nTeacher: {teacher}\n\nParent Portal: {portalLink}\nParent ID: {portalId}\n(Attendance, progress and teacher notes are there.)\n\nJazakAllah Khair!"],
+    "Assalamu Alaikum {parent},\n\nWelcome to {academy}! 🌙 {student}'s classes are booked ({zone} time):\n{schedule}\nTeacher: {teacher}\n\nParent Portal: {portalLink}\nParent ID: {portalId} · PIN: {pin}\n(Attendance, progress and teacher notes are there.)\n\nJazakAllah Khair!"],
   ["portalIntro", "Parent Portal intro (existing families)",
-    "Assalamu Alaikum {parent},\n\n{student}'s attendance, daily progress and teacher notes are now in our Parent Portal:\n{portalLink}\nParent ID: {portalId}\n\nYou can also ask for leave or a different class time there. Classes ({zone} time):\n{schedule}\n\nJazakAllah Khair!"],
+    "Assalamu Alaikum {parent},\n\n{student}'s attendance, daily progress and teacher notes are now in our Parent Portal:\n{portalLink}\nParent ID: {portalId} · PIN: {pin}\n\nYou can also ask for leave or a different class time there. Classes ({zone} time):\n{schedule}\n\nJazakAllah Khair!"],
   ["classReminder", "Class reminder",
     "Assalamu Alaikum {parent}, a reminder that {student}'s class with {teacher} is {nextClass} ({zone} time). JazakAllah Khair!"],
   ["newTimes", "New class times",
@@ -403,6 +403,12 @@ const LLQA_TEMPLATES = [
     "Assalamu Alaikum {name}, a reminder that the academy is closed for {holiday} ({holidayDates}) — no classes on these days. JazakAllah Khair!", "staff"],
   ["portalReply", "Reply in the Parent Portal",
     "Assalamu Alaikum {parent}, there's a reply for you about {student} in our Parent Portal: {portalLink} (Parent ID {portalId}). JazakAllah Khair!"],
+  ["portalPin", "Parents Portal — sign-in PIN",
+    "Assalamu Alaikum {parent}, here is your sign-in for our Parents Portal: {portalLink} — choose Parent Portal, Parent ID {portalId}, PIN {pin}. Please keep the PIN private. JazakAllah Khair!"],
+  ["teacherPin", "Teachers — sign-in PIN",
+    "Assalamu Alaikum {name},\n\nYour Teacher Portal PIN is {pin}. Open {portalLink}, choose Teacher Portal and your name. Please keep it private.\n\nJazakAllah Khair!", "staff"],
+  ["staffPass", "Staff — temporary password",
+    "Assalamu Alaikum {name},\n\nYour CRM sign-in: open {portalLink}, choose {role} and your name. Temporary password: {pin} — you'll set your own when you sign in.\n\nJazakAllah Khair!", "staff"],
   ["trainingReminder", "Teachers — training reminder",
     "Assalamu Alaikum {name},\n\nA reminder: training \"{topic}\" is on {when} at {place}. Please be on time.\n\nJazakAllah Khair!", "staff"],
 ];
@@ -482,6 +488,7 @@ const llqaFill = (text, s, extra, messaging) => {
     schedule: rows.length ? rows.map((r) => "• " + r.day + " " + B.timeLabel(r.time)).join("\n") : "• (time to be confirmed)",
     zone: llqaZoneLabel(tz) || "your",
     portalId: st.parentId || "—",
+    pin: llqaPinFor(st.parentId), // v81: the family's sign-in PIN
     portalLink: llqaPortalLink(messaging),
     academy: (messaging && messaging.academy) || "Let's Learn Quran Academy",
     nextClass: llqaNextClass(st) || "at the usual time",
@@ -1774,6 +1781,7 @@ const llqaClockTick = (state) => {
   let again = false;
   if (LLQAUI.stale) return false; // v67: a newer version is published — this tab leaves the work to it
   const job = (fn) => {
+    if (firebaseConfig && !llqaIsStaffSignIn()) return; // v81: a teacher's or a family's computer has only their own records
     try {
       if (fn()) again = true;
     } catch (e) {}
@@ -11853,7 +11861,7 @@ const LLQATrainSettings = ({ settings, update }) => {
         "div",
         { style: { display: "flex", gap: 12, alignItems: "center", justifyContent: "space-between", padding: "9px 0", borderBottom: "1px solid " + llqaAlpha(c.border, "66"), flexWrap: "wrap" } },
         React.createElement("div", { style: { flex: "1 1 260px" } }, React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: c.text } }, "Probation waits for onboarding"), llqaSmall("A new teacher is confirmed only after completing the training required for new teachers; until then probation can only be extended.", null, "s")),
-        React.createElement(Toggle, { checked: S.onboardBlock, onChange: (v) => can && put({ onboardBlock: v }) }),
+        React.createElement(Toggle, { value: S.onboardBlock, onChange: (v) => can && put({ onboardBlock: v }) }),
       ),
       React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: c.text, marginTop: 10 } }, "Required training"),
       llqaSmall("Who needs it and how often. The rule for new teachers enrolls each one in the next session by itself.", null, "rs"),
@@ -12230,4 +12238,413 @@ const llqaTrainNoEdit = () => llqaToast({ kind: "info", ttl: 6000, text: "Only a
 const llqaMsgCountText = (u) => {
   const n = llqaMsgInbox(u).reduce((a, x) => a + x.unread, 0);
   return n ? " · " + n + " new" : "";
+};
+
+
+/* ---------- v81: the sign-in screen ---------- */
+// the names on the sign-in screen (people with a sign-in) and the academy's logo — readable before signing in
+const llqaDirLoad = async () => {
+  if (!initFirebase()) return {};
+  for (let i = 0; i < 3; i++) {
+    try {
+      const s = await fb.db.collection("public").doc("directory").get();
+      return s.exists ? s.data() || {} : {};
+    } catch (e) {
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+  return {};
+};
+const llqaLoginBrand = (set0, dir) => (dir && dir.brand ? { ...(set0 || {}), ...dir.brand } : set0 || {});
+const llqaDirTeachers = (dir) => ((dir && dir.teachers) || []).map((x) => ({ id: x.id, name: x.name || "", code: x.code || "", location: x.location || "IBA", key: x.key }));
+const llqaDirRoles = (dir) => {
+  const m = new Map();
+  ((dir && dir.staff) || []).forEach((x) => {
+    const r = x.role || "Staff";
+    if (!m.has(r)) m.set(r, { name: r, people: [], permissions: {} });
+    m.get(r).people.push({ key: x.key, name: x.name || "" });
+  });
+  return Array.from(m.values()).sort((a, b) => a.name.localeCompare(b.name));
+};
+// which sign-in a role's form means, with what it asks for
+const llqaLoginPlan = (role, st) => {
+  const v = st.v81 || {};
+  const pinBad = (x) => !/^\d{6}$/.test(String(x || ""));
+  if (role === "superadmin") {
+    if (!st.pwd) return { error: "Enter the password." };
+    return { key: v.who && v.who !== "owner" ? v.who : "owner", secret: st.pwd, what: "password", none: "The Super Admin sign-in isn't set up yet." };
+  }
+  if (role === "teamlead") {
+    const x = ((st.dir && st.dir.teamLeads) || []).find((y) => y.name === st.tlName);
+    if (!x) return { error: "Choose your name." };
+    if (!v.secret) return { error: "Enter your password." };
+    return { key: x.key, secret: v.secret, what: "password", none: "There's no sign-in for this name yet — ask the Super Admin." };
+  }
+  if (role === "teacher") {
+    const x = llqaDirTeachers(st.dir).find((y) => String(y.id) === String(st.teacherId));
+    if (!x) return { error: "Choose your name." };
+    if (pinBad(v.secret)) return { error: "The PIN is 6 digits." };
+    return { key: x.key, secret: v.secret, what: "PIN", none: "There's no sign-in for this name yet — ask the office for your PIN." };
+  }
+  if (role === "parent") {
+    const pid = llqaPidUp(st.parentIdInput);
+    if (!pid) return { error: "Please enter your Parent ID." };
+    if (pinBad(v.secret)) return { error: "Enter the 6-digit PIN the academy sent you." };
+    return { key: llqaLoginKey("parent", pid), secret: v.secret, what: "PIN", none: "There's no sign-in for this Parent ID yet — ask the academy for your PIN." };
+  }
+  if (!v.stKey) return { error: "Choose your name." };
+  if (!v.secret) return { error: "Enter your password." };
+  return { key: v.stKey, secret: v.secret, what: "password", none: "There's no sign-in for this name yet — ask the Super Admin." };
+};
+// the person the CRM worked with before (made from the account and, for a teacher or a family, their own records)
+const llqaUserFromAcct = async (a) => {
+  if (!a) return null;
+  const get = async (coll, id) => {
+    try {
+      const s = await fb.db.collection(coll).doc(String(id)).get();
+      return s.exists ? s.data() || {} : null;
+    } catch (e) {
+      return null;
+    }
+  };
+  if (a.role === "superadmin") return { role: "superadmin", name: a.name || "Mohsin", display: "Super Admin", location: "IBA" };
+  if (a.role === "teamlead") return { role: "teamlead", name: a.name, display: "Team Lead — " + a.name, location: "IBA" };
+  if (a.role === "teacher") {
+    const t = await get("teachers", a.tid);
+    if (!t) return null;
+    const id = t.id != null ? t.id : a.tid;
+    return { role: "teacher", id, name: t.name || a.name, display: "Teacher — " + (t.name || a.name), teacherId: id, teacherCode: t.code, location: t.location };
+  }
+  if (a.role === "parent") {
+    const v = (await get("views", "p-" + a.pid)) || {};
+    let kid = null;
+    for (const sid of v.sids || []) {
+      const s = await get("students", sid);
+      if (s && s.status !== "quit") {
+        kid = { ...s, id: s.id != null ? s.id : sid };
+        break;
+      }
+    }
+    return { role: "parent", name: (kid && kid.parent) || a.name || "Parent", display: "Parent of " + ((kid && kid.name) || a.pid), parentId: a.pid, studentId: kid ? kid.id : null, studentName: kid ? kid.name : "", location: "USA" };
+  }
+  if (a.role === "staff") {
+    let role = null;
+    try {
+      const q = await fb.db.collection("customRoles").where("name", "==", String(a.roleName || "")).get();
+      role = q.docs[0] ? q.docs[0].data() : null;
+    } catch (e) {}
+    if (!role) return null;
+    return { role: "custom:" + a.roleName, name: a.name, display: a.roleName + " — " + a.name, location: "IBA", customPermissions: role.permissions || {}, customRoleName: a.roleName };
+  }
+  return null;
+};
+const llqaOwnerHint = (v) =>
+  v.owner === false
+    ? "First sign-in: choose the Super Admin password (at least 8 characters). It opens everything — keep it safe. A recovery email lets you reset it if it's forgotten."
+    : "Sign in with your password.";
+const llqaFieldStyle = { width: "100%", padding: "10px 12px", background: c.bgInput, border: "1px solid " + c.border, borderRadius: 6, color: c.text, fontSize: 13, outline: "none", boxSizing: "border-box" };
+const llqaSignLabel = (t) => React.createElement("label", { style: { display: "block", color: c.textSec, fontSize: 10, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5 } }, t);
+const LLQASecretField = ({ label, pin, value, onChange, onEnter }) =>
+  React.createElement(
+    "div",
+    { style: { marginBottom: 12 } },
+    llqaSignLabel(label),
+    React.createElement("input", {
+      type: "password",
+      value: value || "",
+      "aria-label": label,
+      autoComplete: pin ? "off" : "current-password",
+      inputMode: pin ? "numeric" : undefined,
+      maxLength: pin ? 6 : 128,
+      placeholder: pin ? "6-digit PIN" : "Password",
+      onChange: (e) => onChange(pin ? String(e.target.value).replace(/\D/g, "").slice(0, 6) : e.target.value),
+      onKeyDown: (e) => {
+        if (e.key === "Enter" && onEnter) onEnter();
+      },
+      style: { ...llqaFieldStyle, letterSpacing: pin ? 3 : 0 },
+    }),
+  );
+const LLQAOwnerFields = ({ v81, v81Set, dir, pwd, setPwd, onEnter }) => {
+  React.useEffect(() => {
+    if (v81.owner === null) llqaOwnerExists().then((x) => v81Set({ owner: x === null ? true : x }));
+  }, []);
+  if (v81.owner === null) return llqaSmall("Checking…", null, "ck");
+  if (v81.owner === false)
+    return React.createElement(
+      "div",
+      null,
+      React.createElement(LLQASecretField, { label: "New password", value: v81.secret, onChange: (v) => v81Set({ secret: v }) }),
+      React.createElement(LLQASecretField, { label: "The same password again", value: v81.secret2, onChange: (v) => v81Set({ secret2: v }), onEnter }),
+      React.createElement(
+        "div",
+        { style: { marginBottom: 12 } },
+        llqaSignLabel("Recovery email (optional)"),
+        React.createElement("input", { type: "email", value: v81.email, "aria-label": "Recovery email", placeholder: "Your own email — to reset a forgotten password", onChange: (e) => v81Set({ email: e.target.value }), style: llqaFieldStyle }),
+      ),
+    );
+  const admins = ((dir && dir.admins) || []).filter((a) => a.key !== "owner");
+  return React.createElement(
+    "div",
+    null,
+    admins.length
+      ? React.createElement(
+          "div",
+          { style: { marginBottom: 12 } },
+          llqaSignLabel("Sign in as"),
+          React.createElement(
+            LLQASelect,
+            { value: v81.who, title: "Sign in as", onChange: (e) => v81Set({ who: e.target.value }), style: llqaFieldStyle },
+            [React.createElement("option", { key: "owner", value: "owner" }, "Mohsin (owner)")].concat(admins.map((a) => React.createElement("option", { key: a.key, value: a.key }, a.name))),
+          ),
+        )
+      : null,
+    React.createElement(LLQASecretField, { label: "Password", value: pwd, onChange: setPwd, onEnter }),
+  );
+};
+const LLQAOwnerForgot = ({ v81, setError }) => {
+  const [msg, setMsg] = React.useState("");
+  if (v81.owner !== true || (v81.who && v81.who !== "owner")) return null;
+  return React.createElement(
+    "div",
+    { style: { marginTop: 10, textAlign: "center" } },
+    React.createElement(
+      "button",
+      {
+        type: "button",
+        onClick: async () => {
+          const r = await llqaOwnerReset();
+          if (r.ok) setMsg("A reset link was sent to " + r.email + ".");
+          else setError(r.error);
+        },
+        style: { background: "none", border: "none", color: c.accent, fontSize: 11, cursor: "pointer", textDecoration: "underline" },
+      },
+      "Forgot the password?",
+    ),
+    msg ? llqaSmall(msg, c.success, "m") : null,
+  );
+};
+const llqaNoSignIns = (who) => llqaSmall("No " + who + " sign-ins yet — the Super Admin makes them in Settings → Sign-ins.", c.warn, "none");
+const LLQAStaffPick = ({ role, value, onChange }) => {
+  const people = (role && role.people) || [];
+  React.useEffect(() => {
+    if (!value && people[0]) onChange(people[0].key);
+  }, [people.length]);
+  return React.createElement(
+    "div",
+    { style: { marginBottom: 12 } },
+    llqaSignLabel("Your Name"),
+    React.createElement(
+      LLQASelect,
+      { value: value || "", title: "Your name", onChange: (e) => onChange(e.target.value), style: llqaFieldStyle },
+      people.map((p) => React.createElement("option", { key: p.key, value: p.key }, p.name)),
+    ),
+  );
+};
+// a staff member signing in with a temporary password sets their own first
+const LLQANewPassScreen = ({ v81, v81Set, error, onSave, onBack }) =>
+  React.createElement(
+    "div",
+    { style: { minHeight: "100vh", background: c.bg, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, fontFamily: "var(--font)" } },
+    React.createElement(
+      "div",
+      { style: { width: "100%", maxWidth: 420, background: c.bgCard, border: "1px solid " + c.border, borderRadius: 14, padding: 24, boxShadow: c.shadow3d } },
+      React.createElement("h3", { style: { color: c.text, fontSize: 15, margin: "0 0 6px", fontWeight: 700 } }, "Set your own password"),
+      llqaSmall("You signed in with a temporary password. Choose your own now — only you will know it.", null, "i"),
+      React.createElement("div", { style: { height: 12 } }),
+      React.createElement(LLQASecretField, { label: "New password", value: v81.secret, onChange: (v) => v81Set({ secret: v }) }),
+      React.createElement(LLQASecretField, { label: "The same password again", value: v81.secret2, onChange: (v) => v81Set({ secret2: v }), onEnter: onSave }),
+      error ? React.createElement("div", { style: { color: c.danger, fontSize: 11, marginBottom: 10 } }, error) : null,
+      React.createElement(Btn, { onClick: onSave, icon: Shield }, v81.busy ? "Saving…" : "Save and continue"),
+      React.createElement("div", { style: { textAlign: "center", marginTop: 10 } }, React.createElement("button", { type: "button", onClick: onBack, style: { background: "none", border: "none", color: c.textSec, fontSize: 11, cursor: "pointer" } }, "Cancel and sign out")),
+    ),
+  );
+
+/* ---------- v81: Settings → Sign-ins ---------- */
+const LLQA_ACCT_KINDS = [
+  ["parent", "Families"],
+  ["teacher", "Teachers"],
+  ["teamlead", "Team leads"],
+  ["staff", "Staff (custom roles)"],
+  ["superadmin", "Admins"],
+];
+const llqaAcctKeyLabel = (a) => (a.role === "parent" ? a.pid || "" : a.role === "teacher" ? "Teacher " + (a.tid != null ? a.tid : "") : a.role === "staff" ? a.roleName || "" : a.key === "owner" ? "owner" : "");
+// a WhatsApp message with the sign-in (a family: their child's number; a teacher: theirs)
+const llqaAcctSendItems = (a, pin) => {
+  const ctx = LLQAApp.ctx || {};
+  if (a.role === "parent") {
+    const kid = (ctx.students || []).find((s) => s && llqaPidUp(s.parentId) === llqaPidUp(a.pid) && s.status !== "quit") || (ctx.students || []).find((s) => s && llqaPidUp(s.parentId) === llqaPidUp(a.pid));
+    return kid ? [{ studentId: kid.id, template: "portalPin", extra: { pin } }] : [];
+  }
+  if (a.role === "teacher") {
+    const t = (ctx.teachers || []).find((x) => x && String(x.id) === String(a.tid));
+    return t ? [{ student: { name: t.name, parent: t.name, phone: t.phone || "", country: "Pakistan" }, template: "teacherPin", extra: { name: t.name, pin } }] : [];
+  }
+  const l = a.role === "teamlead" ? (ctx.teamLeads || []).find((x) => x && String(x.id) === String(a.tlid)) : null;
+  return [{ student: { name: a.name, parent: a.name, phone: (l && l.phone) || "", country: "Pakistan" }, template: "staffPass", extra: { name: a.name, pin, role: a.role === "teamlead" ? "Team Lead Portal" : a.role === "staff" ? (a.roleName || "your role") + " (Custom)" : "Super Admin" } }];
+};
+const llqaAcctSend = (a, pin) => {
+  const items = llqaAcctSendItems(a, pin);
+  if (!items.length) return llqaToast({ kind: "warn", ttl: 8000, text: "No number to send it to — give the " + (llqaIsPinRole(a.role) ? "PIN" : "password") + " in person: " + pin });
+  llqaOpen("queue", { title: "Sign-in — " + (a.name || a.key), items });
+};
+const llqaAcctMadeNotice = (spec, secret) => {
+  const a = { ...spec, pid: spec.pid };
+  const what = llqaIsPinRole(spec.role) ? "PIN " + secret : "temporary password " + secret;
+  const who = spec.role === "parent" ? "the " + (spec.name || "family") + " family (" + spec.pid + ")" : spec.name;
+  llqaToast({ kind: "info", key: "acct:" + spec.key, text: "🔑 Sign-in made for " + who + " — " + what + ".", actions: [{ label: "Send on WhatsApp", run: () => llqaAcctSend(a, secret) }, { label: "Sign-ins", run: () => llqaGo("settings") }] });
+};
+const LLQASignInSettings = () => {
+  const ctx = LLQAApp.ctx || {};
+  const me = llqaAcct();
+  const admin = !!me && me.role === "superadmin";
+  const [kind, setKind] = React.useState("parent");
+  const [q, setQ] = React.useState("");
+  const [show, setShow] = React.useState({});
+  const [busy, setBusy] = React.useState("");
+  const [add, setAdd] = React.useState(null); // {kind: "staff" | "admin", name, role}
+  const [mine, setMine] = React.useState(null); // {old, n1, n2, msg}
+  if (!me) return null;
+  const pins = new Map((ctx.accountPins || []).filter((p) => p && p.id).map((p) => [String(p.id), p]));
+  const all = (ctx.accounts || []).filter((a) => a && a.key);
+  const list = all
+    .filter((a) => a.role === kind)
+    .filter((a) => !q || (String(a.name) + " " + llqaAcctKeyLabel(a)).toLowerCase().includes(q.toLowerCase()))
+    .sort((x, y) => String(x.name).localeCompare(String(y.name)));
+  const missing = llqaAcctWant(ctx).length;
+  const roles = (ctx.customRoles || []).map((r) => r && r.name).filter(Boolean);
+  const run = async (key, fn) => {
+    setBusy(key);
+    try {
+      await fn();
+    } finally {
+      setBusy("");
+    }
+  };
+  const reset = (a) =>
+    run(a.key, async () => {
+      const r = await llqaResetSecret(a.key);
+      if (!r.ok) return llqaToast({ kind: "warn", ttl: 9000, text: r.error });
+      llqaToast({ kind: "info", key: "acct:" + a.key, text: "🔑 New " + (llqaIsPinRole(a.role) ? "PIN" : "temporary password") + " for " + a.name + ": " + r.secret + (r.replaced ? " (the old sign-in no longer works)." : "."), actions: [{ label: "Send on WhatsApp", run: () => llqaAcctSend(a, r.secret) }] });
+    });
+  const onoff = (a) =>
+    run(a.key, async () => {
+      if (a.active !== false && !(await llqaConfirm("Switch off " + a.name + "'s sign-in? They can't sign in until it's switched on again."))) return;
+      const r = await llqaAcctActive(a.id, a.active === false);
+      if (!r.ok) llqaToast({ kind: "warn", ttl: 9000, text: r.error });
+    });
+  const make = () =>
+    run("add", async () => {
+      const name = String((add && add.name) || "").trim();
+      if (!name) return llqaToast({ kind: "warn", ttl: 6000, text: "Write the person's name." });
+      const isAdmin = add.kind === "admin", isLead = add.kind === "teamlead";
+      if (!isAdmin && !isLead && !add.role) return llqaToast({ kind: "warn", ttl: 6000, text: "Choose their role." });
+      const key = llqaLoginKey(isAdmin ? "admin" : isLead ? "teamlead" : "staff", name);
+      const spec = isAdmin ? { key, role: "superadmin", name } : isLead ? { key, role: "teamlead", name } : { key, role: "staff", name, roleName: add.role };
+      const r = await llqaMakeAccount(spec);
+      if (!r.ok) return llqaToast({ kind: "warn", ttl: 9000, text: r.error === "already" ? name + " already has a sign-in." : r.error });
+      setAdd(null);
+      llqaAcctMadeNotice(spec, r.secret);
+    });
+  const saveMine = async () => {
+    if (!mine) return;
+    const isPin = llqaIsPinRole(me.role);
+    const bad = llqaPassProblem(mine.n1, isPin);
+    if (bad) return setMine({ ...mine, msg: bad });
+    if (mine.n1 !== mine.n2) return setMine({ ...mine, msg: "The two passwords are not the same." });
+    const r = await llqaChangeOwnSecret(mine.old, mine.n1);
+    if (!r.ok) return setMine({ ...mine, msg: r.error });
+    setMine(null);
+    llqaToast({ kind: "info", ttl: 6000, text: "✓ Your password is changed." });
+  };
+  const cell = (k, v, st) => React.createElement("td", { key: k, style: { padding: "7px 8px", borderBottom: "1px solid " + llqaAlpha(c.border, "55"), fontSize: 12, color: c.text, verticalAlign: "middle", ...(st || {}) } }, v);
+  const field = (label, val, on, type) => React.createElement("input", { type: type || "text", value: val || "", "aria-label": label, placeholder: label, onChange: (e) => on(e.target.value), style: { ...llqaSelectStyle, minWidth: 150 } });
+  return React.createElement(
+    SettingCard,
+    { title: "Sign-ins", icon: Shield, color: c.purple },
+    llqaSmall("Everyone signs in with their own account: families and teachers with a 6-digit PIN, staff with a password. A teacher's or a family's computer loads only their own students. New teachers and families get a sign-in by themselves.", null, "about"),
+    React.createElement(
+      "div",
+      { style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", margin: "10px 0" } },
+      React.createElement(LLQASelect, { value: kind, title: "Show", onChange: (e) => setKind(e.target.value), style: llqaSelectStyle }, LLQA_ACCT_KINDS.map(([k, l]) => React.createElement("option", { key: k, value: k }, l + " (" + all.filter((a) => a.role === k).length + ")"))),
+      field("Search", q, setQ),
+      missing ? React.createElement("span", { key: "miss", style: { fontSize: 11, color: c.warn } }, missing + " without a sign-in yet — made in a few seconds") : null,
+      admin ? llqaMini("+ Team lead", () => setAdd({ kind: "teamlead", name: "" }), { key: "at" }) : null,
+      admin ? llqaMini("+ Staff sign-in", () => setAdd({ kind: "staff", name: "", role: roles[0] || "" }), { key: "as" }) : null,
+      admin ? llqaMini("+ Admin", () => setAdd({ kind: "admin", name: "" }), { key: "aa" }) : null,
+      llqaMini("Change my password", () => setMine({ old: "", n1: "", n2: "", msg: "" }), { key: "cm" }),
+    ),
+    add
+      ? React.createElement(
+          "div",
+          { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: 10, border: "1px solid " + c.border, borderRadius: 8, marginBottom: 10 } },
+          React.createElement("span", { key: "t", style: { fontSize: 12, fontWeight: 600, color: c.text } }, add.kind === "admin" ? "New admin" : add.kind === "teamlead" ? "New team lead" : "New staff sign-in"),
+          field("Name", add.name, (v) => setAdd({ ...add, name: v })),
+          add.kind === "staff"
+            ? roles.length
+              ? React.createElement(LLQASelect, { key: "r", value: add.role, title: "Role", onChange: (e) => setAdd({ ...add, role: e.target.value }), style: llqaSelectStyle }, roles.map((r) => React.createElement("option", { key: r, value: r }, r)))
+              : llqaSmall("Make a custom role first (Settings → Roles).", c.warn, "nr")
+            : null,
+          llqaMini(busy === "add" ? "Making…" : "Make the sign-in", make, { key: "go", tone: "accent", disabled: busy === "add" }),
+          llqaMini("Cancel", () => setAdd(null), { key: "x" }),
+        )
+      : null,
+    mine
+      ? React.createElement(
+          "div",
+          { style: { display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", padding: 10, border: "1px solid " + c.border, borderRadius: 8, marginBottom: 10 } },
+          field("Current password", mine.old, (v) => setMine({ ...mine, old: v }), "password"),
+          field("New password", mine.n1, (v) => setMine({ ...mine, n1: v }), "password"),
+          field("The same again", mine.n2, (v) => setMine({ ...mine, n2: v }), "password"),
+          llqaMini("Save", saveMine, { key: "s", tone: "accent" }),
+          llqaMini("Cancel", () => setMine(null), { key: "x" }),
+          mine.msg ? llqaSmall(mine.msg, c.danger, "e") : null,
+        )
+      : null,
+    React.createElement(
+      "div",
+      { style: { overflowX: "auto" } },
+      React.createElement(
+        "table",
+        { style: { width: "100%", borderCollapse: "collapse" } },
+        React.createElement("thead", null, React.createElement("tr", null, ["Name", "Sign-in", "PIN / password", "Status", ""].map((h) => React.createElement("th", { key: h, style: { textAlign: "left", fontSize: 10, color: c.textSec, padding: "6px 8px", textTransform: "uppercase", letterSpacing: 0.5 } }, h)))),
+        React.createElement(
+          "tbody",
+          null,
+          list.slice(0, 60).map((a) => {
+            const p = pins.get(String(a.id));
+            const pin = p && p.pin ? String(p.pin) : "";
+            const canPin = llqaIsPinRole(a.role) || admin;
+            const isOwner = a.key === "owner";
+            return React.createElement(
+              "tr",
+              { key: a.id },
+              cell("n", a.name || "—"),
+              cell("k", llqaAcctKeyLabel(a), { color: c.textSec }),
+              cell(
+                "p",
+                !canPin || !pin
+                  ? React.createElement("span", { style: { color: c.textMuted } }, isOwner || !llqaIsPinRole(a.role) ? (a.mustChange ? "temporary" : "their own") : "—")
+                  : show[a.id]
+                    ? React.createElement("span", { style: { fontFamily: "monospace", letterSpacing: 1 } }, pin)
+                    : llqaMini("Show", () => setShow({ ...show, [a.id]: true }), { key: "sh" }),
+              ),
+              cell("s", a.active === false ? React.createElement("span", { style: { color: c.danger } }, "Switched off") : a.mustChange ? "Not used yet" : "Active"),
+              cell(
+                "a",
+                React.createElement(
+                  "div",
+                  { style: { display: "flex", gap: 4, flexWrap: "wrap" } },
+                  canPin && pin && a.active !== false ? llqaMini("Send", () => llqaAcctSend(a, pin), { key: "se", title: "Send it on WhatsApp" }) : null,
+                  !isOwner && (llqaIsPinRole(a.role) || admin) ? llqaMini(busy === a.key ? "…" : llqaIsPinRole(a.role) ? "New PIN" : "New password", () => reset(a), { key: "re", disabled: busy === a.key }) : null,
+                  admin && !isOwner ? llqaMini(a.active === false ? "Switch on" : "Switch off", () => onoff(a), { key: "of", tone: a.active === false ? "success" : "danger" }) : null,
+                ),
+              ),
+            );
+          }),
+        ),
+      ),
+      list.length > 60 ? llqaSmall("Showing 60 of " + list.length + " — search to find someone.", null, "more") : null,
+      !list.length ? llqaSmall("None yet.", null, "none") : null,
+    ),
+  );
 };

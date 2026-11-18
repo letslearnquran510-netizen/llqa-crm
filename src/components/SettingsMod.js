@@ -2655,7 +2655,8 @@ const SettingsMod = ({
             ),
           ),
           React.createElement(LLQAHrSettings, { settings, update }), // v78: per-class pay, bonuses, probation, lateness warnings
-          React.createElement(LLQATrainSettings, { settings, update }), // v80: pass mark, onboarding, required training
+          React.createElement(LLQASignInSettings, {}), // v81
+        React.createElement(LLQATrainSettings, { settings, update }), // v80: pass mark, onboarding, required training
         ),
       section === "security" &&
         React.createElement(
