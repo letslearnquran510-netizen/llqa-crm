@@ -1,5 +1,30 @@
 function App() {
   const [user, setUser] = useState(null);
+  // v81: a sign-in, a sign-out, and a teacher's or a family's view draw the App again
+  const [, llqaAuthVer] = useState(0);
+  React.useEffect(() => {
+    LLQAAuth.start();
+    const a = LLQAAuth.sub(() => llqaAuthVer((n) => n + 1));
+    const b = LLQAView.sub(() => llqaAuthVer((n) => n + 1));
+    return () => {
+      a();
+      b();
+    };
+  }, []);
+  const llqaMine = llqaAcct();
+  React.useEffect(() => {
+    if (llqaMine && llqaMine.view && (llqaMine.role === "teacher" || llqaMine.role === "parent")) LLQAView.start(llqaMine.view);
+  }, [llqaMine && llqaMine.view]);
+  // v81: a staff computer keeps teachers' and families' views, the sign-in names and new people's sign-ins up to date
+  React.useEffect(() => {
+    if (!user || !llqaIsStaffSignIn()) return;
+    const t0 = setTimeout(llqaPrivacyTick, 3000);
+    const id = setInterval(llqaPrivacyTick, 10000);
+    return () => {
+      clearTimeout(t0);
+      clearInterval(id);
+    };
+  }, [user]);
   const [appSettings, setAppSettings] = useFirestoreDoc(
     "settings/preferences",
     DEFAULT_SETTINGS,
@@ -153,6 +178,10 @@ function App() {
   const [dailyProgress, setDailyProgress, clsNeed] = useLLQAClasses(user, dailyProgressLegacy, setDailyProgressLegacy, teachers, students, covers, makeups);
   const [leads, setLeads] = useFirestoreCollection("leads", []);
   const [rewards, setRewards] = useFirestoreCollection("rewards", []);
+  // v81: sign-ins and the views of teachers' and families' computers (staff computers; anyone else loads none)
+  const [views, setViews] = useFirestoreCollection("views", []);
+  const [accounts] = useFirestoreCollection("accounts", []);
+  const [accountPins] = useFirestoreCollection("accountPins", []);
   const upsertSalesMaster = (records) => {
     if (!records || records.length === 0) return;
     setSalesMasterData((prev) => {
@@ -432,7 +461,9 @@ function App() {
                 ? customAcc[0]
                 : "dashboard",
         );
-        if (u.role === "teacher" || u.role === "teamlead") {
+        if (u.role === "teacher" || u.role === "teamlead") llqaWhenLoaded(["teachers", "teamLeads", "leaves", "autoAttendance", "doc:settings/preferences", "app:user"], () => {
+          const teachers = LLQAApp.ctx.teachers || [], teamLeads = LLQAApp.ctx.teamLeads || [], leaves = LLQAApp.ctx.leaves || []; // v81: the newest lists
+          const autoAttendance = LLQAApp.ctx.autoAttendance || [], setAutoAttendance = LLQAApp.ctx.setAutoAttendance, appSettings = LLQAApp.ctx.appSettings || {};
           // v72: a teacher's office day (their own hours, else their shift's) is worked out on the real clock;
           // signing in after the start is late by every minute, fined at the academy's rate (it was always Rs 0
           // here). A day off is never fined; outside office hours no attendance is made. The day is written once the
@@ -506,7 +537,7 @@ function App() {
                 }),
               );
           }
-        }
+        });
       },
       teachers: teachers,
       appSettings: appSettings,
@@ -533,8 +564,8 @@ function App() {
         return { ...prev, [uid]: list.map((h, j) => (j === i ? rec : h)) };
       });
     }
-    setUser(null);
-    setPage("dashboard");
+    // v81: what waits is sent, this person's copy is cleared, and the page starts again at the sign-in
+    llqaSignOutAll();
   };
   const _isT = user && user.role === "teacher";
   const _mb = (f, u) => {
@@ -560,7 +591,7 @@ function App() {
         setStudents(_mb(students, typeof a === "function" ? a(scStudents) : a))
     : setStudents;
   // v65: what the automation screens and pop-ups read
-  LLQAApp.set({ trainingPrograms, setTrainingPrograms, parentNotes, setParentNotes, setTeacherFeedback, /* v80: training, families' messages and ratings */ teacherFeedback, hrHiring, setHrHiring, /* v78: parents' feedback (the score), new hires */ apLiabilities, setApLiabilities, finance, setFinance, /* v77: bills, the finance document */ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory, appSettings, attNeed, clsNeed, shifts, setShifts, payrollHistory, setPayrollHistory, qcViolations, setAppSettings }); // v75: payroll (month close, reminders, My pay) // v74: shifts (handover, feedback) // v73: clsNeed (older months of class records) // v72: attNeed (older months on request) // v71: appSettings (exchange rates for the Autopilot) // v68: Dashboard "Teachers in today"
+  LLQAApp.set({ views, setViews, accounts, accountPins, autoAttendance, setAutoAttendance, /* v81 */ trainingPrograms, setTrainingPrograms, parentNotes, setParentNotes, setTeacherFeedback, /* v80: training, families' messages and ratings */ teacherFeedback, hrHiring, setHrHiring, /* v78: parents' feedback (the score), new hires */ apLiabilities, setApLiabilities, finance, setFinance, /* v77: bills, the finance document */ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory, appSettings, attNeed, clsNeed, shifts, setShifts, payrollHistory, setPayrollHistory, qcViolations, setAppSettings }); // v75: payroll (month close, reminders, My pay) // v74: shifts (handover, feedback) // v73: clsNeed (older months of class records) // v72: attNeed (older months on request) // v71: appSettings (exchange rates for the Autopilot) // v68: Dashboard "Teachers in today"
   const render = () => {
     switch (page) {
       case "dashboard":

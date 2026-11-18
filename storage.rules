@@ -1,0 +1,16 @@
+rules_version = '2';
+// LLQA CRM — files (CVs in HR): only staff with a CRM sign-in (v81). Paste in Firebase console → Storage → Rules
+// only if Storage is switched on in the project.
+service firebase.storage {
+  match /b/{bucket}/o {
+    function staff() {
+      return request.auth != null
+        && firestore.exists(/databases/(default)/documents/accounts/$(request.auth.uid))
+        && firestore.get(/databases/(default)/documents/accounts/$(request.auth.uid)).data.role in ['superadmin', 'teamlead', 'staff']
+        && firestore.get(/databases/(default)/documents/accounts/$(request.auth.uid)).data.get('active', true) != false;
+    }
+    match /{all=**} {
+      allow read, write: if staff();
+    }
+  }
+}

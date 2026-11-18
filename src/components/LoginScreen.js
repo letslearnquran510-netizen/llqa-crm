@@ -1,10 +1,25 @@
 const LoginScreen = ({
   onLogin,
-  teachers,
-  appSettings,
-  customRoles,
+  teachers: llqaTeachers0,
+  appSettings: llqaSet0,
+  customRoles: llqaRoles0,
   students,
 }) => {
+  // v81: before a sign-in the CRM's lists can't be read: the names come from the sign-in directory
+  const [dir, setDir] = useState(null);
+  const [v81, setV81] = useState({ secret: "", secret2: "", email: "", busy: false, owner: null, who: "owner", pick: "", tlKey: "", stKey: "", change: null });
+  const v81Set = (p) => setV81((o) => ({ ...o, ...p }));
+  useEffect(() => {
+    LLQAAuth.start();
+    llqaDirLoad().then((d) => {
+      setDir(d || {});
+      const tl = ((d && d.teamLeads) || []).map((x) => x.name);
+      if (tl.length) setTlName((cur) => (tl.includes(cur) ? cur : tl[0])); // the first team lead with a sign-in
+    });
+  }, []);
+  const appSettings = llqaLoginBrand(llqaSet0, dir);
+  const teachers = llqaDirTeachers(dir);
+  const customRoles = llqaDirRoles(dir);
   const [parentIdInput, setParentIdInput] = useState(() => llqaLinkParent()); // v66: from an approval link
   const customRolesList = customRoles || [];
   const [customRoleName, setCustomRoleName] = useState(
@@ -14,7 +29,7 @@ const LoginScreen = ({
   const [step, setStep] = useState(() => (llqaLinkParent() ? "parent" : "role"));
   const [pwd, setPwd] = useState("");
   const [tlName, setTlName] = useState("Qazi Junaid");
-  const [teacherId, setTeacherId] = useState(teachers[0]?.id || 1);
+  const [teacherId, setTeacherId] = useState("");
   const [error, setError] = useState("");
   const [pendingUser, setPendingUser] = useState(null);
   const [network, setNetwork] = useState(null);
@@ -22,7 +37,7 @@ const LoginScreen = ({
   const [photo, setPhoto] = useState(null);
   const [geo, setGeo] = useState(null);
   const [fingerprint, setFingerprint] = useState(null);
-  const teamLeads = ["Qazi Junaid", "Sobia", "Faizan Khan", "Shakeel"];
+  const teamLeads = ((dir && dir.teamLeads) || []).map((x) => x.name); // v81: team leads with a sign-in
   const isWFH =
     pendingUser?.role === "teacher" && pendingUser?.location === "WFH";
   const buildUser = (role) => {
@@ -92,6 +107,7 @@ const LoginScreen = ({
   // v66: approval links sign the parent in once their record has loaded
   useEffect(() => {
     const pid = llqaLinkParent();
+    if (firebaseConfig) return; // v81: the link fills in the Parent ID; the family's PIN is still needed
     if (!pid || LLQAApp.linkTried) return;
     if (!(students || []).some((s) => String(s.parentId || "").toUpperCase() === pid)) return;
     LLQAApp.linkTried = true;
@@ -100,13 +116,71 @@ const LoginScreen = ({
     pushAuditLog({ user: u.name, role: "parent", action: "login (approval link)", status: "success" });
     onLogin(u);
   }, [students]);
-  const tryLogin = (role) => {
+  // v81: the sign-in with the person's own password or PIN; then the steps that followed before
+  const v81Login = async (role) => {
+    if (v81.busy) return;
+    setError("");
+    const p = llqaLoginPlan(role, { v81, dir, tlName, teacherId, parentIdInput, customRoleName, pwd });
+    if (p.error) return setError(p.error);
+    v81Set({ busy: true });
+    const r = await llqaSignIn(p.key, p.secret, p.what);
+    if (!r.ok) {
+      v81Set({ busy: false });
+      return setError(r.error === "none" ? p.none : r.error);
+    }
+    const u = await llqaUserFromAcct(r.acct);
+    v81Set({ busy: false, secret: "" });
+    if (!u) return setError("This sign-in isn't linked to anyone in the CRM yet — ask the office.");
+    if (r.acct.mustChange) return v81Set({ change: { role, u, old: p.secret } });
+    v81Go(role, u);
+  };
+  const v81Go = (role, u) => {
+    if (role === "superadmin" || role === "teamlead" || role === "teacher") return tryLogin(role, u);
+    pushAuditLog({ user: u.name, role: u.role === "parent" ? "parent" : u.customRoleName || u.role, action: "login", status: "success" });
+    onLogin(u);
+  };
+  const v81SetUp = async () => {
+    if (v81.busy) return;
+    setError("");
+    const bad = llqaPassProblem(v81.secret, false);
+    if (bad) return setError(bad);
+    if (v81.secret !== v81.secret2) return setError("The two passwords are not the same.");
+    v81Set({ busy: true });
+    const r = await llqaOwnerSetup(v81.secret, v81.email);
+    v81Set({ busy: false, secret: "", secret2: "" });
+    if (!r.ok) return setError(r.error);
+    v81Go("superadmin", await llqaUserFromAcct(r.acct));
+  };
+  const v81Change = async () => {
+    if (v81.busy) return;
+    setError("");
+    const ch = v81.change;
+    const bad = llqaPassProblem(v81.secret, false);
+    if (bad) return setError(bad);
+    if (v81.secret !== v81.secret2) return setError("The two passwords are not the same.");
+    v81Set({ busy: true });
+    const r = await llqaChangeOwnSecret(ch.old, v81.secret);
+    v81Set({ busy: false, secret: "", secret2: "" });
+    if (!r.ok) return setError(r.error);
+    v81Set({ change: null });
+    v81Go(ch.role, ch.u);
+  };
+  useEffect(() => {
+    // v81: the 24/7 runner stays signed in: it goes straight back in after a reload
+    if (!llqaRunnerTab) return;
+    const go = () => {
+      const a = llqaAcct();
+      if (!a || a.role !== "superadmin" || LLQAApp.runnerIn) return;
+      LLQAApp.runnerIn = true;
+      llqaUserFromAcct(a).then((u) => u && onLogin(u));
+    };
+    go();
+    return LLQAAuth.sub(go);
+  }, []);
+  const tryLogin = (role, u0) => {
     setError("");
     if (role === "superadmin") {
-      if (pwd !== "admin123" && pwd !== "") {
-        setError("Incorrect password (try 'admin123' or leave blank for demo)");
-        return;
-      }
+      if (!u0) return v81Login("superadmin"); // v81: the password is checked by the sign-in
       pushAuditLog({
         user: "Mohsin",
         role: "superadmin",
@@ -157,9 +231,10 @@ const LoginScreen = ({
           status: "success",
           location: "IBA",
         });
-      onLogin(buildUser("superadmin"));
+      onLogin(u0);
     } else {
-      const u = buildUser(role);
+      if (!u0) return v81Login(role); // v81
+      const u = u0;
       if (!u) {
         setError("Select a profile");
         return;
@@ -235,6 +310,8 @@ const LoginScreen = ({
     });
   };
   const restart = () => {
+    // v81: going back after a sign-in signs out first (the page starts again)
+    if (LLQAAuth.get().status === "in") return llqaSignOutAll();
     setStep("role");
     setPendingUser(null);
     setNetwork(null);
@@ -245,6 +322,8 @@ const LoginScreen = ({
     setError("");
     setPwd("");
   };
+  if (v81.change)
+    return React.createElement(LLQANewPassScreen, { v81, v81Set, error, onSave: v81Change, onBack: () => llqaSignOutAll() });
   if (step === "network")
     return React.createElement(NetworkScanScreen, {
       onConnected: onNetworkConnected,
@@ -466,15 +545,7 @@ const LoginScreen = ({
               col: c.cyan,
             },
             ...customRolesList.map((cr) => {
-              const permList = Object.entries(cr.permissions || {})
-                .filter(([k, v]) => v)
-                .map(([k, v]) => k);
-              const permSummary =
-                permList.length === 0
-                  ? "No permissions granted"
-                  : permList.length <= 2
-                    ? permList.join(", ")
-                    : permList.length + " permissions";
+              const permSummary = cr.people ? cr.people.length + " sign-in" + (cr.people.length === 1 ? "" : "s") + " · password" : "Sign in with your password"; // v81
               return {
                 id: "custom:" + cr.name,
                 title: cr.name + " (Custom)",
@@ -641,15 +712,9 @@ const LoginScreen = ({
                 fontSize: 10,
               },
             },
-            'Demo: leave password blank or use "admin123"',
+            llqaOwnerHint(v81),
           ),
-          React.createElement(Inp, {
-            label: "Password",
-            type: "password",
-            value: pwd,
-            onChange: setPwd,
-            placeholder: "Enter password",
-          }),
+          React.createElement(LLQAOwnerFields, { v81, v81Set, dir, pwd, setPwd, onEnter: () => (v81.owner === false ? v81SetUp() : tryLogin("superadmin")) }),
           error &&
             React.createElement(
               "div",
@@ -665,11 +730,12 @@ const LoginScreen = ({
           React.createElement(
             Btn,
             {
-              onClick: () => tryLogin("superadmin"),
+              onClick: () => (v81.owner === false ? v81SetUp() : tryLogin("superadmin")),
               icon: Shield,
             },
-            "Sign In as Super Admin",
+            v81.busy ? "Signing in…" : v81.owner === false ? "Set the password and sign in" : "Sign In as Super Admin",
           ),
+          React.createElement(LLQAOwnerForgot, { v81, setError }),
         ),
       step === "teamlead" &&
         React.createElement(
@@ -724,12 +790,16 @@ const LoginScreen = ({
               "Team Lead Portal",
             ),
           ),
-          React.createElement(Inp, {
-            label: "Select Team Lead",
-            value: tlName,
-            onChange: setTlName,
-            options: teamLeads,
-          }),
+          teamLeads.length
+            ? React.createElement(Inp, {
+                label: "Select Team Lead",
+                value: tlName,
+                onChange: setTlName,
+                options: teamLeads,
+              })
+            : llqaNoSignIns("team lead"),
+          React.createElement(LLQASecretField, { label: "Password", value: v81.secret, onChange: (v) => v81Set({ secret: v }), onEnter: () => tryLogin("teamlead") }),
+          error && React.createElement("div", { style: { color: c.danger, fontSize: 11, marginBottom: 10 } }, error),
           React.createElement(
             "div",
             {
@@ -755,7 +825,7 @@ const LoginScreen = ({
         ),
       step === "teacher" &&
         (() => {
-          const t = teachers.find((x) => x.id === Number(teacherId));
+          const t = teachers.find((x) => String(x.id) === String(teacherId));
           return React.createElement(
             "div",
             {
@@ -831,6 +901,8 @@ const LoginScreen = ({
                 LLQASelect, // v70: the CRM's own list
                 {
                   value: teacherId,
+                  title: "Your name", // v81
+                  placeholder: teachers.length ? "Choose your name" : "No teacher sign-ins yet",
                   onChange: (e) => setTeacherId(e.target.value),
                   style: {
                     width: "100%",
@@ -931,6 +1003,7 @@ const LoginScreen = ({
               },
               "4 steps: Network \u2192 Biometric (silent photo) \u2192 Audit \u2192 Auto-attendance",
             ),
+            React.createElement(LLQASecretField, { label: "PIN", pin: true, value: v81.secret, onChange: (v) => v81Set({ secret: v }), onEnter: () => tryLogin("teacher") }),
             error &&
               React.createElement(
                 "div",
@@ -1057,48 +1130,14 @@ const LoginScreen = ({
               textTransform: "uppercase",
             },
             onKeyDown: (e) => {
-              if (e.key === "Enter") {
-                const u = buildUser("parent");
-                if (u) {
-                  pushAuditLog({
-                    user: u.name,
-                    role: "parent",
-                    action: "login",
-                    status: "success",
-                  });
-                  onLogin(u);
-                } else {
-                  setError(
-                    "Parent ID not found. Please verify with the academy.",
-                  );
-                }
-              }
+              if (e.key === "Enter") v81Login("parent"); // v81
             },
           }),
+          React.createElement(LLQASecretField, { label: "PIN", pin: true, value: v81.secret, onChange: (v) => v81Set({ secret: v }), onEnter: () => v81Login("parent") }),
           React.createElement(
             "button",
             {
-              onClick: () => {
-                const pid = parentIdInput.trim().toUpperCase();
-                if (!pid) {
-                  setError("Please enter your Parent ID.");
-                  return;
-                }
-                const u = buildUser("parent");
-                if (u) {
-                  pushAuditLog({
-                    user: u.name,
-                    role: "parent",
-                    action: "login",
-                    status: "success",
-                  });
-                  onLogin(u);
-                } else {
-                  setError(
-                    "Parent ID not found. Please verify with the academy.",
-                  );
-                }
-              },
+              onClick: () => v81Login("parent"), // v81: Parent ID and PIN
               style: {
                 width: "100%",
                 padding: "12px",
@@ -1111,7 +1150,7 @@ const LoginScreen = ({
                 cursor: "pointer",
               },
             },
-            "Enter Parent Portal",
+            v81.busy ? "Signing in…" : "Enter Parent Portal",
           ),
           error
             ? React.createElement(
@@ -1173,9 +1212,7 @@ const LoginScreen = ({
               ),
             );
           }
-          const permList = Object.entries(roleRec.permissions || {})
-            .filter(([k, v]) => v)
-            .map(([k, v]) => k);
+          const permList = ["sign-in"]; // v81: what the role opens shows after the sign-in
           return React.createElement(
             "div",
             {
@@ -1245,63 +1282,9 @@ const LoginScreen = ({
                   roleRec.desc,
                 )
               : null,
-            React.createElement(
-              "div",
-              {
-                style: {
-                  color: c.textSec,
-                  fontSize: 10,
-                  marginBottom: 6,
-                  fontWeight: 600,
-                },
-              },
-              "This role has access to:",
-            ),
-            permList.length > 0
-              ? React.createElement(
-                  "div",
-                  {
-                    style: {
-                      display: "flex",
-                      flexWrap: "wrap",
-                      gap: 4,
-                      marginBottom: 14,
-                    },
-                  },
-                  permList.map((p) =>
-                    React.createElement(
-                      "span",
-                      {
-                        key: p,
-                        style: {
-                          fontSize: 9,
-                          padding: "3px 8px",
-                          borderRadius: 10,
-                          background: llqaAlpha(c.warn, "22"),
-                          color: c.warn,
-                          fontWeight: 600,
-                          border: "1px solid " + llqaAlpha(c.warn, "44"),
-                        },
-                      },
-                      p,
-                    ),
-                  ),
-                )
-              : React.createElement(
-                  "div",
-                  {
-                    style: {
-                      color: c.danger,
-                      fontSize: 10,
-                      marginBottom: 14,
-                      padding: "8px 10px",
-                      background: c.dangerBg,
-                      borderRadius: 6,
-                    },
-                  },
-                  llqaLabel("\u26A0 No permissions granted to this role. Contact Super Admin."),
-                ),
-            React.createElement(
+            React.createElement(LLQAStaffPick, { role: roleRec, value: v81.stKey, onChange: (k) => v81Set({ stKey: k }) }),
+            React.createElement(LLQASecretField, { label: "Password", value: v81.secret, onChange: (v) => v81Set({ secret: v }), onEnter: () => v81Login("custom") }),
+            false &&             React.createElement(
               "label",
               {
                 style: {
@@ -1316,7 +1299,7 @@ const LoginScreen = ({
               },
               "Your Name",
             ),
-            React.createElement("input", {
+            false && React.createElement("input", {
               value: customUserName,
               onChange: (e) => setCustomUserName(e.target.value),
               placeholder: "e.g. Ahmed Khan",
@@ -1337,24 +1320,7 @@ const LoginScreen = ({
               "button",
               {
                 disabled: permList.length === 0,
-                onClick: () => {
-                  if (!customUserName.trim()) {
-                    setError("Please enter your name to continue.");
-                    return;
-                  }
-                  const u = buildUser("custom:" + customRoleName);
-                  if (u) {
-                    pushAuditLog({
-                      user: customUserName.trim(),
-                      role: customRoleName,
-                      action: "login",
-                      status: "success",
-                    });
-                    onLogin(u);
-                  } else {
-                    setError("Could not create user session.");
-                  }
-                },
+                onClick: () => v81Login("custom"), // v81
                 style: {
                   width: "100%",
                   padding: "12px",
@@ -1368,7 +1334,7 @@ const LoginScreen = ({
                   opacity: permList.length === 0 ? 0.5 : 1,
                 },
               },
-              "Enter Portal",
+              v81.busy ? "Signing in…" : "Enter Portal",
             ),
             error
               ? React.createElement(

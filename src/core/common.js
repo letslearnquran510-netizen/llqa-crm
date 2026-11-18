@@ -549,6 +549,7 @@ const initFirebase = () => {
       });
     } catch (e) {}
     fb.auth = firebase.auth();
+    llqaUseEmu(fb.db, fb.auth); // v81
     if (firebase.storage) fb.storage = firebase.storage();
     fb.ready = true;
     console.log("🔥 Firebase connected:", firebaseConfig.projectId);
@@ -565,6 +566,7 @@ const LS_KEY = "llqa_crm_v1::";
 let llqaFrozen = false;
 
 const lsRead = (k, fb) => {
+  if (firebaseConfig && LLQAAuth.get().status !== "in") return fb; // v81: nothing of anyone's before a sign-in
   try {
     const r = localStorage.getItem(LS_KEY + k);
     return r ? JSON.parse(r) : fb;
@@ -644,40 +646,10 @@ const LLQASync = (() => {
 let fbAuthTry = null;
 let fbAuthAt = 0;
 const fbSignIn = () => {
+  // v81: no anonymous sign-in any more — every read and save waits for a person's own sign-in
   if (!initFirebase() || !fb.auth) return Promise.resolve(false);
-  if (fbAuthTry && (LLQASync.get().auth !== "failed" || Date.now() - fbAuthAt < 15000))
-    return fbAuthTry;
-  fbAuthAt = Date.now();
-  fbAuthTry = new Promise((resolve) => {
-    let settled = false;
-    let off = null;
-    const done = (ok, err) => {
-      if (settled) return;
-      settled = true;
-      try {
-        if (off) off();
-      } catch (e) {}
-      LLQASync.set(
-        ok
-          ? { auth: "ok", authError: "" }
-          : { auth: "failed", authError: (err && (err.code || err.message)) || "sign-in failed" },
-      );
-      resolve(ok);
-    };
-    try {
-      off = fb.auth.onAuthStateChanged((u) => {
-        if (u) done(true);
-      });
-      fb.auth
-        .signInAnonymously()
-        .then(() => done(true))
-        .catch((e) => done(false, e));
-      setTimeout(() => done(!!fb.auth.currentUser, { code: "auth/timeout" }), 20000);
-    } catch (e) {
-      done(false, e);
-    }
-  });
-  return fbAuthTry;
+  LLQAAuth.start();
+  return LLQAAuth.waitIn();
 };
 
 // Same text for the same content, whatever order the fields are in.
@@ -710,18 +682,39 @@ const LLQAPending = (() => {
   };
   const count = () =>
     Object.keys(load()).reduce((n, k) => n + Object.keys(all[k] || {}).length, 0);
-  const save = () => {
-    if (llqaFrozen) return;
+  let saveT = null;
+  let dirty = false;
+  const saveNow = () => {
+    if (saveT) clearTimeout(saveT);
+    saveT = null;
+    if (!dirty) return;
+    dirty = false;
+    if (llqaFrozen || !all) return;
     try {
       localStorage.setItem(KEY, JSON.stringify(all));
     } catch (e) {
       console.warn("Could not keep unsent changes on this computer:", e.message);
     }
+  };
+  const save = () => {
+    if (llqaFrozen) return;
+    if (!dirty) {
+      dirty = true;
+      saveT = setTimeout(saveNow, 250);
+    }
     LLQASync.set({ pending: count() });
   };
+  try {
+    window.addEventListener("pagehide", () => saveNow());
+  } catch (e) {}
   return {
     forget: () => {
       all = {};
+    },
+    flush: () => saveNow(),
+    reload: () => {
+      saveNow(); // v81: what waits is kept first
+      all = null; // v81: read again from this computer (another person's sign-in swapped what waits here)
     },
     get: (name) => {
       const m = load()[name];
@@ -1127,7 +1120,7 @@ const LLQACloud = (() => {
     };
     s.replay = async () => {
       const pend = LLQAPending.get(name);
-      if (!pend || s.busy) return;
+      if (!pend || s.busy || !llqaCollWritable(name)) return;
       await sendTracked(Object.keys(pend).map((id) => ({ id, doc: pend[id] })));
     };
     const rescueOnce = (docs) => {
@@ -1180,11 +1173,24 @@ const LLQACloud = (() => {
       s.timer = null;
       await fbSignIn();
       await epochReady();
+      if (!llqaScopePlan(name).all) return llqaScopedStart(s, name, onScoped, onErr); // v81: only this person's records
       try {
-        s.unsub = fb.db.collection(name).onSnapshot(onSnap, onErr);
+        // v81: also when only "from the cloud" changes — a change saved before the first answer would otherwise
+        // leave the list waiting for that answer for ever (the data is the same, so no other event comes)
+        s.unsub = fb.db.collection(name).onSnapshot(LLQA_META, onSnap, onErr);
       } catch (e) {
         onErr(e);
       }
+    };
+    // v81: a teacher's or a family's records (several queries, merged), and what their view adds (read-only)
+    const onScoped = (docs, done) => {
+      if (done) s.server = true;
+      s.tries = 0;
+      s.loading = !done;
+      s.error = null;
+      markLive(name);
+      show(overlay(docs, LLQAPending.get(name)));
+      if (done && LLQAPending.get(name) && llqaCollWritable(name)) s.replay();
     };
     const onErr = (err) => {
       console.error("Firestore error (" + name + "):", err);
@@ -1217,14 +1223,16 @@ const LLQACloud = (() => {
     s.set = async (v) => {
       if (llqaFrozen) return;
       const prevSig = s.sig;
-      const next = typeof v === "function" ? v(s.data) : v;
+      const before = s.data;
+      const next = llqaStampList(name, typeof v === "function" ? v(s.data) : v); // v81: + derived fields
       if (!Array.isArray(next)) {
         console.error("Save ignored for " + name + ": not a list", next);
         return;
       }
       show(next);
       if (!initFirebase()) return;
-      const ops = diffOps(prevSig, next);
+      if (!llqaCollWritable(name)) return; // v81: a list this person can't change stays as it was in the cloud
+      const ops = llqaNoSyn(diffOps(prevSig, next), before); // v81: what came from the view is never sent
       if (!ops.length) return;
       LLQAPending.add(name, ops);
       await sendTracked(ops);
@@ -1301,7 +1309,7 @@ const LLQACloud = (() => {
     };
     s.replay = async () => {
       const pend = LLQAPending.get(pid);
-      if (!pend || s.busy) return;
+      if (!pend || s.busy || !llqaDocWritable(path)) return;
       await sendFields(Object.keys(pend).map((k) => ({ id: k, doc: pend[k] })));
     };
     const hasData = (v) => v && typeof v === "object" && Object.keys(v).length > 0;
@@ -1342,7 +1350,7 @@ const LLQACloud = (() => {
         show(back);
         if (pend) sendFields(Object.keys(pend).map((k) => ({ id: k, doc: pend[k] })));
         return;
-      } else if (hasData(fallback) || hasData(base0) || pend) {
+      } else if ((hasData(fallback) || hasData(base0) || pend) && llqaDocWritable(path)) {
         // Nothing in the cloud yet: start it from this computer's copy.
         const seed = applyFields(hasData(base0) ? base0 : fallback, pend);
         if (first) markChecked(id);
@@ -1360,8 +1368,24 @@ const LLQACloud = (() => {
       s.timer = null;
       await fbSignIn();
       await epochReady();
+      if (!llqaDocReadable(path)) {
+        // v81: not for this person — nothing is read (and nothing waits for it); their own part comes from their view
+        const syn = () => {
+          const d = llqaDocSyn(path);
+          if (d) {
+            s.data = d;
+            s.sig = fieldSig(d);
+          }
+          emit();
+        };
+        if (!s.synOff) s.synOff = LLQAView.sub(syn);
+        s.server = true;
+        s.loading = false;
+        syn();
+        return;
+      }
       try {
-        s.unsub = fb.db.collection(coll).doc(docId).onSnapshot(onSnap, onErr);
+        s.unsub = fb.db.collection(coll).doc(docId).onSnapshot(LLQA_META, onSnap, onErr); // v81: + "from the cloud" changes
       } catch (e) {
         onErr(e);
       }
@@ -1404,6 +1428,7 @@ const LLQACloud = (() => {
       const ops = fieldOps(prevSig, next);
       show(next);
       if (!ops.length || !initFirebase()) return;
+      if (!llqaDocWritable(path)) return; // v81: e.g. a teacher's colours stay on their computer
       LLQAPending.add(pid, ops);
       await sendFields(ops);
     };
@@ -1486,26 +1511,33 @@ const LLQACloud = (() => {
   return { collection, doc, deviceId, retryNow, ready, epochReady, stores: () => stores, rawMerge, rawGet, rawListen };
 })();
 
+// v81: nothing is loaded before a sign-in (the App draws again when someone signs in)
+const llqaStoresOn = () => !firebaseConfig || LLQAAuth.get().status === "in";
+const llqaNoSave = () => {};
 const useFirestoreCollection = (collectionName, fallbackData = []) => {
-  const store = LLQACloud.collection(collectionName, fallbackData);
+  const on = llqaStoresOn();
+  const store = on ? LLQACloud.collection(collectionName, fallbackData) : null;
   const [, bump] = useState(0);
   useEffect(() => {
+    if (!store) return;
     const off = store.subscribe(() => bump((n) => n + 1));
     store.start();
     return off;
-  }, [collectionName]);
-  return [store.data, store.set, store.loading, store.error];
+  }, [collectionName, on]);
+  return store ? [store.data, store.set, store.loading, store.error] : [fallbackData, llqaNoSave, true, null];
 };
 
 const useFirestoreDoc = (path, fallbackData = {}) => {
-  const store = LLQACloud.doc(path, fallbackData);
+  const on = llqaStoresOn();
+  const store = on ? LLQACloud.doc(path, fallbackData) : null;
   const [, bump] = useState(0);
   useEffect(() => {
+    if (!store) return;
     const off = store.subscribe(() => bump((n) => n + 1));
     store.start();
     return off;
-  }, [path]);
-  return [store.data, store.set, store.loading];
+  }, [path, on]);
+  return store ? [store.data, store.set, store.loading] : [fallbackData, llqaNoSave, true];
 };
 
 const pushAuditLog = async (entry) => {
@@ -3032,13 +3064,17 @@ const llqaCanSetOffice = (user) => llqaUserCan(user, "Set Office Times & Fines")
    two people changing different days of the same teacher never undo each other.
    ============================================================ */
 const LLQA_ATT_PARTS = 16;
-const llqaAttPart = (uid) => {
-  let h = 5381;
-  const s = String(uid);
-  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 33) ^ s.charCodeAt(i)) >>> 0;
-  return h % LLQA_ATT_PARTS;
+// v81: each person's month is their own document (attendance/<month>_u<person>), so a teacher reads only their own
+const llqaAttPart = (uid) => "u" + String(uid == null ? "" : uid).replace(/[^A-Za-z0-9]/g, "-");
+const llqaAttPath = (ym, part) => "attendance/" + ym + "_" + part;
+// staff: everyone whose attendance is kept — the teachers and the team leads
+const llqaAttUids = () => {
+  const ctx = (typeof LLQAApp !== "undefined" && LLQAApp.ctx) || {};
+  const out = new Set();
+  (ctx.teachers || []).forEach((t) => t && t.id != null && t.id !== "" && out.add(String(t.id)));
+  (ctx.teamLeads || []).forEach((l) => l && l.id != null && l.id !== "" && out.add("tl:" + l.id));
+  return Array.from(out).sort();
 };
-const llqaAttPath = (ym, part) => "attendance/" + ym + "_" + String(part).padStart(2, "0");
 const llqaPrevYm = (ym) => {
   const y = Number(String(ym).slice(0, 4)), m = Number(String(ym).slice(5, 7));
   return m <= 1 ? y - 1 + "-12" : y + "-" + String(m - 1).padStart(2, "0");
@@ -3216,10 +3252,10 @@ const useLLQAAttendance = (user, legacy) => {
     const out = [];
     months.forEach((ym) => {
       if (own != null) out.push(llqaAttPath(ym, llqaAttPart(own)));
-      else for (let p = 0; p < LLQA_ATT_PARTS; p++) out.push(llqaAttPath(ym, p));
+      else llqaAttUids().forEach((u) => out.push(llqaAttPath(ym, llqaAttPart(u)))); // v81
     });
     return out;
-  }, [months.join(","), scope]);
+  }, [months.join(","), scope, scope === "all" ? llqaAttUids().join(",") : ""]);
   LLQAAtt.paths = paths;
   LLQAAtt.legacy = legacy || {};
   const key = paths.join("|");
@@ -3804,21 +3840,10 @@ const LLQAFineRecords = ({ teachers, history, setHistory, user, settings, month 
 const LLQA_CLS_PARTS = 64;
 const LLQA_CLS_COLL = "classes";
 // FNV-1a with a final mix: student ids (13-digit times) spread over all 64 parts (the attendance hash uses only 32 of 64)
-const llqaClsPart = (sid) => {
-  let h = 0x811c9dc5;
-  const s = String(sid);
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 0x01000193);
-  }
-  h ^= h >>> 16;
-  h = Math.imul(h, 0x85ebca6b);
-  h ^= h >>> 13;
-  h = Math.imul(h, 0xc2b2ae35);
-  h ^= h >>> 16;
-  return (h >>> 0) % LLQA_CLS_PARTS;
-};
-const llqaClsDocId = (ym, part) => ym + "_" + String(part).padStart(2, "0");
+// v81: a student's classes of a month are their own document (classes/<month>_s<student>), so a teacher's or a family's
+// computer can be given exactly their students' records (before: 64 parts shared by many students)
+const llqaClsPart = (sid) => "s" + String(sid == null ? "" : sid).replace(/[^A-Za-z0-9]/g, "-");
+const llqaClsDocId = (ym, part) => ym + "_" + part;
 const llqaClsSan = (v) => String(v == null ? "" : v).replace(/[^A-Za-z0-9]/g, "-");
 // one class: the student, the Pakistan day and the Pakistan start time ("x": a class not booked in the Timetable)
 const llqaClsKey = (sid, date, slot) =>
@@ -3917,7 +3942,7 @@ const LLQACls = (() => {
   const inScope = (id) => {
     const ym = id.slice(0, 7);
     if (!months.includes(ym)) return false;
-    return parts === null || parts.includes(Number(id.slice(8)));
+    return parts === null || parts.includes(id.slice(8));
   };
   const setLive = (ok, err) =>
     LLQASync.set((st) => {
@@ -3971,6 +3996,7 @@ const LLQACls = (() => {
       const ref = fb.db.collection(LLQA_CLS_COLL);
       const query = q.ids ? ref.where(firebase.firestore.FieldPath.documentId(), "in", q.ids) : ref.where("ym", "==", q.ym);
       q.unsub = query.onSnapshot(
+        LLQA_META, // v81
         (snap) => onSnap(q, snap),
         (err) => onErr(q, err),
       );
@@ -3989,7 +4015,7 @@ const LLQACls = (() => {
   const setScope = (ms, ps) => {
     scoped = true;
     months = [...new Set(ms || [])].sort();
-    parts = ps === null ? null : [...new Set((ps || []).map(Number))].sort((a, b) => a - b);
+    parts = ps === null ? null : [...new Set((ps || []).map(String))].sort(); // v81: parts are students
     if (isLocal()) {
       emit();
       return;
@@ -4050,7 +4076,7 @@ const LLQACls = (() => {
       await fbSignIn();
       await LLQACloud.epochReady();
       if (llqaFrozen) return;
-      const patch = { ym: id.slice(0, 7), part: Number(id.slice(8)) };
+      const patch = { ym: id.slice(0, 7), part: id.slice(8) };
       ops.forEach((o) => {
         patch[o.id] = o.doc === null ? firebase.firestore.FieldValue.delete() : o.doc;
       });
@@ -4236,7 +4262,8 @@ const llqaClsTeacherSids = (user, teachers, students, covers, makeups) => {
 // the parts this person's computer loads: null = all (staff); a teacher their students'; a parent their children's
 const llqaClsScopeParts = (user, teachers, students, covers, makeups) => {
   if (!user) return [];
-  const toParts = (sids) => [...new Set(Array.from(sids).map(llqaClsPart))].sort((a, b) => a - b);
+  const toParts = (sids) => [...new Set(Array.from(sids).map(llqaClsPart))].sort();
+  if (firebaseConfig && llqaScopedRole()) return toParts(llqaViewSids()); // v81: exactly the students of their view
   if (user.role === "parent") {
     const pid = String(user.parentId || "").toUpperCase();
     const sids = new Set();
@@ -4258,7 +4285,7 @@ const useLLQAClasses = (user, legacy, setLegacy, teachers, students, covers, mak
   const [extra, setExtra] = React.useState([]); // parts a save on this computer asked for (a class outside the usual ones)
   const [, setVer] = React.useState(0);
   const base = llqaClsScopeParts(user, teachers, students, covers, makeups);
-  const parts = base === null ? null : base.length || user ? [...new Set([...base, ...extra])].sort((a, b) => a - b) : [];
+  const parts = base === null ? null : base.length || user ? [...new Set([...base, ...extra])].sort() : [];
   const partsKey = parts === null ? "*" : parts.join(",");
   const who = user ? user.role + ":" + (user.teacherId != null ? user.teacherId : user.parentId || user.name || "") : "";
   React.useEffect(() => setExtra([]), [who]); // a new person signs in: only their own parts
@@ -10688,3 +10715,1110 @@ const llqaLogClass = ({ students, setStudents, dailyProgress, setDailyProgress, 
     source: "timetable",
   });
 
+
+
+/* ============================================================
+   v81: privacy — every person signs in with their own account, and each computer loads only what that person may see
+   - Sign-ins are Firebase accounts (email + password) that the CRM makes: the Super Admin and staff have a password,
+     a teacher or a family a 6-digit PIN. The email is made up (…@crm.letslearnquran.net) unless the owner gives a
+     real one for password recovery.
+   - accounts/{uid}: who a sign-in is (role, name, teacher id, Parent ID, its view). logins/{key}: the email behind a
+     name on the sign-in screen (read one at a time, never listed). accountPins/{uid}: a teacher's or a family's PIN
+     (and a staff member's temporary password until they change it), so the office can send it again.
+   - views/{t-<teacher id> | p-<Parent ID>}: what a teacher's or a family's computer may load — their students, and
+     the timetables of the teachers they need cut down to their own classes (no pay or contact details). Staff
+     computers keep the views up to date by themselves.
+   - Nothing is loaded before a sign-in. Another person signing in on this computer starts from an empty copy; signing
+     out clears this person's copy (changes not yet sent stay, for the next time they sign in here).
+   ============================================================ */
+const LLQA_ACCT_DOMAIN = "crm.letslearnquran.net";
+const LLQA_META = { includeMetadataChanges: true }; // listeners also hear the cloud confirm what is shown
+const LLQA_OWNER_KEY = "llqa_crm_owner";
+const LLQA_PEND_KEY = "llqa_crm_pending_v1";
+const llqaRunnerTab = (() => {
+  try {
+    return /(^|&)runner=1(&|$)/.test(String(window.location.search || "").replace(/^\?/, ""));
+  } catch (e) {
+    return false;
+  }
+})();
+const llqaStaffRole = (r) => r === "superadmin" || r === "teamlead" || r === "staff";
+const llqaRandStr = (n, chars) => {
+  const a = new Uint32Array(n);
+  try {
+    crypto.getRandomValues(a);
+  } catch (e) {
+    for (let i = 0; i < n; i++) a[i] = Math.floor(Math.random() * 4294967296);
+  }
+  return Array.from(a, (x) => chars[x % chars.length]).join("");
+};
+const llqaNewPin = () => llqaRandStr(6, "0123456789");
+const llqaNewPass = () => llqaRandStr(4, "ABCDEFGHJKMNPQRSTUVWXYZ") + "-" + llqaRandStr(4, "23456789") + "-" + llqaRandStr(4, "abcdefghjkmnpqrstuvwxyz");
+const llqaKeySan = (k) =>
+  String(k == null ? "" : k)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "x";
+const llqaAcctEmail = (key) => llqaKeySan(key) + "-" + llqaRandStr(5, "abcdefghjkmnpqrstuvwxyz23456789") + "@" + LLQA_ACCT_DOMAIN;
+const llqaPidUp = (p) => String(p == null ? "" : p).trim().toUpperCase();
+// the key of a name on the sign-in screen
+const llqaLoginKey = (kind, id) =>
+  kind === "owner"
+    ? "owner"
+    : kind === "parent"
+      ? "p-" + llqaPidUp(id)
+      : kind === "teacher"
+        ? "t-" + String(id)
+        : kind === "teamlead"
+          ? "tl-" + llqaKeySan(id) // a team lead by name (teachers name their team lead)
+          : kind === "admin"
+            ? "a-" + llqaKeySan(id)
+            : "st-" + llqaKeySan(id);
+const llqaIsPinRole = (r) => r === "teacher" || r === "parent";
+// the browser checks point the CRM at Google's emulators (window.__LLQA_EMU is never set on the real site)
+function llqaUseEmu(db, auth) {
+  const E = typeof window !== "undefined" && window.__LLQA_EMU;
+  if (!E) return;
+  try {
+    if (db) db.useEmulator(E.host, E.fs);
+  } catch (e) {}
+  try {
+    if (auth) auth.useEmulator("http://" + E.host + ":" + E.auth, { disableWarnings: true });
+  } catch (e) {}
+}
+
+/* ---------- this computer's copy belongs to one person ---------- */
+const llqaWipeCaches = () => {
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && (k.indexOf(LS_KEY) === 0 || k === "llqa_crm_rescue_done_v1" || k === "llqa_cls_local_v1")) keys.push(k);
+    }
+    keys.forEach((k) => localStorage.removeItem(k));
+  } catch (e) {}
+  try {
+    sessionStorage.removeItem("llqaKid");
+  } catch (e) {}
+};
+const llqaMergePend = (a, b) => {
+  const out = { ...(a || {}) };
+  Object.keys(b || {}).forEach((name) => {
+    out[name] = { ...(out[name] || {}), ...(b[name] || {}) };
+  });
+  return out;
+};
+// a different person signs in here: the last person's unsent changes are put aside (sent when they sign in here
+// again), the copy of their data goes, and this person's own put-aside changes come back
+const llqaAdoptOwner = (uid, acct) => {
+  try {
+    LLQAPending.flush();
+  } catch (e) {}
+  try {
+    const prev = localStorage.getItem(LLQA_OWNER_KEY);
+    if (prev !== uid) {
+      const pend = localStorage.getItem(LLQA_PEND_KEY);
+      if (pend && pend !== "{}") {
+        const k = LLQA_PEND_KEY + "::" + (prev || "pre81");
+        let old = {};
+        try {
+          old = JSON.parse(localStorage.getItem(k) || "{}") || {};
+        } catch (e) {}
+        localStorage.setItem(k, JSON.stringify(llqaMergePend(old, JSON.parse(pend) || {})));
+      }
+      localStorage.removeItem(LLQA_PEND_KEY);
+      llqaWipeCaches();
+      let mine = {};
+      try {
+        mine = JSON.parse(localStorage.getItem(LLQA_PEND_KEY + "::" + uid) || "{}") || {};
+      } catch (e) {}
+      // changes made on this computer before sign-ins existed: a staff member's sign-in sends them
+      if (acct && llqaStaffRole(acct.role)) {
+        try {
+          const pre = JSON.parse(localStorage.getItem(LLQA_PEND_KEY + "::pre81") || "{}") || {};
+          mine = llqaMergePend(pre, mine);
+        } catch (e) {}
+        localStorage.removeItem(LLQA_PEND_KEY + "::pre81");
+      }
+      if (Object.keys(mine).length) localStorage.setItem(LLQA_PEND_KEY, JSON.stringify(mine));
+      localStorage.removeItem(LLQA_PEND_KEY + "::" + uid);
+      localStorage.setItem(LLQA_OWNER_KEY, uid);
+    }
+  } catch (e) {}
+  try {
+    LLQAPending.reload();
+  } catch (e) {}
+};
+
+/* ---------- who is signed in ---------- */
+const LLQAAuth = (() => {
+  let st = { status: "checking", uid: "", acct: null, error: "" }; // checking | out | in | off (no cloud)
+  const subs = new Set();
+  let waiters = [];
+  let started = false;
+  let hold = false; // while the first Super Admin sign-in is being made
+  const set = (p) => {
+    st = { ...st, ...p };
+    if (st.status === "in") {
+      LLQASync.set({ auth: "ok", authError: "" });
+      const w = waiters;
+      waiters = [];
+      w.forEach((r) => r(true));
+    }
+    subs.forEach((f) => {
+      try {
+        f(st);
+      } catch (e) {}
+    });
+  };
+  const load = async (uid) => {
+    for (let i = 0; i < 3; i++) {
+      try {
+        const snap = await fb.db.collection("accounts").doc(uid).get();
+        return snap.exists ? { ...(snap.data() || {}), uid } : null;
+      } catch (e) {
+        if (i === 2) throw e;
+        await new Promise((r) => setTimeout(r, 800));
+      }
+    }
+    return null;
+  };
+  const check = async (u) => {
+    if (!u) {
+      set({ status: "out", uid: "", acct: null });
+      return;
+    }
+    if (u.isAnonymous) {
+      try {
+        await fb.auth.signOut();
+      } catch (e) {}
+      return;
+    }
+    if (hold) return;
+    if (st.status === "in" && st.uid === u.uid) return;
+    let acct = null,
+      err = "";
+    try {
+      acct = await load(u.uid);
+    } catch (e) {
+      err = "The cloud did not answer — check the internet and try again.";
+    }
+    if (!acct || acct.active === false) {
+      set({ status: "out", uid: "", acct: null, error: err || (acct ? "This sign-in is switched off. Ask the office." : "This sign-in has no CRM account.") });
+      try {
+        await fb.auth.signOut();
+      } catch (e) {}
+      return;
+    }
+    llqaAdoptOwner(u.uid, acct);
+    set({ status: "in", uid: u.uid, acct, error: "" });
+  };
+  const start = () => {
+    if (started) return;
+    started = true;
+    if (!initFirebase() || !fb.auth) {
+      set({ status: "off" });
+      return;
+    }
+    try {
+      const P = firebase.auth.Auth.Persistence;
+      // the 24/7 runner stays signed in across reloads; anyone else signs in again after a reload (as before)
+      const p = fb.auth.setPersistence(llqaRunnerTab ? P.LOCAL : P.NONE);
+      if (p && p.catch) p.catch(() => {});
+    } catch (e) {}
+    fb.auth.onAuthStateChanged((u) => {
+      check(u);
+    });
+  };
+  return {
+    get: () => st,
+    start,
+    set,
+    hold: (on) => {
+      hold = !!on;
+    },
+    recheck: () => check(fb.auth && fb.auth.currentUser),
+    refresh: async () => {
+      if (st.status !== "in") return null;
+      try {
+        const a = await load(st.uid);
+        if (a) set({ acct: a });
+        return a;
+      } catch (e) {
+        return null;
+      }
+    },
+    sub: (f) => {
+      subs.add(f);
+      return () => subs.delete(f);
+    },
+    waitIn: () => (st.status === "in" ? Promise.resolve(true) : new Promise((r) => waiters.push(r))),
+  };
+})();
+const llqaAcct = () => (LLQAAuth.get().status === "in" ? LLQAAuth.get().acct : null);
+const llqaScopedRole = () => {
+  const a = llqaAcct();
+  return !!a && (a.role === "teacher" || a.role === "parent");
+};
+const llqaIsStaffSignIn = () => {
+  const a = llqaAcct();
+  return !!a && llqaStaffRole(a.role);
+};
+
+/* ---------- signing in and out ---------- */
+const llqaLoginGet = async (key) => {
+  if (!initFirebase()) return null;
+  const snap = await fb.db.collection("logins").doc(String(key)).get();
+  return snap.exists ? snap.data() || {} : null;
+};
+const llqaAuthMsg = (e) => {
+  const c = String((e && e.code) || "");
+  if (/wrong-password|invalid-credential|invalid-login|user-not-found|invalid-email/.test(c)) return "wrong";
+  if (/too-many-requests/.test(c)) return "Too many tries — wait a few minutes, then try again.";
+  if (/network-request-failed|unavailable/.test(c)) return "No connection to the cloud — check the internet.";
+  if (/operation-not-allowed/.test(c)) return "Email/Password sign-in is switched off in Firebase (Authentication → Sign-in method).";
+  if (/user-disabled/.test(c)) return "This sign-in is switched off. Ask the office.";
+  if (/weak-password/.test(c)) return "Use at least 6 characters.";
+  if (/email-already-in-use/.test(c)) return "That email already has a sign-in.";
+  if (/permission-denied/.test(c)) return "The cloud refused this — only the office can do it.";
+  return (e && (e.message || e.code)) || "Sign-in failed.";
+};
+// what: "PIN" or "password" (for the message)
+const llqaSignIn = async (key, secret, what) => {
+  LLQAAuth.start();
+  if (!initFirebase() || !fb.auth) return { error: "The cloud is not set up on this computer." };
+  let L = null;
+  try {
+    L = await llqaLoginGet(key);
+  } catch (e) {
+    const m = llqaAuthMsg(e);
+    return { error: m === "wrong" ? "Sign-in failed." : m };
+  }
+  if (!L || !L.email) return { error: "none" };
+  try {
+    await fb.auth.signInWithEmailAndPassword(L.email, String(secret == null ? "" : secret));
+  } catch (e) {
+    const m = llqaAuthMsg(e);
+    return { error: m === "wrong" ? "Wrong " + (what || "password") + "." : m };
+  }
+  const u = fb.auth.currentUser;
+  const res = await new Promise((resolve) => {
+    const s0 = LLQAAuth.get();
+    if (s0.status === "in" && u && s0.uid === u.uid) return resolve(s0);
+    let off = () => {};
+    const t = setTimeout(() => {
+      off();
+      resolve(LLQAAuth.get());
+    }, 20000);
+    off = LLQAAuth.sub((s) => {
+      if ((s.status === "in" && u && s.uid === u.uid) || (s.status === "out" && s.error)) {
+        clearTimeout(t);
+        off();
+        resolve(s);
+      }
+    });
+  });
+  if (res.status !== "in") return { error: res.error || "Sign-in failed." };
+  return { ok: true, acct: res.acct };
+};
+// sign out: what is waiting is sent first (a few seconds at most), this person's copy goes, the page starts again
+const llqaSignOutAll = async () => {
+  try {
+    for (let i = 0; i < 10 && LLQAPending.count() > 0; i++) {
+      LLQACloud.retryNow();
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  } catch (e) {}
+  try {
+    LLQAPending.flush(); // what could not be sent stays on this computer for this person
+  } catch (e) {}
+  llqaWipeCaches();
+  try {
+    if (fb.auth) await fb.auth.signOut();
+  } catch (e) {}
+  try {
+    window.location.reload();
+  } catch (e) {}
+};
+const llqaOwnerExists = async () => {
+  try {
+    return !!(await llqaLoginGet("owner"));
+  } catch (e) {
+    return null;
+  }
+};
+// the first Super Admin sign-in (the owner): only while none exists
+const llqaOwnerSetup = async (pw, email) => {
+  LLQAAuth.start();
+  if (!initFirebase() || !fb.auth) return { error: "The cloud is not set up on this computer." };
+  const has = await llqaOwnerExists();
+  if (has === null) return { error: "No connection to the cloud — check the internet." };
+  if (has) return { error: "The Super Admin sign-in is already set up." };
+  const em = String(email || "").trim() || "owner-" + llqaRandStr(5, "abcdefghjkmnpqrstuvwxyz23456789") + "@" + LLQA_ACCT_DOMAIN;
+  LLQAAuth.hold(true);
+  let uid = "";
+  try {
+    const cred = await fb.auth.createUserWithEmailAndPassword(em, pw);
+    uid = cred.user.uid;
+    const now = new Date().toISOString();
+    // saved only while there is still no owner (two first sign-ins at once: the second is refused, never written over)
+    const lref = fb.db.collection("logins").doc("owner");
+    await fb.db.runTransaction(async (tx) => {
+      const s = await tx.get(lref);
+      if (s.exists) throw { code: "llqa/already" };
+      tx.set(fb.db.collection("accounts").doc(uid), { id: uid, role: "superadmin", key: "owner", name: "Mohsin", active: true, createdAt: now, createdBy: "first sign-in", realEmail: !!String(email || "").trim() });
+      tx.set(lref, { id: "owner", email: em, uid, at: now });
+    });
+  } catch (e) {
+    LLQAAuth.hold(false);
+    const m = e && e.code === "llqa/already" ? "The Super Admin sign-in is already set up." : llqaAuthMsg(e);
+    try {
+      if (uid && fb.auth.currentUser) await fb.auth.currentUser.delete();
+    } catch (x) {}
+    return { error: m === "wrong" ? "That email can't be used." : m };
+  }
+  LLQAAuth.hold(false);
+  await LLQAAuth.recheck();
+  const s = LLQAAuth.get();
+  return s.status === "in" ? { ok: true, acct: s.acct } : { error: s.error || "Sign-in failed." };
+};
+// the owner's password reset email (only when a real email was given at the first sign-in)
+const llqaOwnerReset = async () => {
+  try {
+    const L = await llqaLoginGet("owner");
+    if (!L || !L.email) return { error: "The Super Admin sign-in is not set up yet." };
+    if (String(L.email).endsWith("@" + LLQA_ACCT_DOMAIN)) return { error: "No recovery email was given. In the Firebase console, Authentication → Users, the owner's sign-in can be deleted and set up again." };
+    await fb.auth.sendPasswordResetEmail(L.email);
+    return { ok: true, email: L.email.replace(/^(.).*(@.*)$/, "$1…$2") };
+  } catch (e) {
+    return { error: llqaAuthMsg(e) };
+  }
+};
+
+/* ---------- making and changing sign-ins (staff) ---------- */
+let llqaMakerApp = null;
+const llqaMaker = () => {
+  if (!llqaMakerApp) {
+    llqaMakerApp = firebase.initializeApp(firebaseConfig, "llqaMaker");
+    llqaUseEmu(null, llqaMakerApp.auth());
+    try {
+      const p = llqaMakerApp.auth().setPersistence(firebase.auth.Auth.Persistence.NONE);
+      if (p && p.catch) p.catch(() => {});
+    } catch (e) {}
+  }
+  return llqaMakerApp.auth();
+};
+const llqaPinRec = (uid, key, role, secret) => ({ id: uid, key, role, pin: secret, at: new Date().toISOString(), temp: !llqaIsPinRole(role) });
+// spec: {key, role, name, tid, pid, tlid, roleName, mustChange, secret}
+const llqaMakeAccount = async (spec) => {
+  const me = llqaAcct();
+  if (!me || !llqaStaffRole(me.role)) return { error: "Only the office can make sign-ins." };
+  let L = null;
+  try {
+    L = await llqaLoginGet(spec.key);
+  } catch (e) {
+    return { error: llqaAuthMsg(e) };
+  }
+  if (L) return { error: "already" };
+  const secret = spec.secret || (llqaIsPinRole(spec.role) ? llqaNewPin() : llqaNewPass());
+  const email = llqaAcctEmail(spec.key);
+  const A = llqaMaker();
+  let made = null;
+  try {
+    made = await A.createUserWithEmailAndPassword(email, secret);
+  } catch (e) {
+    try {
+      await A.signOut();
+    } catch (x) {}
+    return { error: llqaAuthMsg(e) };
+  }
+  const uid = made.user.uid;
+  const now = new Date().toISOString();
+  const acct = { id: uid, role: spec.role, key: spec.key, name: String(spec.name || ""), active: true, createdAt: now, createdBy: me.name || me.role };
+  if (spec.tid != null && spec.tid !== "") acct.tid = spec.tid;
+  if (spec.pid) acct.pid = llqaPidUp(spec.pid);
+  if (spec.tlid != null && spec.tlid !== "") acct.tlid = spec.tlid;
+  if (spec.roleName) acct.roleName = String(spec.roleName);
+  if (spec.role === "teacher") acct.view = "t-" + spec.tid;
+  if (spec.role === "parent") acct.view = "p-" + llqaPidUp(spec.pid);
+  if (spec.mustChange || !llqaIsPinRole(spec.role)) acct.mustChange = true;
+  // saved only if no other office computer made this sign-in meanwhile (two computers open at once both make one for
+  // a new person: the second is refused, never written over); a sign-in that was not saved is deleted again
+  let res;
+  try {
+    const lref = fb.db.collection("logins").doc(spec.key);
+    await fb.db.runTransaction(async (tx) => {
+      const s = await tx.get(lref);
+      if (s.exists) throw { code: "llqa/already" };
+      tx.set(fb.db.collection("accounts").doc(uid), acct);
+      tx.set(lref, { id: spec.key, email, at: now });
+      tx.set(fb.db.collection("accountPins").doc(uid), llqaPinRec(uid, spec.key, spec.role, secret));
+    });
+    res = { ok: true, uid, secret, acct };
+    llqaDirSoon(2000);
+  } catch (e) {
+    try {
+      await made.user.delete();
+    } catch (x) {}
+    res = { error: e && e.code === "llqa/already" ? "already" : "The sign-in was not saved: " + llqaAuthMsg(e) };
+  }
+  try {
+    await A.signOut();
+  } catch (x) {}
+  return res;
+};
+const llqaAcctByKey = async (key) => {
+  const q = await fb.db.collection("accounts").where("key", "==", String(key)).get();
+  const live = q.docs.map((d) => ({ ...(d.data() || {}), uid: d.id })).filter((a) => a.active !== false);
+  return live[0] || null;
+};
+// a new PIN / temporary password for a sign-in: with the one kept it is changed in place; otherwise a new sign-in
+// replaces it (the old one stops working at once)
+const llqaResetSecret = async (key) => {
+  const me = llqaAcct();
+  if (!me || !llqaStaffRole(me.role)) return { error: "Only the office can do this." };
+  let L, acct;
+  try {
+    L = await llqaLoginGet(key);
+    acct = await llqaAcctByKey(key);
+  } catch (e) {
+    return { error: llqaAuthMsg(e) };
+  }
+  if (!L || !acct) return { error: "This sign-in doesn't exist." };
+  if ((acct.role === "superadmin" || acct.role === "teamlead" || acct.role === "staff") && me.role !== "superadmin") return { error: "Only the Super Admin can do this." };
+  const secret = llqaIsPinRole(acct.role) ? llqaNewPin() : llqaNewPass();
+  const A = llqaMaker();
+  let old = "";
+  try {
+    const p = await fb.db.collection("accountPins").doc(acct.uid).get();
+    old = p.exists ? String((p.data() || {}).pin || "") : "";
+  } catch (e) {}
+  if (old) {
+    try {
+      const c = await A.signInWithEmailAndPassword(L.email, old);
+      await c.user.updatePassword(secret);
+      try {
+        await A.signOut();
+      } catch (e) {}
+      const b = fb.db.batch();
+      b.set(fb.db.collection("accountPins").doc(acct.uid), llqaPinRec(acct.uid, key, acct.role, secret));
+      if (!llqaIsPinRole(acct.role)) b.set(fb.db.collection("accounts").doc(acct.uid), { mustChange: true }, { merge: true });
+      await b.commit();
+      return { ok: true, secret, uid: acct.uid };
+    } catch (e) {
+      try {
+        await A.signOut();
+      } catch (x) {}
+    }
+  }
+  if (me.role !== "superadmin") return { error: "The PIN kept for this sign-in doesn't work any more — the Super Admin can make a new one." };
+  const email = llqaAcctEmail(key);
+  let made = null;
+  try {
+    made = await A.createUserWithEmailAndPassword(email, secret);
+  } catch (e) {
+    try {
+      await A.signOut();
+    } catch (x) {}
+    return { error: llqaAuthMsg(e) };
+  }
+  const uid = made.user.uid;
+  const now = new Date().toISOString();
+  const next = { ...acct, id: uid, createdAt: now, createdBy: me.name || me.role, replaced: acct.uid };
+  delete next.uid;
+  if (!llqaIsPinRole(acct.role)) next.mustChange = true;
+  try {
+    const b = fb.db.batch();
+    b.set(fb.db.collection("accounts").doc(uid), next);
+    b.delete(fb.db.collection("accounts").doc(acct.uid));
+    b.set(fb.db.collection("logins").doc(key), { id: key, email, at: now });
+    b.set(fb.db.collection("accountPins").doc(uid), llqaPinRec(uid, key, acct.role, secret));
+    b.delete(fb.db.collection("accountPins").doc(acct.uid));
+    await b.commit();
+  } catch (e) {
+    // not saved: the new sign-in is deleted again (the old one keeps working)
+    try {
+      await made.user.delete();
+    } catch (x) {}
+    try {
+      await A.signOut();
+    } catch (x) {}
+    return { error: llqaAuthMsg(e) };
+  }
+  try {
+    await A.signOut();
+  } catch (x) {}
+  return { ok: true, secret, uid, replaced: true };
+};
+// switch a sign-in off (or on again) — the Super Admin
+const llqaAcctActive = async (uid, on) => {
+  try {
+    await fb.db.collection("accounts").doc(String(uid)).set({ active: !!on }, { merge: true });
+    llqaDirSoon(1500);
+    return { ok: true };
+  } catch (e) {
+    return { error: llqaAuthMsg(e) };
+  }
+};
+// a person changes their own password / PIN
+const llqaChangeOwnSecret = async (oldS, newS) => {
+  const u = fb.auth && fb.auth.currentUser;
+  const a = llqaAcct();
+  if (!u || !a) return { error: "Not signed in." };
+  try {
+    const cred = firebase.auth.EmailAuthProvider.credential(u.email, String(oldS || ""));
+    await u.reauthenticateWithCredential(cred);
+    await u.updatePassword(String(newS));
+  } catch (e) {
+    const m = llqaAuthMsg(e);
+    return { error: m === "wrong" ? "The current " + (llqaIsPinRole(a.role) ? "PIN" : "password") + " is wrong." : m };
+  }
+  try {
+    if (llqaIsPinRole(a.role)) await fb.db.collection("accountPins").doc(u.uid).set(llqaPinRec(u.uid, a.key, a.role, String(newS)));
+    else await fb.db.collection("accountPins").doc(u.uid).delete();
+    if (a.mustChange) await fb.db.collection("accounts").doc(u.uid).set({ mustChange: false }, { merge: true });
+  } catch (e) {}
+  await LLQAAuth.refresh();
+  return { ok: true };
+};
+// the rules a password must follow (Settings → Security), at least 8 characters for staff
+const llqaPassProblem = (pw, isPin) => {
+  const s = String(pw || "");
+  if (isPin) return /^\d{6}$/.test(s) ? "" : "The PIN is 6 digits.";
+  const set = (LLQAApp.ctx && LLQAApp.ctx.appSettings) || {};
+  const min = Math.max(8, Number(set.passwordMinLength) || 8);
+  if (s.length < min) return "Use at least " + min + " characters.";
+  if (set.passwordRequireSpecial && !/[^A-Za-z0-9]/.test(s)) return "Add a sign such as ! or #.";
+  return "";
+};
+
+/* ---------- what a teacher's or a family's computer may load ---------- */
+// a teacher's timetable cut down to the classes this person needs (no pay, contact or other students)
+const llqaCardOf = (t, keep) => {
+  const tt = {};
+  LLQABooking.eachBooked([t], (c) => {
+    (tt[c.day] = tt[c.day] || {})[c.slot] = keep(c) ? c.cell : "";
+  });
+  return {
+    id: t.id,
+    name: t.name || "",
+    status: t.status || "",
+    leftOn: t.leftOn || "",
+    zoom: t.zoom || "",
+    department: t.department || "",
+    gender: t.gender || "",
+    _ttSchedule: tt,
+    _syn: true,
+  };
+};
+// leave days of these teachers (no reasons)
+const llqaSynLeaves = (leaves, tids, from) =>
+  (leaves || [])
+    .filter((l) => l && l.from && tids.has(String(l.teacherId)) && String(l.status || "pending") !== "rejected" && String(l.to || l.from) >= from)
+    .map((l) => ({ id: "syn_" + l.id, teacherId: l.teacherId, teacherName: l.teacherName || "", from: l.from, to: l.to || l.from, status: l.status || "pending", halfDay: !!l.halfDay, type: "Leave", _syn: true }));
+const llqaSidsSorted = (set) => Array.from(set).map(String).sort();
+const llqaViewOf = (kind, key, sids, extra) => ({ id: kind + "-" + key, kind, sids: llqaSidsSorted(sids), cs: llqaSidsSorted(new Set(Array.from(sids).map((s) => llqaClsPart(s)))), ...extra });
+const llqaViewMemo = { key: null, out: null };
+// every view, worked out from the staff computer's data
+const llqaViewsAll = (ctx) => {
+  const deps = [ctx.teachers, ctx.students, ctx.covers, ctx.makeups, ctx.leaves, ctx.payrollHistory];
+  const today = todayPK();
+  if (llqaViewMemo.out && llqaViewMemo.day === today && llqaViewMemo.key && llqaViewMemo.key.every((x, i) => x === deps[i])) return llqaViewMemo.out;
+  const from = llqaAddDays(today, -40);
+  const teachers = (ctx.teachers || []).filter((t) => t && t.id != null && t.id !== "");
+  const students = (ctx.students || []).filter((s) => s && s.id != null && s.id !== "");
+  const tById = new Map(teachers.map((t) => [String(t.id), t]));
+  const covers = (ctx.covers || []).filter((x) => x && !x.cancelled && String(x.date || "") >= from);
+  const makeups = (ctx.makeups || []).filter((m) => m && String(m.date || "9") >= from);
+  const out = new Map();
+  // teachers
+  teachers.forEach((t) => {
+    const sids = llqaClsTeacherSids({ role: "teacher", teacherId: t.id, id: t.id, name: t.name }, teachers, students, covers, makeups);
+    const want = new Map(); // other teacher → classes this teacher covers for them
+    covers.forEach((x) => {
+      if (String(x.coverId) !== String(t.id) || String(x.teacherId) === String(t.id)) return;
+      const k = String(x.teacherId);
+      if (!want.has(k)) want.set(k, new Set());
+      want.get(k).add(x.rowDay + "|" + x.slot);
+    });
+    const cards = [];
+    want.forEach((cells, tid) => {
+      const o = tById.get(tid);
+      if (o) cards.push(llqaCardOf(o, (c) => cells.has(c.day + "|" + c.slot)));
+    });
+    const tids = new Set(cards.map((c) => String(c.id)));
+    covers.forEach((x) => {
+      if (String(x.teacherId) === String(t.id) && x.coverId != null && x.coverId !== "") tids.add(String(x.coverId));
+    });
+    // their own pay (months the office approved or paid) — "My pay" and the payslip on their computer
+    const pay = (((ctx.payrollHistory || {})[String(t.id)]) || []).filter((r) => r && (r.status === "paid" || r.status === "approved"));
+    out.set("t-" + t.id, llqaViewOf("t", String(t.id), sids, { tid: t.id, tname: t.name || "", cards, leaves: llqaSynLeaves(ctx.leaves, tids, from), pay }));
+  });
+  // families
+  const fams = new Map();
+  students.forEach((s) => {
+    const pid = llqaPidUp(s.parentId);
+    if (!pid) return;
+    if (!fams.has(pid)) fams.set(pid, []);
+    fams.get(pid).push(s);
+  });
+  const booked = llqaBookedList(teachers);
+  fams.forEach((kids, pid) => {
+    const sids = new Set(kids.map((s) => String(s.id)));
+    const names = new Set();
+    kids.forEach((s) => {
+      if (s.teacher) names.add(String(s.teacher).trim());
+      (Array.isArray(s.schedule) ? s.schedule : []).forEach((r) => r && r.teacher && names.add(String(r.teacher).trim()));
+    });
+    const mine = new Map(); // teacher → their cells with these children
+    booked.forEach((c) => {
+      const cell = c.cell || {};
+      const sid = cell.sid != null && cell.sid !== "" ? String(cell.sid) : (kids.find((s) => LLQABooking.sameStudent(cell, s)) || {}).id;
+      if (sid == null || !sids.has(String(sid))) return;
+      const k = String(c.teacherId);
+      if (!mine.has(k)) mine.set(k, new Set());
+      mine.get(k).add(c.day + "|" + c.slot);
+    });
+    teachers.forEach((t) => {
+      if (names.has(String(t.name || "").trim()) && !mine.has(String(t.id))) mine.set(String(t.id), new Set());
+    });
+    covers.forEach((x) => {
+      if (x.sid != null && sids.has(String(x.sid)) && x.coverId != null && x.coverId !== "" && !mine.has(String(x.coverId))) mine.set(String(x.coverId), new Set());
+    });
+    makeups.forEach((m) => {
+      if (m.sid != null && sids.has(String(m.sid)) && m.teacherId != null && !mine.has(String(m.teacherId))) mine.set(String(m.teacherId), new Set());
+    });
+    const cards = [];
+    mine.forEach((cells, tid) => {
+      const o = tById.get(tid);
+      if (o) cards.push(llqaCardOf(o, (c) => cells.has(c.day + "|" + c.slot)));
+    });
+    const tids = new Set(cards.map((c) => String(c.id)));
+    out.set("p-" + pid, llqaViewOf("p", pid, sids, { pid, cards, leaves: llqaSynLeaves(ctx.leaves, tids, from) }));
+  });
+  llqaViewMemo.key = deps;
+  llqaViewMemo.day = today;
+  llqaViewMemo.out = out;
+  return out;
+};
+const llqaViewPlain = (v) => {
+  const o = { ...(v || {}) };
+  delete o.at;
+  return o;
+};
+// staff computers: the views follow the data (only the ones that changed are written)
+const llqaViewsRun = () => {
+  const ctx = LLQAApp.ctx || {};
+  if (!llqaIsStaffSignIn() || typeof ctx.setViews !== "function") return false;
+  if (!["views", "teachers", "students", "covers", "makeups", "leaves"].every((n) => LLQACloud.ready(n))) return false;
+  const want = llqaViewsAll(ctx);
+  const have = new Map((ctx.views || []).filter((v) => v && v.id != null).map((v) => [String(v.id), v]));
+  let changed = false;
+  const now = new Date().toISOString();
+  const next = [];
+  want.forEach((v, id) => {
+    const h = have.get(id);
+    if (h && llqaStable(llqaViewPlain(h)) === llqaStable(v)) next.push(h);
+    else {
+      changed = true;
+      next.push({ ...v, at: now });
+    }
+  });
+  have.forEach((h, id) => {
+    if (!want.has(id)) changed = true;
+  });
+  if (changed) ctx.setViews(next);
+  return changed;
+};
+// staff computers: the names on the sign-in screen (people with a sign-in)
+const llqaDirectoryOf = (accounts, ctx) => {
+  const act = (accounts || []).filter((a) => a && a.active !== false && a.key);
+  const tById = new Map(((ctx && ctx.teachers) || []).filter(Boolean).map((t) => [String(t.id), t]));
+  const pick = (role) =>
+    act
+      .filter((a) => a.role === role)
+      .map((a) => {
+        const o = { key: a.key, name: a.name || "" };
+        if (a.roleName) o.role = a.roleName;
+        if (role === "teacher") {
+          const t = tById.get(String(a.tid));
+          o.id = a.tid;
+          o.name = (t && t.name) || o.name;
+          o.code = (t && t.code) || "";
+          o.location = (t && t.location) || "IBA";
+        }
+        return o;
+      })
+      .sort((x, y) => String(x.name).localeCompare(String(y.name)) || String(x.key).localeCompare(String(y.key)));
+  const out = { admins: pick("superadmin"), teamLeads: pick("teamlead"), teachers: pick("teacher"), staff: pick("staff") };
+  // the academy's logo on the sign-in screen (when it is small enough to load before signing in)
+  const set = (ctx && ctx.appSettings) || {};
+  const logo = String(set.logoDataUrl || "");
+  out.brand = logo && logo.length < 300000 ? { logoDataUrl: logo, logoBg: set.logoBg || "", logoFit: set.logoFit || "" } : null;
+  return out;
+};
+const LLQA_DIR_KEYS = ["admins", "teamLeads", "teachers", "staff", "brand"];
+// the sign-in names again soon after a sign-in is made or switched off/on, and while the lists are still loading after
+// a sign-in — not only at the next 10-second round (a person made just before the office signs out is on the list)
+let llqaDirTimer = null;
+let llqaDirWaits = 0;
+const llqaDirSoon = (ms) => {
+  if (llqaDirTimer) clearTimeout(llqaDirTimer);
+  llqaDirTimer = setTimeout(() => {
+    llqaDirTimer = null;
+    try {
+      llqaDirectoryRun();
+    } catch (e) {}
+  }, ms || 2000);
+};
+const llqaDirectoryRun = () => {
+  const ctx = LLQAApp.ctx || {};
+  if (!llqaIsStaffSignIn()) return false;
+  const st = LLQACloud.doc("public/directory", {});
+  st.start();
+  if (!LLQACloud.ready("accounts") || !LLQACloud.ready("teachers") || !LLQACloud.ready("doc:public/directory")) {
+    if (llqaDirWaits++ < 20) llqaDirSoon(1500);
+    return false;
+  }
+  llqaDirWaits = 0;
+  const dir = llqaDirectoryOf(ctx.accounts, ctx);
+  const cur = st.data || {};
+  const same = LLQA_DIR_KEYS.every((k) => llqaStable(cur[k] == null ? null : cur[k]) === llqaStable(dir[k] == null ? null : dir[k]));
+  if (same) return false;
+  st.set({ ...dir, at: new Date().toISOString() });
+  return true;
+};
+
+/* ---------- the view of a teacher's or a family's computer ---------- */
+const LLQAView = (() => {
+  let v = null,
+    off = null,
+    path = "",
+    tries = 0,
+    timer = null;
+  const subs = new Set();
+  const emit = () =>
+    subs.forEach((f) => {
+      try {
+        f(v);
+      } catch (e) {}
+    });
+  const listen = () => {
+    timer = null;
+    try {
+      off = fb.db.doc(path).onSnapshot(
+        LLQA_META,
+        (snap) => {
+          if (snap.metadata && snap.metadata.fromCache) return;
+          tries = 0;
+          v = snap.exists ? snap.data() || {} : { sids: [], cs: [], cards: [], leaves: [] };
+          emit();
+        },
+        () => {
+          const wait = Math.min(300000, 15000 * Math.pow(2, tries++));
+          timer = setTimeout(listen, wait);
+        },
+      );
+    } catch (e) {}
+  };
+  const start = (key) => {
+    const p = "views/" + key;
+    if (path === p) return;
+    if (off) off();
+    if (timer) clearTimeout(timer);
+    path = p;
+    v = null;
+    listen();
+  };
+  return {
+    start,
+    get: () => v,
+    ready: () => !!v,
+    sub: (f) => {
+      subs.add(f);
+      return () => subs.delete(f);
+    },
+  };
+})();
+const llqaViewSids = () => ((LLQAView.get() || {}).sids || []).map(String);
+const llqaInVals = (sids) => {
+  const out = [];
+  sids.forEach((s) => {
+    out.push(s);
+    if (/^\d+$/.test(s) && String(Number(s)) === s && Number.isSafeInteger(Number(s))) out.push(Number(s));
+  });
+  return out;
+};
+const llqaChunks = (list, n) => {
+  const out = [];
+  for (let i = 0; i < list.length; i += n) out.push(list.slice(i, i + n));
+  return out;
+};
+const llqaIdVals = (v) => (/^\d+$/.test(String(v)) && Number.isSafeInteger(Number(v)) ? [String(v), Number(v)] : [String(v)]);
+// for each list: the queries a teacher ("t") or a family ("p") runs, and what is added from the view (read-only)
+// field "__id": the document id; "sids": the students in the view
+const LLQA_SCOPE = {
+  students: { t: [["__id", "sids"]], p: [["__id", "sids"]] },
+  teachers: { t: [["__id", "tid"]], p: [], syn: "cards" },
+  arPayments: { t: [["studentId", "sids"]], p: [["studentId", "sids"]] },
+  parentNotes: { t: [["studentId", "sids"]], p: [["studentId", "sids"]] },
+  parentRequests: { p: [["studentId", "sids"]] },
+  teacherFeedback: { t: [["teacherName", "tname"]], p: [["studentId", "sids"]] },
+  dailyProgress: { t: [["studentId", "sids"]], p: [["studentId", "sids"]] },
+  makeups: { t: [["teacherId", "tid"], ["sid", "sids"]], p: [["sid", "sids"]] },
+  covers: { t: [["coverId", "tid"], ["teacherId", "tid"]], p: [["sid", "sids"]] },
+  leaves: { t: [["teacherId", "tid"]], p: [], syn: "leaves" },
+  autoAttendance: { t: [["userId", "tidS"]] },
+  trainingPrograms: { t: [["_tids", "tidA"]] },
+  shifts: { t: "all", p: "all" },
+  teamLeads: { t: "all" },
+};
+// the lists a teacher's / a family's computer may change (anything else stays on that computer)
+const LLQA_SCOPE_WRITE = {
+  teacher: new Set(["students", "teachers", "parentNotes", "leaves", "autoAttendance"]),
+  parent: new Set(["parentNotes", "parentRequests", "teacherFeedback"]),
+};
+// the documents a teacher's / a family's computer may read (attendance and presence are handled by their own stores)
+const llqaDocReadable = (path) => {
+  const a = llqaAcct();
+  if (!a || llqaStaffRole(a.role)) return true;
+  if (path === "settings/preferences" || path === "settings/calendar" || path === "settings/portalAccess" || path === "public/directory") return true;
+  if (a.role === "teacher" && path === "attendance/" + path.slice(11, 18) + "_" + llqaAttPart(a.tid)) return true;
+  return false;
+};
+// documents a teacher's computer can't read, made from their view instead (their own part only)
+const llqaDocSyn = (path) => {
+  const a = llqaAcct();
+  const v = LLQAView.get();
+  if (!a || !v || a.role !== "teacher") return null;
+  if (path === "data/payrollHistory") return { [String(a.tid)]: v.pay || [] };
+  return null;
+};
+const llqaDocWritable = (path) => {
+  const a = llqaAcct();
+  if (!a || llqaStaffRole(a.role)) return true;
+  return a.role === "teacher" && path === "attendance/" + path.slice(11, 18) + "_" + llqaAttPart(a.tid);
+};
+const llqaCollWritable = (name) => {
+  const a = llqaAcct();
+  if (!a || llqaStaffRole(a.role)) return true;
+  return !!(LLQA_SCOPE_WRITE[a.role] && LLQA_SCOPE_WRITE[a.role].has(name));
+};
+// the plan of one list for whoever is signed in: {all} | {queries: [{key, make(ref)}], syn: fn | null}
+const llqaScopePlan = (name) => {
+  const a = llqaAcct();
+  // staff other than the Super Admin keep the PINs of teachers and families only (not staff passwords)
+  if (a && name === "accountPins" && (a.role === "teamlead" || a.role === "staff")) return { queries: [{ key: "role in teacher,parent", make: (ref) => ref.where("role", "in", ["teacher", "parent"]) }], syn: null };
+  if (!a || llqaStaffRole(a.role)) return { all: true };
+  const r = a.role === "teacher" ? "t" : a.role === "parent" ? "p" : "";
+  const spec = LLQA_SCOPE[name] || {};
+  const qs = spec[r];
+  if (qs === "all") return { all: true };
+  const view = LLQAView.get();
+  const syn = spec.syn && view ? () => (view[spec.syn] || []).map((x) => ({ ...x, _syn: true })) : null;
+  if (!Array.isArray(qs)) return { queries: [], syn: null, none: true };
+  if (!view && qs.some((q) => q[1] === "sids" || q[1] === "tname")) return { queries: [], syn, wait: true };
+  const queries = [];
+  const docId = firebase.firestore.FieldPath.documentId();
+  qs.forEach(([field, what]) => {
+    const f = field === "__id" ? docId : field;
+    if (what === "sids") {
+      const sids = llqaViewSids();
+      const vals = field === "__id" ? sids : llqaInVals(sids);
+      llqaChunks(vals, 30).forEach((ch) => queries.push({ key: field + " in " + ch.join(","), make: (ref) => ref.where(f, "in", ch) }));
+    } else if (what === "tid") {
+      const vals = field === "__id" ? [String(a.tid)] : llqaIdVals(a.tid);
+      queries.push({ key: field + " in " + vals.join(","), make: (ref) => ref.where(f, "in", vals) });
+    } else if (what === "tidS") queries.push({ key: field + " == " + a.tid, make: (ref) => ref.where(f, "==", String(a.tid)) });
+    else if (what === "tidA") queries.push({ key: field + " has " + a.tid, make: (ref) => ref.where(f, "array-contains", String(a.tid)) });
+    else if (what === "tname") {
+      const n = String((view && view.tname) || a.name || "");
+      if (n) queries.push({ key: field + " == " + n, make: (ref) => ref.where(f, "==", n) });
+    }
+  });
+  return { queries, syn };
+};
+// what was synthetic (from the view) is never sent back
+const llqaNoSyn = (ops, data) => {
+  const syn = new Set((data || []).filter((r) => r && r._syn).map((r) => String(r.id)));
+  return ops.filter((o) => !syn.has(String(o.id)) && !(o.doc && o.doc._syn));
+};
+// a teacher's / a family's list: its queries (from the plan) merged, the view's read-only records on top; the plan
+// is made again when their view changes (a new student, a cover)
+const llqaScopedStart = (s, name, onData, onErr) => {
+  if (s.sq) s.sq.forEach((q) => q.unsub && q.unsub());
+  s.sq = new Map();
+  s.sdocs = new Map();
+  let failed = false;
+  const fail = (err) => {
+    if (failed) return;
+    failed = true;
+    if (s.sq) s.sq.forEach((q) => q.unsub && q.unsub());
+    onErr(err);
+  };
+  const drop = (id, k) => {
+    const e = s.sdocs.get(id);
+    if (!e) return;
+    e.by.delete(k);
+    if (!e.by.size) s.sdocs.delete(id);
+  };
+  const emitNow = () => {
+    if (failed) return;
+    const plan = s.splan || {};
+    const docs = Array.from(s.sdocs.values()).map((e) => e.doc);
+    const syn = plan.syn ? plan.syn() : [];
+    const done = !plan.wait && Array.from(s.sq.values()).every((q) => q.server);
+    onData(docs.concat(syn), done);
+  };
+  const replan = () => {
+    if (failed) return;
+    const plan = llqaScopePlan(name);
+    s.splan = plan;
+    const want = new Map((plan.queries || []).map((q) => [q.key, q]));
+    Array.from(s.sq.keys()).forEach((k) => {
+      if (want.has(k)) return;
+      const q = s.sq.get(k);
+      if (q.unsub) q.unsub();
+      s.sq.delete(k);
+      q.got.forEach((id) => drop(id, k));
+    });
+    want.forEach((spec, k) => {
+      if (s.sq.has(k)) return;
+      const q = { got: new Set(), server: false, unsub: null };
+      s.sq.set(k, q);
+      try {
+        q.unsub = spec.make(fb.db.collection(name)).onSnapshot(LLQA_META, (snap) => {
+          const fromCache = !!(snap.metadata && snap.metadata.fromCache);
+          if (fromCache && !q.server) return;
+          const seen = new Set();
+          snap.docs.forEach((d) => {
+            seen.add(d.id);
+            const e = s.sdocs.get(d.id) || { by: new Set() };
+            e.doc = { id: d.id, ...d.data() };
+            e.by.add(k);
+            s.sdocs.set(d.id, e);
+          });
+          q.got.forEach((id) => {
+            if (!seen.has(id)) drop(id, k);
+          });
+          q.got = seen;
+          if (!fromCache) q.server = true;
+          emitNow();
+        }, fail);
+      } catch (e) {
+        fail(e);
+      }
+    });
+    emitNow();
+  };
+  if (s.viewOff) s.viewOff();
+  s.viewOff = LLQAView.sub(replan);
+  replan();
+};
+// run fn once these lists (and "doc:" documents) have come from the cloud — they load after the sign-in now
+const llqaWhenLoaded = (names, fn, tries) => {
+  const ok = (n) => (n === "app:user" ? !!(LLQAApp.ctx && LLQAApp.ctx.user) : LLQACloud.ready(n)); // "app:user": the App has drawn for the person
+  if (names.every(ok)) return fn();
+  if ((tries || 0) < 240) setTimeout(() => llqaWhenLoaded(names, fn, (tries || 0) + 1), 500);
+};
+// training sessions say which teachers are on them (a teacher's computer loads only those)
+const llqaTrainTids = (att) => [...new Set((att || []).filter((a) => a && a.teacherId != null && a.teacherId !== "").map((a) => String(a.teacherId)))].sort();
+
+/* ---------- sign-ins for new people (staff computers) ---------- */
+let llqaAcctBusy = false;
+const llqaAcctTried = new Map(); // key → when it last failed
+const llqaAcctWant = (ctx) => {
+  const me = llqaAcct();
+  const have = new Set((ctx.accounts || []).filter((a) => a && a.key).map((a) => a.key));
+  const out = [];
+  if (llqaCanOpen("teachers") || llqaCanOpen("timetable"))
+    (ctx.teachers || []).forEach((t) => {
+      if (!t || t.id == null || t.id === "" || !t.name || llqaTeacherGone(t) || t.status === "quit") return;
+      const key = llqaLoginKey("teacher", t.id);
+      if (!have.has(key)) out.push({ key, role: "teacher", name: t.name, tid: t.id });
+    });
+  if (llqaCanOpen("students") || llqaCanOpen("parent")) {
+    const seen = new Set();
+    (ctx.students || []).forEach((s) => {
+      const pid = llqaPidUp(s && s.parentId);
+      if (!pid || seen.has(pid) || s.status === "quit") return;
+      seen.add(pid);
+      const key = llqaLoginKey("parent", pid);
+      if (!have.has(key)) out.push({ key, role: "parent", name: s.parent || "Parent", pid });
+    });
+  }
+  // team leads: the Team Leads list and the team leads teachers are under (the Super Admin's computer)
+  if (me && me.role === "superadmin") {
+    const leads = new Map();
+    (ctx.teamLeads || []).forEach((l) => l && l.name && leads.set(llqaLoginKey("teamlead", l.name), { name: String(l.name).trim(), tlid: l.id }));
+    (ctx.teachers || []).forEach((t) => {
+      const n = t && String(t.teamLead || "").trim();
+      if (n && !llqaTeacherGone(t) && !leads.has(llqaLoginKey("teamlead", n))) leads.set(llqaLoginKey("teamlead", n), { name: n });
+    });
+    leads.forEach((l, key) => {
+      if (!have.has(key)) out.push({ key, role: "teamlead", name: l.name, ...(l.tlid != null && l.tlid !== "" ? { tlid: l.tlid } : {}) });
+    });
+  }
+  return out;
+};
+const llqaAcctAutoRun = () => {
+  const ctx = LLQAApp.ctx || {};
+  if (llqaAcctBusy || !llqaIsStaffSignIn() || (typeof LLQAUI !== "undefined" && LLQAUI.stale)) return false;
+  if (!["accounts", "teachers", "students", "teamLeads"].every((n) => LLQACloud.ready(n))) return false;
+  const now = Date.now();
+  const todo = llqaAcctWant(ctx).filter((x) => !(llqaAcctTried.get(x.key) > now - 600000));
+  if (!todo.length) return false;
+  llqaAcctBusy = true;
+  (async () => {
+    const made = [];
+    for (const spec of todo.slice(0, 60)) {
+      try {
+        const r = await llqaMakeAccount(spec);
+        if (r.ok) made.push([spec, r.secret]);
+        else if (r.error !== "already") llqaAcctTried.set(spec.key, Date.now());
+      } catch (e) {
+        llqaAcctTried.set(spec.key, Date.now());
+      }
+    }
+    llqaAcctBusy = false;
+    // one notice each for a few; a summary when many were made at once (they are all in Settings → Sign-ins)
+    if (made.length <= 3) made.forEach(([spec, sec]) => llqaAcctMadeNotice(spec, sec));
+    else llqaToast({ kind: "info", key: "acct:many", text: "🔑 " + made.length + " sign-ins made (teachers and families). Their PINs are in Settings → Sign-ins, with a Send button each.", actions: [{ label: "Sign-ins", run: () => llqaGo("settings") }] });
+  })();
+  return false;
+};
+// a staff computer, every 10 seconds: views, the sign-in names, sign-ins for new people
+const llqaPrivacyTick = () => {
+  if ((typeof LLQAUI !== "undefined" && LLQAUI.stale) || !llqaIsStaffSignIn()) return;
+  try {
+    llqaViewsRun();
+  } catch (e) {}
+  try {
+    llqaDirectoryRun();
+  } catch (e) {}
+  try {
+    llqaAcctAutoRun();
+  } catch (e) {}
+};
+// the PIN / temporary password kept for a sign-in (staff computers)
+const llqaPinOfKey = (key) => {
+  const ctx = LLQAApp.ctx || {};
+  const a = (ctx.accounts || []).find((x) => x && x.key === key && x.active !== false);
+  const p = a && (ctx.accountPins || []).find((x) => x && String(x.id) === String(a.id));
+  return p && p.pin ? String(p.pin) : "";
+};
+const llqaPinFor = (pid) => llqaPinOfKey(llqaLoginKey("parent", pid)) || "(ask the academy)";
+// derived fields written with a record: the teachers on a training session
+const llqaStampList = (name, list) => {
+  if (name !== "trainingPrograms" || !Array.isArray(list)) return list;
+  let changed = false;
+  const out = list.map((p) => {
+    if (!p || typeof p !== "object") return p;
+    const t = llqaTrainTids(p.attendees);
+    if (llqaStable(p._tids || []) === llqaStable(t)) return p;
+    changed = true;
+    return { ...p, _tids: t };
+  });
+  return changed ? out : list;
+};

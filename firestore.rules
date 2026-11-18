@@ -1,0 +1,149 @@
+rules_version = '2';
+// LLQA CRM — who may read and change what (v81).
+// Staff (Super Admin, team leads, custom roles) work with the whole academy. A teacher sees only their own students
+// and their own records; a family only its own children. Nobody without a CRM sign-in sees anything except the names
+// on the sign-in screen. OWNER_UID is the owner's sign-in (Super Admin), kept as the last word.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signed() { return request.auth != null; }
+    function owner() { return signed() && request.auth.uid == 'OWNER_UID'; }
+    function acctPath() { return /databases/$(database)/documents/accounts/$(request.auth.uid); }
+    function has() { return signed() && exists(acctPath()); }
+    function me() { return get(acctPath()).data; }
+    function active() { return has() && me().get('active', true) != false; }
+    function admin() { return owner() || (active() && me().role == 'superadmin'); }
+    function staff() { return owner() || (active() && me().role in ['superadmin', 'teamlead', 'staff']); }
+    function teacher() { return active() && me().role == 'teacher'; }
+    function parent() { return active() && me().role == 'parent'; }
+    function scoped() { return teacher() || parent(); }
+    function view() { return get(/databases/$(database)/documents/views/$(me().view)).data; }
+    function mySid(sid) { return sid != null && string(sid) in view().sids; }
+    function myTid() { return string(me().tid); }
+    function isMe(v) { return v != null && string(v) == myTid(); }
+    function changes() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    // the very first Super Admin (the owner), made together with logins/owner — only while there is none
+    function firstOwner(uid) {
+      return signed() && request.auth.uid == uid && request.resource.data.role == 'superadmin' && request.resource.data.key == 'owner'
+        && !exists(/databases/$(database)/documents/logins/owner)
+        && getAfter(/databases/$(database)/documents/logins/owner).data.uid == uid;
+    }
+
+    // ---------- sign-ins ----------
+    match /accounts/{uid} {
+      allow read: if (signed() && request.auth.uid == uid) || staff();
+      allow create: if firstOwner(uid) || admin() || (staff() && (
+        (request.resource.data.role == 'teacher' && request.resource.data.view == 't-' + string(request.resource.data.tid)) ||
+        (request.resource.data.role == 'parent' && request.resource.data.view == 'p-' + request.resource.data.pid)));
+      allow update: if admin() || (signed() && request.auth.uid == uid && changes().hasOnly(['mustChange']) && request.resource.data.mustChange == false);
+      allow delete: if admin();
+    }
+    match /logins/{key} {
+      allow get: if true;
+      allow list: if false;
+      allow create: if admin() || (staff() && (key.matches('t-.+') || key.matches('p-.+')))
+        || (key == 'owner' && signed() && request.resource.data.uid == request.auth.uid
+          && getAfter(/databases/$(database)/documents/accounts/$(request.auth.uid)).data.key == 'owner');
+      allow update, delete: if admin();
+    }
+    match /accountPins/{uid} {
+      allow read: if admin() || (staff() && resource.data.role in ['teacher', 'parent']) || (signed() && request.auth.uid == uid);
+      allow create, update: if admin() || (staff() && request.resource.data.role in ['teacher', 'parent']) || (active() && request.auth.uid == uid && request.resource.data.role == me().role);
+      allow delete: if admin() || (signed() && request.auth.uid == uid);
+    }
+    match /public/{doc} {
+      allow get: if doc == 'directory';
+      allow list: if false;
+      allow write: if staff();
+    }
+    match /views/{key} {
+      allow get: if staff() || (active() && me().get('view', '') == key);
+      allow list, write: if staff();
+    }
+
+    // ---------- staff: everything else ----------
+    match /{coll}/{id} {
+      allow read, write: if staff() && !(coll in ['accounts', 'logins', 'accountPins', 'public', 'views']);
+    }
+
+    // ---------- settings everyone signed in needs ----------
+    match /settings/{doc} {
+      allow read: if active() && doc in ['preferences', 'calendar', 'portalAccess'];
+    }
+    match /_meta/{doc} {
+      allow read: if active();
+    }
+    match /shifts/{id} {
+      allow read: if active();
+    }
+    match /teamLeads/{id} {
+      allow read: if teacher();
+    }
+    match /loginAudit/{id} {
+      allow create: if active();
+    }
+
+    // ---------- a teacher's own records ----------
+    match /teachers/{tid} {
+      allow read: if teacher() && tid == myTid();
+    }
+    match /attendance/{docId} {
+      allow read, create, update: if teacher() && docId.split('_')[1] == 'u' + myTid();
+    }
+    match /presence/{day} {
+      allow create: if teacher() && request.resource.data.keys().hasOnly([myTid()]);
+      allow update: if teacher() && changes().hasOnly([myTid()]);
+    }
+    match /autoAttendance/{id} {
+      allow read: if teacher() && resource.data.userId == myTid();
+      allow create: if teacher() && request.resource.data.userId == myTid();
+    }
+    match /leaves/{id} {
+      allow read: if teacher() && isMe(resource.data.teacherId);
+      allow create: if teacher() && isMe(request.resource.data.teacherId) && request.resource.data.get('status', 'pending') == 'pending';
+      allow update: if teacher() && isMe(resource.data.teacherId) && resource.data.get('status', 'pending') == 'pending'
+        && isMe(request.resource.data.teacherId) && request.resource.data.get('status', 'pending') in ['pending', 'cancelled'];
+    }
+    match /trainingPrograms/{id} {
+      allow read: if teacher() && myTid() in resource.data.get('_tids', []);
+    }
+    match /covers/{id} {
+      allow read: if (teacher() && (isMe(resource.data.coverId) || isMe(resource.data.teacherId))) || (parent() && mySid(resource.data.sid));
+    }
+    match /makeups/{id} {
+      allow read: if (teacher() && (isMe(resource.data.teacherId) || mySid(resource.data.sid))) || (parent() && mySid(resource.data.sid));
+    }
+
+    // ---------- a teacher's students / a family's children ----------
+    match /students/{sid} {
+      allow read: if scoped() && mySid(sid);
+    }
+    match /classes/{docId} {
+      allow read: if scoped() && docId.split('_')[1] in view().cs;
+      allow create, update: if teacher() && docId.split('_')[1] in view().cs;
+    }
+    match /dailyProgress/{id} {
+      allow read: if scoped() && mySid(resource.data.studentId);
+    }
+    match /arPayments/{id} {
+      allow read: if scoped() && mySid(resource.data.studentId);
+    }
+    match /parentNotes/{id} {
+      allow read: if scoped() && mySid(resource.data.studentId);
+      allow create: if scoped() && mySid(request.resource.data.studentId) && request.resource.data.authorRole == me().role;
+      allow update: if scoped() && mySid(resource.data.studentId) && request.resource.data.studentId == resource.data.studentId
+        && changes().hasOnly(['seenParent', 'seenTeacher', 'seenOffice']);
+      allow delete: if scoped() && mySid(resource.data.studentId) && resource.data.authorRole == me().role;
+    }
+    match /parentRequests/{id} {
+      allow read: if parent() && mySid(resource.data.studentId);
+      allow create: if parent() && mySid(request.resource.data.studentId) && request.resource.data.get('status', 'pending') == 'pending';
+      allow update: if parent() && mySid(resource.data.studentId) && resource.data.get('status', 'pending') == 'pending'
+        && request.resource.data.studentId == resource.data.studentId && request.resource.data.get('status', 'pending') in ['pending', 'cancelled'];
+    }
+    match /teacherFeedback/{id} {
+      allow read: if (parent() && mySid(resource.data.studentId)) || (teacher() && resource.data.teacherName == view().tname);
+      allow create: if parent() && mySid(request.resource.data.studentId);
+      allow delete: if parent() && mySid(resource.data.studentId);
+    }
+  }
+}
