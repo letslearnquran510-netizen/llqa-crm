@@ -310,24 +310,7 @@ function App() {
     const ex = new Set((salesReferrals || []).map((r) => String(r.studentId)));
     const add = wr.filter((s) => !ex.has(String(s.id)));
     if (!add.length) return;
-    setSalesReferrals([
-      ...(salesReferrals || []),
-      ...add.map((s, i) => ({
-        id: Date.now() + i,
-        studentId: s.id,
-        studentName: s.name,
-        referredBy: s.referredBy,
-        relationship: s.refRelationship || "",
-        contact: s.phone || "",
-        country: s.country || "",
-        course: s.course || "",
-        date: s.dor || todayPK(),
-        status: "Enrolled",
-        reward: "",
-        notes: "Auto-added from student registration",
-        _auto: true,
-      })),
-    ]);
+    setSalesReferrals((prev) => llqaRefAuto(prev, add, todayPK(), Date.now())); // v81.1: the latest list
   }, [students, salesReferrals]);
   useEffect(() => {
     if (

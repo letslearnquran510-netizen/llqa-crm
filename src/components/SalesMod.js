@@ -404,21 +404,22 @@ const SalesMod = ({
       }
       nextTeachers = res.teachers;
     }
-    setStudents([...current, stu]);
-    // v65: booked from the waitlist → mark that entry booked
-    if (pf._waitId) llqaWaitDone(pf._waitId, stu.id);
-    // v67: booked from a lead → the lead follows this student
-    if (pf._leadId && typeof llqaLeadBooked === "function") llqaLeadBooked(pf._leadId, stu);
-    if (nextTeachers) setTeachers(nextTeachers);
+    // v81.1: the referral first, from the latest list (see the App's own referrals for students "referred by")
     if (pf._refId && setSalesReferrals) {
-      setSalesReferrals(
-        refs.map((r) =>
+      setSalesReferrals((prev) =>
+        (prev || []).map((r) =>
           r.id === pf._refId
             ? { ...r, status: "Enrolled", studentId: stu.id, enrolledDate: todayPK() }
             : r,
         ),
       );
     }
+    setStudents([...current, stu]);
+    // v65: booked from the waitlist → mark that entry booked
+    if (pf._waitId) llqaWaitDone(pf._waitId, stu.id);
+    // v67: booked from a lead → the lead follows this student
+    if (pf._leadId && typeof llqaLeadBooked === "function") llqaLeadBooked(pf._leadId, stu);
+    if (nextTeachers) setTeachers(nextTeachers);
     setModal(null);
     alert(LLQABooking.bookingSummary(stu.name, pl.items, stu.parentId));
     // v65: one click to send the welcome message (class times + Parent ID);
