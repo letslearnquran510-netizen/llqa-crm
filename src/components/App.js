@@ -29,8 +29,14 @@ function App() {
     "settings/preferences",
     DEFAULT_SETTINGS,
   );
+  // v81.2: the look is kept on this computer — before a sign-in nothing is read, and signing out turned it dark
+  const llqaLookLive = LLQAAuth.get().status === "in" && LLQACloud.ready("doc:settings/preferences");
+  React.useEffect(() => {
+    if (llqaLookLive) llqaLookKeep(appSettings);
+  }, [llqaLookLive, appSettings]);
+  const llqaLookS = llqaLookLive ? appSettings : { ...(appSettings || {}), ...llqaLookSaved() };
   const [theme, setThemeLocal] = useState(
-    (appSettings && appSettings.theme) || "dark",
+    (llqaLookS && llqaLookS.theme) || "dark",
   );
   const setTheme = (v) => {
     const newV = typeof v === "function" ? v(theme) : v;
@@ -41,24 +47,24 @@ function App() {
     });
   };
   React.useEffect(() => {
-    if (appSettings && appSettings.theme && appSettings.theme !== theme)
-      setThemeLocal(appSettings.theme);
-  }, [appSettings && appSettings.theme]);
+    if (llqaLookS && llqaLookS.theme && llqaLookS.theme !== theme)
+      setThemeLocal(llqaLookS.theme);
+  }, [llqaLookS && llqaLookS.theme]);
   // v68: one theme engine. The theme in use ("Auto" follows the computer, live), the accent and
   // the tone mode are applied together, so Light never keeps Dark's colours (old timing bug).
   const [sysDark, setSysDark] = useState(() => llqaSysDark());
   React.useEffect(() => llqaWatchSys(setSysDark), []);
   const themeUsed = theme === "auto" ? (sysDark ? "dark" : "light") : theme === "light" ? "light" : "dark";
   // v69: + background tone (Neutral / Midnight / Warm) and an always-dark sidebar option
-  const llqaAcc = appSettings && appSettings.accentColor, llqaTone = appSettings && appSettings.toneMode;
-  const llqaBack = llqaBackdrop(appSettings && appSettings.backdrop);
+  const llqaAcc = llqaLookS && llqaLookS.accentColor, llqaTone = llqaLookS && llqaLookS.toneMode;
+  const llqaBack = llqaBackdrop(llqaLookS && llqaLookS.backdrop);
   const themeVars = React.useMemo(() => llqaThemeVars(themeUsed, llqaAcc, llqaTone, llqaBack), [themeUsed, llqaAcc, llqaTone, llqaBack]);
   React.useLayoutEffect(() => llqaPaintTheme(themeUsed, themeVars, llqaBack), [themeUsed, themeVars, llqaBack]);
-  const llqaSideDark = (appSettings && appSettings.sidebarStyle) === "dark" && themeUsed === "light";
+  const llqaSideDark = (llqaLookS && llqaLookS.sidebarStyle) === "dark" && themeUsed === "light";
   const llqaSideVars = React.useMemo(() => (llqaSideDark ? llqaThemeVars("dark", llqaAcc, llqaTone, llqaBack, false) : null), [llqaSideDark, llqaAcc, llqaTone, llqaBack]);
   React.useEffect(() => {
-    const d = (appSettings && appSettings.density) || "Normal";
-    const fs = (appSettings && appSettings.fontSize) || "Medium";
+    const d = (llqaLookS && llqaLookS.density) || "Normal";
+    const fs = (llqaLookS && llqaLookS.fontSize) || "Medium";
     const fMap = {
       Small: "13px",
       Medium: "14px",
@@ -72,7 +78,7 @@ function App() {
     document.body.style.fontSize = fMap[fs] || "14px";
     document.body.style.zoom = dMap[d] || "1";
     document.documentElement.style.setProperty("--llqaZoom", dMap[d] || "1"); // v70: full-height layout at every Density
-  }, [appSettings && appSettings.density, appSettings && appSettings.fontSize]);
+  }, [llqaLookS && llqaLookS.density, llqaLookS && llqaLookS.fontSize]);
   const [page, setPage] = useState("dashboard");
   const [open, setOpen] = useState(true);
   const [expandedGroups, setExpandedGroups] = useState({});

@@ -12245,6 +12245,10 @@ const llqaMsgCountText = (u) => {
 // the names on the sign-in screen (people with a sign-in) and the academy's logo — readable before signing in
 const llqaDirLoad = async () => {
   if (!initFirebase()) return {};
+  // v81.2: straight from the cloud first (one request); the database link only if that fails
+  try {
+    return (await llqaRestGet("public/directory")) || {};
+  } catch (e) {}
   for (let i = 0; i < 3; i++) {
     try {
       const s = await fb.db.collection("public").doc("directory").get();
@@ -12295,6 +12299,12 @@ const llqaLoginPlan = (role, st) => {
   if (!v.stKey) return { error: "Choose your name." };
   if (!v.secret) return { error: "Enter your password." };
   return { key: v.stKey, secret: v.secret, what: "password", none: "There's no sign-in for this name yet — ask the Super Admin." };
+};
+// v81.2: the sign-in name of the person being chosen (the password or PIN is not needed for that)
+const llqaLoginKeyFor = (role, st) => {
+  const pin = role === "teacher" || role === "parent";
+  const p = llqaLoginPlan(role, { ...st, pwd: "x", v81: { ...(st.v81 || {}), secret: pin ? "000000" : "x" } });
+  return (p && p.key) || "";
 };
 // the person the CRM worked with before (made from the account and, for a teacher or a family, their own records)
 const llqaUserFromAcct = async (a) => {
