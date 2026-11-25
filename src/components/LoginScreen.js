@@ -31,6 +31,17 @@ const LoginScreen = ({
   const [tlName, setTlName] = useState("Qazi Junaid");
   const [teacherId, setTeacherId] = useState("");
   const [error, setError] = useState("");
+  // v81.2: the chosen person's sign-in name is looked up ahead, so Sign In waits only for the password check
+  React.useEffect(() => {
+    const role = { superadmin: "superadmin", teamlead: "teamlead", teacher: "teacher", parent: "parent" }[step];
+    if (!role || (role === "superadmin" && v81.owner !== true)) return;
+    const t = setTimeout(() => {
+      try {
+        llqaLoginSoon(llqaLoginKeyFor(role, { v81, dir, tlName, teacherId, parentIdInput, customRoleName }));
+      } catch (e) {}
+    }, 300);
+    return () => clearTimeout(t);
+  }, [step, v81.owner, v81.who, dir, tlName, teacherId, parentIdInput]);
   const [pendingUser, setPendingUser] = useState(null);
   const [network, setNetwork] = useState(null);
   const [bioMethod, setBioMethod] = useState(null);

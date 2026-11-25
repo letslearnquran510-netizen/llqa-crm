@@ -10872,7 +10872,18 @@ const LLQAAuth = (() => {
       } catch (e) {}
     });
   };
+  // v81.2: the account is read straight from the cloud right after the sign-in (one request) — the database link has
+  // to start again with the new sign-in first, which took seconds on the real cloud; it is the fallback
+  const loadNow = async (uid) => {
+    const u = fb.auth.currentUser;
+    if (!u || u.uid !== uid) throw new Error("later");
+    const d = await llqaRestGet("accounts/" + encodeURIComponent(uid), await u.getIdToken());
+    return d ? { ...d, uid } : null;
+  };
   const load = async (uid) => {
+    try {
+      return await loadNow(uid);
+    } catch (e) {}
     for (let i = 0; i < 3; i++) {
       try {
         const snap = await fb.db.collection("accounts").doc(uid).get();
@@ -10969,6 +10980,12 @@ const llqaIsStaffSignIn = () => {
 /* ---------- signing in and out ---------- */
 const llqaLoginGet = async (key) => {
   if (!initFirebase()) return null;
+  // v81.2: straight from the cloud first (see llqaRestGet); the database link only if that fails
+  try {
+    return await llqaRestGet("logins/" + encodeURIComponent(String(key)));
+  } catch (e) {
+    if (e && e.code === "permission-denied") throw e;
+  }
   const snap = await fb.db.collection("logins").doc(String(key)).get();
   return snap.exists ? snap.data() || {} : null;
 };
@@ -10990,7 +11007,10 @@ const llqaSignIn = async (key, secret, what) => {
   if (!initFirebase() || !fb.auth) return { error: "The cloud is not set up on this computer." };
   let L = null;
   try {
-    L = await llqaLoginGet(key);
+    // v81.2: looked up ahead while the person was being chosen (one trip to the cloud less after Sign In)
+    const ah = llqaLoginAhead.get(String(key));
+    llqaLoginAhead.delete(String(key));
+    L = ah && Date.now() - ah.at < 60000 ? await ah.p.catch(() => llqaLoginGet(key)) : await llqaLoginGet(key);
   } catch (e) {
     // v81.1: the list of sign-ins is refused before a sign-in only while Firebase still has the old access rules
     if (/permission/.test(String((e && e.code) || ""))) return { error: "The list of sign-ins can't be read — the CRM's new access rules aren't in Firebase yet (Firestore → Rules)." };
@@ -11862,4 +11882,91 @@ const llqaRefAuto = (prev, add, today, now) => {
       _auto: true,
     })),
   ];
+};
+
+/* ---------- v81.2: a faster sign-in; the look kept on this computer ---------- */
+// the chosen person's sign-in name is looked up while the password or PIN is typed, so pressing Sign In waits only for
+// the password check (the names are public: the sign-in screen reads them anyway)
+const llqaLoginAhead = new Map();
+const llqaLoginSoon = (key) => {
+  if (!key) return;
+  const k = String(key);
+  const had = llqaLoginAhead.get(k);
+  if (had && Date.now() - had.at < 30000) return;
+  try {
+    const p = llqaLoginGet(k);
+    p.catch(() => {});
+    llqaLoginAhead.set(k, { at: Date.now(), p });
+  } catch (e) {}
+};
+// the look (theme, accent, tones, sizes): kept on this computer after every sign-in, so the sign-in screen and signing
+// out keep it — nothing else is read before a sign-in, and the sign-in screen turned dark
+const LLQA_LOOK_KEY = "llqa_look_v1";
+const LLQA_LOOK_FIELDS = ["theme", "accentColor", "toneMode", "backdrop", "sidebarStyle", "density", "fontSize"];
+const llqaLookKeep = (s) => {
+  try {
+    const o = {};
+    LLQA_LOOK_FIELDS.forEach((k) => {
+      if (s && typeof s[k] === "string" && s[k]) o[k] = s[k];
+    });
+    const v = JSON.stringify(o);
+    if (localStorage.getItem(LLQA_LOOK_KEY) !== v) localStorage.setItem(LLQA_LOOK_KEY, v);
+  } catch (e) {}
+};
+const llqaLookSaved = () => {
+  try {
+    const o = JSON.parse(localStorage.getItem(LLQA_LOOK_KEY) || "{}") || {};
+    const out = {};
+    LLQA_LOOK_FIELDS.forEach((k) => {
+      if (typeof o[k] === "string" && o[k] && o[k].length < 40) out[k] = o[k];
+    });
+    return out;
+  } catch (e) {
+    return {};
+  }
+};
+// a document as the cloud's direct answer gives it (typed values) → plain values
+const llqaRestVal = (v) => {
+  if (!v || typeof v !== "object") return null;
+  if ("stringValue" in v) return v.stringValue;
+  if ("integerValue" in v) return Number(v.integerValue);
+  if ("doubleValue" in v) return Number(v.doubleValue);
+  if ("booleanValue" in v) return !!v.booleanValue;
+  if ("nullValue" in v) return null;
+  if ("timestampValue" in v) return v.timestampValue;
+  if ("arrayValue" in v) return ((v.arrayValue && v.arrayValue.values) || []).map(llqaRestVal);
+  if ("mapValue" in v) return llqaRestFields((v.mapValue && v.mapValue.fields) || {});
+  return null;
+};
+const llqaRestFields = (f) => {
+  const o = {};
+  Object.keys(f || {}).forEach((k) => {
+    o[k] = llqaRestVal(f[k]);
+  });
+  return o;
+};
+// v81.2: before a sign-in, the few public reads (the names on the sign-in screen, a sign-in's name) go straight to the
+// cloud — one request each — and the database link starts only after the sign-in, with that person's sign-in (it used
+// to start before and then again after: seconds on a slow line). Right after a sign-in, the person's own account is read
+// the same way. The cloud's rules apply exactly as to the link.
+const llqaRestBase = () => {
+  // only with Google's own Firebase library (its project); anything else uses the database link as before
+  const pid = fb.db && fb.db.app && fb.db.app.options && fb.db.app.options.projectId;
+  if (!pid || typeof fetch !== "function") return "";
+  const E = window.__LLQA_EMU;
+  return (E ? "http://" + E.host + ":" + E.fs : "https://firestore.googleapis.com") + "/v1/projects/" + encodeURIComponent(pid) + "/databases/(default)/documents/";
+};
+const llqaRestGet = async (path, tok) => {
+  const base = llqaRestBase();
+  if (!base) throw new Error("later");
+  const r = await fetch(base + path, tok ? { headers: { Authorization: "Bearer " + tok } } : undefined);
+  if (r.status === 404) return null;
+  if (r.status === 403) {
+    const e = new Error("Missing or insufficient permissions.");
+    e.code = "permission-denied";
+    throw e;
+  }
+  if (!r.ok) throw new Error("later " + r.status);
+  const j = await r.json();
+  return llqaRestFields((j && j.fields) || {});
 };
