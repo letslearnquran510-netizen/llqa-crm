@@ -66,8 +66,8 @@ const BiometricScreen = ({ user, network, onVerified, onCancel }) => {
     if (m.id === "fingerprint" || m.id === "face" || m.id === "windowshello") {
       setTimeout(() => {
         setPhase("success");
-        setTimeout(() => onVerified(m), 900);
-      }, 2200);
+        setTimeout(() => onVerified(m), 250);
+      }, 300); // v81.4: nothing is read — it waited 3.1 s
     }
   };
   const submitPin = () => {
@@ -81,8 +81,8 @@ const BiometricScreen = ({ user, network, onVerified, onCancel }) => {
         return;
       }
       setPhase("success");
-      setTimeout(() => onVerified(method), 800);
-    }, 800);
+      setTimeout(() => onVerified(method), 250);
+    }, 200); // v81.4 (1.6 s)
   };
   const togglePattern = (n) => {
     if (pattern.includes(n)) return;
@@ -93,9 +93,9 @@ const BiometricScreen = ({ user, network, onVerified, onCancel }) => {
         setPhase("scanning");
         setTimeout(() => {
           setPhase("success");
-          setTimeout(() => onVerified(method), 800);
-        }, 900);
-      }, 200);
+          setTimeout(() => onVerified(method), 250);
+        }, 200);
+      }, 100); // v81.4 (1.9 s)
     }
   };
   return React.createElement(

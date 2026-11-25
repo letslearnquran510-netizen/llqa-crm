@@ -10,7 +10,7 @@ const NetworkScanScreen = ({ onConnected, onCancel, isWFH, userRole }) => {
     const t = setTimeout(() => {
       setNetworks(NETWORK_OPTIONS);
       setPhase("choose");
-    }, 1400);
+    }, 120); // v81.4: the list is fixed — it waited 1.4 s
     return () => clearTimeout(t);
   }, []);
   const tryConnect = (n) => {
@@ -23,14 +23,14 @@ const NetworkScanScreen = ({ onConnected, onCancel, isWFH, userRole }) => {
             ...n,
             viaOTP: false,
           }),
-        1000,
+        150, // v81.4 (1 s)
       );
       return;
     }
     if (isWFH && n.homeNet) {
       setPhase("otp");
       setOtpSent(false);
-      setTimeout(() => setOtpSent(true), 800);
+      setTimeout(() => setOtpSent(true), 150); // v81.4 (0.8 s)
       return;
     }
     setPhase("denied");
@@ -45,7 +45,7 @@ const NetworkScanScreen = ({ onConnected, onCancel, isWFH, userRole }) => {
             ...selected,
             viaOTP: true,
           }),
-        800,
+        150, // v81.4 (0.8 s)
       );
     } else {
       setOtpError(

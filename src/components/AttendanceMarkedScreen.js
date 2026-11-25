@@ -13,7 +13,7 @@ const AttendanceMarkedScreen = ({
     const t = setInterval(
       () =>
         setCount((c) => (c <= 1 ? (clearInterval(t), onContinue(), 0) : c - 1)),
-      800,
+      350, // v81.4: the confirmation shows about 1 s (2.4 s)
     );
     return () => clearInterval(t);
   }, []);

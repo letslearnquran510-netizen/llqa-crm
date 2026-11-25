@@ -140,6 +140,7 @@ const LoginScreen = ({
       return setError(r.error === "none" ? p.none : r.error);
     }
     const u = await llqaUserFromAcct(r.acct);
+    llqaSignMark("person");
     v81Set({ busy: false, secret: "" });
     if (!u) return setError("This sign-in isn't linked to anyone in the CRM yet — ask the office.");
     if (r.acct.mustChange) return v81Set({ change: { role, u, old: p.secret } });

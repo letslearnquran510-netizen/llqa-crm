@@ -2055,6 +2055,8 @@ const LLQAHost = () => {
     LLQAUI.subs.add(f);
     return () => LLQAUI.subs.delete(f);
   }, []);
+  // v81.4: after a new version was loaded (the same page, a short notice); this sign-in's timing
+  useEffect(() => llqaUpdAfter(), [userKey]);
   // v67.3: a notice when an inquiry arrives from the website (through the runner)
   const leadSeen = React.useRef(null);
   useEffect(() => {
@@ -2147,15 +2149,13 @@ const LLQAHost = () => {
       } else quickN = 0;
     };
     const first = setTimeout(tick, 15000);
-    const vc = setTimeout(llqaVersionCheck, 60000); // v67
+    // v81.4: new versions are watched for by llqaUpdStart (every 2 minutes, the sign-in screen too)
     const again = setInterval(() => {
       quickN = 0;
-      llqaVersionCheck();
       tick();
     }, LLQA_RUNNER ? 2 * 60 * 1000 : 5 * 60 * 1000); // v67.3: the runner checks every 2 minutes
     return () => {
       clearTimeout(first);
-      clearTimeout(vc);
       clearInterval(again);
       if (quick) clearTimeout(quick);
     };
@@ -7197,32 +7197,145 @@ const llqaPilotMore = (ctx, today, add, last) => {
   });
 };
 
-/* ---------- an older version stops its automatic work ---------- */
-// Every 5 minutes: is a newer CRM published? Then this tab offers a reload and
-// stops its automatic work, so two versions never fight over the same records.
-const llqaVersionCheck = () => {
+/* ---------- an older version stops its automatic work; v81.4: a new version loads by itself ---------- */
+// Every 2 minutes, when the CRM comes back on screen and on the sign-in screen too (v67 checked only while someone was
+// signed in, every 5 minutes): is a newer CRM published? Then this tab stops its automatic work (two versions never
+// fight over the same records). On the sign-in screen the new version loads by itself (not while someone types). While
+// someone is signed in it never reloads by itself — a reload signs them out (the academy keeps it so): the notice
+// stays until Reload now, and after signing in again they are back on the same page.
+const LLQA_UPD = Object.assign({ first: 15000, every: 2 * 60 * 1000, quietOut: 10000, quietHidden: 5000, retry: 5000 }, (typeof window !== "undefined" && window.__LLQA_UPD_FAST) || {});
+const llqaUpd = { ver: "", busyAt: Date.now(), last: 0, timer: null, on: false };
+const llqaUpdSafe = () => {
+  try {
+    const ctx = typeof LLQAApp !== "undefined" ? LLQAApp.ctx : null;
+    const user = ctx && ctx.user;
+    const st = typeof LLQAAuth !== "undefined" ? LLQAAuth.get().status : "off";
+    if (user) return false; // signed in: a reload would sign them out — the notice waits for Reload now
+    if (st === "in" || st === "checking") return false; // in the middle of a sign-in (or its steps)
+    if (typeof LLQASync !== "undefined") {
+      const s = LLQASync.get();
+      if (s.pending || s.sending) return false; // changes not in the cloud yet
+    }
+    if (LLQAUI.modal) return false;
+    const a = document.activeElement;
+    if (a && a !== document.body && (/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) || a.isContentEditable)) return false; // a box being typed in
+    // a pop-up (a form, a window) over the page: what covers the middle of the screen sits in a fixed layer
+    for (let el = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2); el && el !== document.body; el = el.parentElement)
+      if (getComputedStyle(el).position === "fixed") return false;
+    const quiet = Date.now() - llqaUpd.busyAt;
+    return quiet > (document.hidden ? LLQA_UPD.quietHidden : LLQA_UPD.quietOut);
+  } catch (e) {
+    return false;
+  }
+};
+const llqaUpdReload = () => {
+  try {
+    sessionStorage.setItem("llqa_updated", llqaUpd.ver);
+    const ctx = LLQAApp.ctx;
+    if (ctx && ctx.user && ctx.page) sessionStorage.setItem("llqa_upd_page", ctx.page);
+  } catch (e) {}
+  try {
+    LLQAPending.flush(); // anything not sent yet stays on this computer and goes after the reload
+  } catch (e) {}
+  window.location.reload();
+};
+const llqaUpdTry = () => {
+  if (llqaUpd.timer) clearTimeout(llqaUpd.timer);
+  llqaUpd.timer = null;
+  if (!llqaUpd.ver) return;
+  // v67.3: the 24/7 runner has nobody to ask — it reloads by itself
+  if (typeof LLQA_RUNNER !== "undefined" && LLQA_RUNNER) return void (llqaUpd.timer = setTimeout(llqaUpdReload, 5000));
+  if (llqaUpdSafe()) return llqaUpdReload();
+  const ctx = typeof LLQAApp !== "undefined" ? LLQAApp.ctx : null;
+  if (ctx && ctx.user && !(LLQAUI.toasts || []).some((t) => t.key === "update"))
+    llqaToast({
+      kind: "update",
+      key: "update",
+      sticky: true,
+      text: "⬆ A new version of the CRM is ready (" + llqaUpd.ver + "). Reload to use it — you'll sign in again and come back to this page. This tab has stopped its automatic work until then.",
+      actions: [{ label: "⟳ Reload now", run: () => llqaUpdReload(), tone: "success" }],
+    });
+  llqaUpd.timer = setTimeout(llqaUpdTry, LLQA_UPD.retry);
+};
+const llqaVersionCheck = (force) => {
   try {
     const mine = window.__LLQA_VERSION__ || "";
-    if (!mine || LLQAUI.stale) return;
-    fetch(window.location.pathname + "?vc=" + Date.now(), { cache: "no-store" })
+    if (!mine) return;
+    if (llqaUpd.ver) return llqaUpdTry();
+    const now = Date.now();
+    if (!force && now - llqaUpd.last < 20000) return;
+    llqaUpd.last = now;
+    fetch(window.location.pathname + "?vc=" + now, { cache: "no-store" })
       .then((r) => (r.ok ? r.text() : ""))
       .then((html) => {
         const m = /__LLQA_VERSION__\s*=\s*"([^"]+)"/.exec(html || "");
-        if (!m || m[1] === mine) return;
+        if (!m || m[1] === mine || llqaUpd.ver) return;
+        llqaUpd.ver = m[1];
         LLQAUI.stale = m[1];
-        // v67.3: the 24/7 runner has nobody to click — it reloads by itself
-        if (typeof LLQA_RUNNER !== "undefined" && LLQA_RUNNER) setTimeout(() => window.location.reload(), 5000);
-        llqaToast({
-          kind: "update",
-          key: "update",
-          sticky: true,
-          text: "⬆ A new version of the CRM is ready (" + m[1] + "). Reload to use it — this tab has stopped its automatic work until then.",
-          actions: [{ label: "⟳ Reload now", run: () => window.location.reload(), tone: "success" }],
-        });
         llqaUIChanged();
+        llqaUpdTry();
       })
       .catch(() => {});
   } catch (e) {}
+};
+// started once by the App (the sign-in screen included)
+const llqaUpdStart = () => {
+  if (llqaUpd.on) return;
+  llqaUpd.on = true;
+  try {
+    const busy = () => {
+      llqaUpd.busyAt = Date.now();
+    };
+    ["keydown", "mousedown", "touchstart", "wheel", "input"].forEach((ev) => window.addEventListener(ev, busy, { capture: true, passive: true }));
+    setTimeout(() => llqaVersionCheck(true), LLQA_UPD.first);
+    setInterval(() => llqaVersionCheck(true), LLQA_UPD.every);
+    document.addEventListener("visibilitychange", () => (document.hidden ? llqaUpd.ver && llqaUpdTry() : llqaVersionCheck()));
+    window.addEventListener("focus", () => llqaVersionCheck());
+    window.addEventListener("online", () => llqaVersionCheck(true));
+  } catch (e) {}
+};
+// after a new version was loaded: back on the page it was reloaded from, and a short notice; then this sign-in's timing
+const llqaUpdAfter = () => {
+  try {
+    const ctx = LLQAApp.ctx;
+    if (!ctx || !ctx.user) return;
+    const v = sessionStorage.getItem("llqa_updated");
+    if (v) {
+      const pg = sessionStorage.getItem("llqa_upd_page");
+      sessionStorage.removeItem("llqa_updated");
+      sessionStorage.removeItem("llqa_upd_page");
+      if (pg && (ctx.pages || []).includes(pg) && ctx.setPage) ctx.setPage(pg);
+      llqaToast({ kind: "update", key: "updated", ttl: 8000, text: "✓ Updated to " + v + "." });
+    }
+  } catch (e) {}
+  llqaSignReport();
+};
+// v81.4: how long this sign-in took on this computer, part by part — kept for the last 10, shown to the Super Admin
+const llqaSignReport = () => {
+  const T = llqaSignT;
+  if (!T || T.done || T.screen == null) return;
+  T.done = true;
+  const ctx = LLQAApp.ctx;
+  const role = ctx && ctx.user ? ctx.user.role : "";
+  const lists = role === "superadmin" ? ["students", "teachers"] : ["doc:settings/preferences"];
+  const t1 = Date.now();
+  const wait = () => {
+    let ready = true;
+    try {
+      ready = lists.every((l) => (role === "superadmin" && LLQACloud.shown ? LLQACloud.shown(l) : LLQACloud.ready(l)));
+    } catch (e) {}
+    if (!ready && Date.now() - t1 < 30000) return void setTimeout(wait, 100);
+    llqaSignMark("data");
+    const s = (a, b) => (T[a] != null && T[b] != null ? ((T[a] - T[b]) / 1000).toFixed(1) + " s" : "—");
+    try {
+      const all = JSON.parse(localStorage.getItem("llqa_signin_times") || "[]");
+      all.push({ at: T.at, role, name: T.name, auth: T.auth, acct: T.acct, person: T.person, screen: T.screen, data: T.data });
+      localStorage.setItem("llqa_signin_times", JSON.stringify(all.slice(-10)));
+    } catch (e) {}
+    if (role === "superadmin")
+      llqaToast({ kind: "update", key: "signin-time", text: "⏱ This sign-in took " + s("data", "t00") + " on this computer: the password check " + s("auth", "name") + " · your account " + s("acct", "auth") + " · the academy's lists " + s("data", "screen") + "." });
+  };
+  wait();
 };
 
 /* ============================================================
@@ -12311,6 +12424,14 @@ const llqaUserFromAcct = async (a) => {
   if (!a) return null;
   const get = async (coll, id) => {
     try {
+      // v81.4: straight from the cloud with this person's sign-in, one request — the database link (started only
+      // after the sign-in) had to start first and held the sign-in up; the link is used if this can't get through
+      try {
+        const u = fb.auth && fb.auth.currentUser;
+        if (u) return await llqaRestGet(coll + "/" + encodeURIComponent(String(id)), await u.getIdToken());
+      } catch (e) {
+        if (/permission/.test(String((e && e.code) || ""))) return null;
+      }
       const s = await fb.db.collection(coll).doc(String(id)).get();
       return s.exists ? s.data() || {} : null;
     } catch (e) {
@@ -12328,13 +12449,12 @@ const llqaUserFromAcct = async (a) => {
   if (a.role === "parent") {
     const v = (await get("views", "p-" + a.pid)) || {};
     let kid = null;
-    for (const sid of v.sids || []) {
-      const s = await get("students", sid);
-      if (s && s.status !== "quit") {
-        kid = { ...s, id: s.id != null ? s.id : sid };
-        break;
-      }
-    }
+    const sids = v.sids || [];
+    const got = await Promise.all(sids.map((sid) => get("students", sid))); // v81.4: all at once (one after another before)
+    sids.forEach((sid, i) => {
+      const s = got[i];
+      if (!kid && s && s.status !== "quit") kid = { ...s, id: s.id != null ? s.id : sid };
+    });
     return { role: "parent", name: (kid && kid.parent) || a.name || "Parent", display: "Parent of " + ((kid && kid.name) || a.pid), parentId: a.pid, studentId: kid ? kid.id : null, studentName: kid ? kid.name : "", location: "USA" };
   }
   if (a.role === "staff") {

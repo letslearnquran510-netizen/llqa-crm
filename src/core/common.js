@@ -1241,6 +1241,8 @@ const LLQACloud = (() => {
       s.subs.add(f);
       return () => s.subs.delete(f);
     };
+    s.fill = (docs) => show(overlay(docs, LLQAPending.get(name))); // v81.4: the sign-in's direct answer (unsent changes on top)
+    seedFill(name);
     return s;
   };
 
@@ -1436,6 +1438,8 @@ const LLQACloud = (() => {
       s.subs.add(f);
       return () => s.subs.delete(f);
     };
+    s.fill = (v) => show(applyFields(v, LLQAPending.get(pid))); // v81.4: the sign-in's direct answer (unsent changes on top)
+    seedFill(id);
     return s;
   };
 
@@ -1508,7 +1512,26 @@ const LLQACloud = (() => {
       if (off) off();
     };
   };
-  return { collection, doc, deviceId, retryNow, ready, epochReady, stores: () => stores, rawMerge, rawGet, rawListen };
+  // v81.4: what the sign-in fetched straight from the cloud (one request a list, all at once) fills a list until the
+  // database link's first answer replaces it (the link takes ~7 trips to answer); the automatic work still waits for
+  // the link (ready). Only what this person's sign-in fetched, and only within a minute of it.
+  const seeds = {};
+  const seedFill = (id) => {
+    const sd = seeds[id], s = stores[id];
+    if (!sd || !s || s.server || s.seeded || !s.fill || Date.now() - sd.at > 60000) return;
+    s.seeded = true;
+    s.loading = false;
+    s.fill(sd.v);
+  };
+  const seed = (id, v) => {
+    seeds[id] = { v, at: Date.now() };
+    seedFill(id);
+  };
+  const shown = (id) => {
+    const s = stores[id];
+    return !!(s && (s.server || s.seeded));
+  };
+  return { collection, doc, deviceId, retryNow, ready, epochReady, stores: () => stores, rawMerge, rawGet, rawListen, seed, shown };
 })();
 
 // v81: nothing is loaded before a sign-in (the App draws again when someone signs in)
@@ -11002,7 +11025,15 @@ const llqaAuthMsg = (e) => {
   return (e && (e.message || e.code)) || "Sign-in failed.";
 };
 // what: "PIN" or "password" (for the message)
+// v81.4: how long this computer's sign-in takes, part by part (llqaSignReport shows it)
+let llqaSignT = null;
+const llqaSignMark = (k) => {
+  try {
+    if (llqaSignT && llqaSignT[k] == null) llqaSignT[k] = Math.round(performance.now() - llqaSignT.p0);
+  } catch (e) {}
+};
 const llqaSignIn = async (key, secret, what) => {
+  llqaSignT = { at: Date.now(), p0: performance.now(), t00: 0 };
   LLQAAuth.start();
   if (!initFirebase() || !fb.auth) return { error: "The cloud is not set up on this computer." };
   let L = null;
@@ -11018,13 +11049,16 @@ const llqaSignIn = async (key, secret, what) => {
     return { error: m === "wrong" ? "Sign-in failed." : m };
   }
   if (!L || !L.email) return { error: "none" };
+  llqaSignMark("name");
   try {
     await fb.auth.signInWithEmailAndPassword(L.email, String(secret == null ? "" : secret));
+    llqaSignMark("auth");
   } catch (e) {
     const m = llqaAuthMsg(e);
     return { error: m === "wrong" ? "Wrong " + (what || "password") + "." : m };
   }
   const u = fb.auth.currentUser;
+  const seedP = llqaSeedStart(key); // v81.4: the dashboard's lists, straight away (with the account read)
   const res = await new Promise((resolve) => {
     const s0 = LLQAAuth.get();
     if (s0.status === "in" && u && s0.uid === u.uid) return resolve(s0);
@@ -11042,6 +11076,10 @@ const llqaSignIn = async (key, secret, what) => {
     });
   });
   if (res.status !== "in") return { error: res.error || "Sign-in failed." };
+  llqaSignMark("acct");
+  // v81.4: a moment at most for the dashboard's first numbers (fetched above, with the account), so it opens complete
+  if (seedP) await Promise.race([seedP.core, new Promise((r) => setTimeout(r, 1500))]);
+  llqaSignMark("seed");
   return { ok: true, acct: res.acct };
 };
 // sign out: what is waiting is sent first (a few seconds at most), this person's copy goes, the page starts again
@@ -11969,4 +12007,68 @@ const llqaRestGet = async (path, tok) => {
   if (!r.ok) throw new Error("later " + r.status);
   const j = await r.json();
   return llqaRestFields((j && j.fields) || {});
+};
+// v81.4: a whole list straight from the cloud with this person's sign-in — one request however long it is (null: more
+// than `cap` records; the database link brings it, as before)
+const llqaRestList = async (coll, tok, cap) => {
+  const base = llqaRestBase();
+  if (!base) throw new Error("later");
+  const r = await fetch(base.replace(/\/$/, "") + ":runQuery", {
+    method: "POST",
+    headers: { Authorization: "Bearer " + tok, "Content-Type": "application/json" },
+    body: JSON.stringify({ structuredQuery: { from: [{ collectionId: coll }], limit: cap + 1 } }),
+  });
+  if (!r.ok) throw new Error("later " + r.status);
+  const j = await r.json();
+  if (!Array.isArray(j) || j.some((x) => x && x.error)) throw new Error("later");
+  const docs = j.filter((x) => x && x.document).map((x) => x.document);
+  if (docs.length > cap) return null;
+  return docs.map((d) => {
+    let id = String(d.name || "").split("/").pop();
+    try {
+      id = decodeURIComponent(id);
+    } catch (e) {}
+    return { id, ...llqaRestFields(d.fields || {}) };
+  });
+};
+// v81.4: a Super Admin's first screen — its lists fetched right after the password check, all at once, so the
+// dashboard opens with its numbers (the database link's first answer takes ~7 trips). A list longer than its limit is
+// left to the database link and not asked for again on this computer for 30 days (it would be fetched twice for
+// nothing). Class records and attendance come by month through the database link: their old single lists are not
+// fetched here (they could be the biggest, and alone they would not complete a number).
+const LLQA_SEED_LISTS = [["students", 2000], ["teachers", 500], ["arPayments", 5000], ["parentRequests", 1000], ["waitlist", 1000], ["leads", 2000], ["leaves", 1000], ["messageLog", 1000]];
+const LLQA_SEED_DOCS = ["settings/preferences", "settings/automation", "settings/runner"];
+const LLQA_SEED_LONG = "llqa_seed_long_v1";
+const llqaSeedLong = (c, on) => {
+  try {
+    const m = JSON.parse(localStorage.getItem(LLQA_SEED_LONG) || "{}") || {};
+    if (on === undefined) return !!(m[c] && Date.now() - m[c] < 30 * 86400000);
+    if (on) m[c] = Date.now();
+    else delete m[c];
+    localStorage.setItem(LLQA_SEED_LONG, JSON.stringify(m));
+  } catch (e) {}
+  return false;
+};
+const llqaSeedStart = (key) => {
+  try {
+    const k = String(key || "");
+    const u = fb.auth && fb.auth.currentUser;
+    if (!(k === "owner" || /^a-/.test(k)) || !u || !llqaRestBase()) return null;
+    const tok = u.getIdToken();
+    const one = (p) => p.catch(() => {});
+    const list = ([c, cap]) =>
+      llqaSeedLong(c)
+        ? Promise.resolve()
+        : one(tok.then((t) => llqaRestList(c, t, cap)).then((docs) => {
+            llqaSeedLong(c, !docs);
+            if (docs) LLQACloud.seed(c, docs);
+          }));
+    const doc = (d) => one(tok.then((t) => llqaRestGet(d, t)).then((v) => v && LLQACloud.seed("doc:" + d, v)));
+    // what the sign-in waits for goes first (a line with few connections at a time serves them in order)
+    const core = [list(LLQA_SEED_LISTS[0]), list(LLQA_SEED_LISTS[1]), doc(LLQA_SEED_DOCS[0])];
+    const rest = [...LLQA_SEED_LISTS.slice(2).map(list), ...LLQA_SEED_DOCS.slice(1).map(doc)];
+    return { core: Promise.all(core), all: Promise.all([...core, ...rest]) };
+  } catch (e) {
+    return null;
+  }
 };
