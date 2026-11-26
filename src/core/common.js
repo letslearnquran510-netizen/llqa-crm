@@ -564,6 +564,9 @@ const LS_KEY = "llqa_crm_v1::";
 // Set when this computer wipes its copy after a full reset: from then until
 // the page reloads, nothing is written to this computer or sent to the cloud.
 let llqaFrozen = false;
+// v82: an instant sign-in (LLQAQuick) is open while Google confirms it — nothing is kept on this computer or sent until
+// it does (changes made meanwhile wait in memory and go once it confirms; a refused sign-in drops them)
+let llqaQuickHeld = false;
 
 const lsRead = (k, fb) => {
   if (firebaseConfig && LLQAAuth.get().status !== "in") return fb; // v81: nothing of anyone's before a sign-in
@@ -688,6 +691,7 @@ const LLQAPending = (() => {
     if (saveT) clearTimeout(saveT);
     saveT = null;
     if (!dirty) return;
+    if (llqaQuickHeld) return; // v82: kept once Google confirms the sign-in
     dirty = false;
     if (llqaFrozen || !all) return;
     try {
@@ -1097,7 +1101,7 @@ const LLQACloud = (() => {
     stores[name] = s;
     s.sig = sigOf(s.data);
     // this computer's own copy before the cloud answers (none on a new computer)
-    const local0 = lsHas(name) ? s.data : [];
+    const local0 = lsHas(name) && !(firebaseConfig && LLQAAuth.get().status !== "in") ? s.data : []; // v82: only what was read from this computer
     const emit = () =>
       s.subs.forEach((f) => {
         try {
@@ -1257,7 +1261,7 @@ const LLQACloud = (() => {
     if (LLQAPending.get(id)) LLQAPending.clear(id);
     const [coll, docId] = path.split("/");
     const base0 = lsRead(path, fallback || {});
-    const own0 = lsHas(path) ? base0 : null; // built-in defaults are not "this computer's data"
+    const own0 = lsHas(path) && !(firebaseConfig && LLQAAuth.get().status !== "in") ? base0 : null; // built-in defaults are not "this computer's data" (v82: nor what was not read)
     const s = {
       path,
       data: applyFields(base0, LLQAPending.get(pid)),
@@ -1516,15 +1520,17 @@ const LLQACloud = (() => {
   // database link's first answer replaces it (the link takes ~7 trips to answer); the automatic work still waits for
   // the link (ready). Only what this person's sign-in fetched, and only within a minute of it.
   const seeds = {};
+  // v82: a list filled from this computer's locked copy takes the cloud's direct answer when it comes (it is fresher)
   const seedFill = (id) => {
     const sd = seeds[id], s = stores[id];
-    if (!sd || !s || s.server || s.seeded || !s.fill || Date.now() - sd.at > 60000) return;
-    s.seeded = true;
+    if (!sd || !s || s.server || !s.fill || Date.now() - sd.at > 60000) return;
+    if (s.seeded && !(s.seeded === "copy" && !sd.copy)) return;
+    s.seeded = sd.copy ? "copy" : true;
     s.loading = false;
     s.fill(sd.v);
   };
-  const seed = (id, v) => {
-    seeds[id] = { v, at: Date.now() };
+  const seed = (id, v, copy) => {
+    seeds[id] = { v, at: Date.now(), copy: !!copy };
     seedFill(id);
   };
   const shown = (id) => {
@@ -1535,7 +1541,7 @@ const LLQACloud = (() => {
 })();
 
 // v81: nothing is loaded before a sign-in (the App draws again when someone signs in)
-const llqaStoresOn = () => !firebaseConfig || LLQAAuth.get().status === "in";
+const llqaStoresOn = () => !firebaseConfig || LLQAAuth.get().status === "in" || llqaQuickHeld; // v82: an instant sign-in shows its copy while Google confirms
 const llqaNoSave = () => {};
 const useFirestoreCollection = (collectionName, fallbackData = []) => {
   const on = llqaStoresOn();
@@ -10955,6 +10961,7 @@ const LLQAAuth = (() => {
       } catch (e) {}
       return;
     }
+    if (!LLQAQuick.confirm(u.uid, acct)) return; // v82: an instant sign-in is confirmed here (or refused: the CRM starts again)
     llqaAdoptOwner(u.uid, acct);
     set({ status: "in", uid: u.uid, acct, error: "" });
   };
@@ -11150,6 +11157,9 @@ const llqaSignIn = async (key, secret, what) => {
 // sign out: what is waiting is sent first (a few seconds at most), this person's copy goes, the page starts again
 const llqaSignOutAll = async () => {
   try {
+    await Promise.race([LLQAQuick.save(), new Promise((r) => setTimeout(r, 1500))]); // v82: the locked copy brought up to date
+  } catch (e) {}
+  try {
     for (let i = 0; i < 10 && LLQAPending.count() > 0; i++) {
       LLQACloud.retryNow();
       await new Promise((r) => setTimeout(r, 500));
@@ -11173,6 +11183,234 @@ const llqaOwnerExists = async () => {
     return null;
   }
 };
+// v82: whether the Super Admin's sign-in exists is remembered on this computer once seen — the password box shows at
+// once; the cloud is still asked, as soon as the sign-in screen opens (the same request as the name looked up ahead)
+const LLQA_OWNER_KNOWN = "llqa_owner_known_v1";
+const llqaOwnerKnown = () => {
+  try {
+    return localStorage.getItem(LLQA_OWNER_KNOWN) === "1";
+  } catch (e) {
+    return false;
+  }
+};
+const llqaOwnerSoon = (fresh) => {
+  try {
+    if (fresh) llqaLoginAhead.delete("owner");
+    llqaLoginSoon("owner");
+    const ah = llqaLoginAhead.get("owner");
+    if (!ah) return llqaOwnerExists();
+    return ah.p.then(
+      (L) => {
+        const has = !!L;
+        try {
+          if (has) localStorage.setItem(LLQA_OWNER_KNOWN, "1");
+          else localStorage.removeItem(LLQA_OWNER_KNOWN);
+        } catch (e) {}
+        return has;
+      },
+      () => null,
+    );
+  } catch (e) {
+    return Promise.resolve(null);
+  }
+};
+
+/* ============================================================
+   v82: instant sign-in — the first screen kept on this computer, locked with the password
+   After a password sign-in (the owner, the admins) the dashboard's data is kept here encrypted: AES-256-GCM with a
+   key made from the password (PBKDF2-SHA256, 600,000 rounds, a random salt). The password is never kept. Sign In
+   unlocks it here (a fraction of a second; a wrong password simply does not open it) and the dashboard opens while
+   Google confirms the password in the background; until it does, nothing is kept on this computer or sent. Google
+   refuses (the password was changed elsewhere, the sign-in switched off or changed): the copy is deleted and the CRM
+   starts again with the reason. Only lists the cloud itself gave this person go in. PIN sign-ins get no copy.
+   ============================================================ */
+const LLQAQuick = (() => {
+  const DB = "llqa_quick_v1", ST = "copies", ITER = 600000;
+  const LISTS = ["students", "teachers", "arPayments", "parentRequests", "waitlist", "leads", "leaves", "messageLog", "covers", "makeups", "shifts", "teamLeads", "customRoles", "autoAttendance"];
+  const DOCS = ["settings/preferences", "settings/automation", "settings/runner", "settings/calendar", "settings/portalAccess", "settings/messaging"];
+  const can = (key) => {
+    const k = String(key || "");
+    return (k === "owner" || /^a-/.test(k)) && typeof indexedDB !== "undefined" && typeof crypto !== "undefined" && !!crypto.subtle && typeof TextEncoder !== "undefined";
+  };
+  const db = () =>
+    new Promise((res, rej) => {
+      const r = indexedDB.open(DB, 1);
+      r.onupgradeneeded = () => r.result.createObjectStore(ST);
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+  const run = async (mode, f) => {
+    const d = await db();
+    try {
+      return await new Promise((res, rej) => {
+        const tx = d.transaction(ST, mode);
+        const q = f(tx.objectStore(ST));
+        tx.oncomplete = () => res(q && "result" in q ? q.result : true);
+        tx.onerror = () => rej(tx.error);
+        tx.onabort = () => rej(tx.error);
+      });
+    } finally {
+      d.close();
+    }
+  };
+  const get = (k) => run("readonly", (s) => s.get(k));
+  const put = (k, v) => run("readwrite", (s) => s.put(v, k));
+  const del = (k) => run("readwrite", (s) => s.delete(k));
+  const derive = async (secret, salt) => {
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(String(secret)), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey({ name: "PBKDF2", salt, iterations: ITER, hash: "SHA-256" }, base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  };
+  let session = null; // this sign-in's lock { key, ck, salt } — the password itself is never kept
+  let quick = null; // an instant sign-in waiting for Google { uid, acct, ok }
+  // Sign In: open this computer's copy with the password (null: none, or it does not open — Google decides as before)
+  const unlock = async (key, secret) => {
+    if (!can(key) || !secret) return null;
+    try {
+      const rec = await get(String(key));
+      if (!rec || rec.v !== 1 || !rec.salt || !rec.iv || !rec.ct) return null;
+      const ck = await derive(secret, rec.salt);
+      const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: rec.iv }, ck, rec.ct);
+      const c = JSON.parse(new TextDecoder().decode(pt));
+      if (!c || c.v !== 1 || !c.uid || !c.acct || !c.u || c.acct.active === false || c.acct.mustChange) return null;
+      session = { key: String(key), ck, salt: rec.salt };
+      return c;
+    } catch (e) {
+      return null;
+    }
+  };
+  // a password sign-in without a copy (or a new password): this sign-in's lock, for the copy kept after it
+  const keep = async (key, secret) => {
+    if (!can(key) || !secret) return;
+    try {
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      session = { key: String(key), ck: await derive(secret, salt), salt };
+    } catch (e) {}
+  };
+  // the dashboard from the copy now; Google's answer (net) confirms it or undoes it
+  const begin = (c, net) => {
+    llqaQuickHeld = true;
+    quick = { uid: c.uid, acct: c.acct, ok: false };
+    try {
+      llqaAdoptOwner(c.uid, c.acct); // a different person used this computer before: theirs is put aside first
+    } catch (e) {}
+    Object.keys(c.lists || {}).forEach((n) => LLQACloud.seed(n, c.lists[n], true));
+    Object.keys(c.docs || {}).forEach((p) => LLQACloud.seed("doc:" + p, c.docs[p], true));
+    llqaSignMark("quick");
+    Promise.resolve(net).then(
+      (r) => {
+        if (!(r && r.ok)) refuse((r && r.error) || "");
+      },
+      () => refuse(""),
+    );
+  };
+  // the account Google's sign-in brings (LLQAAuth): the same person and role as the copy's — or the CRM starts again
+  const confirm = (uid, acct) => {
+    if (!llqaQuickHeld || !quick) return true;
+    const a = quick.acct || {};
+    const same = uid === quick.uid && acct && acct.active !== false && !acct.mustChange && acct.role === a.role && String(acct.key || "") === String(a.key || "") && String(acct.roleName || "") === String(a.roleName || "");
+    if (!same) {
+      refuse("changed");
+      return false;
+    }
+    quick.ok = true;
+    llqaQuickHeld = false;
+    return true;
+  };
+  const refuse = async (err) => {
+    if (!quick || quick.ok || quick.out) return;
+    quick.out = true;
+    const e = String(err || "");
+    const gone = /^Wrong /.test(e) || e === "changed" || /switched off|no CRM account|isn't set up|There's no sign-in/.test(e);
+    const msg = /^Wrong /.test(e)
+      ? "Your password was changed on another computer — sign in with the new one."
+      : e === "changed"
+        ? "Your sign-in was changed by the office — sign in again."
+        : e && e !== "none"
+          ? e
+          : "The sign-in could not be confirmed — check the internet and sign in again.";
+    llqaFrozen = true; // nothing more is kept on this computer or sent
+    try {
+      if (gone && session) await del(session.key);
+    } catch (x) {}
+    session = null;
+    try {
+      sessionStorage.setItem("llqa_signin_msg", msg);
+    } catch (x) {}
+    try {
+      llqaWipeCaches();
+    } catch (x) {}
+    try {
+      if (fb.auth) await fb.auth.signOut();
+    } catch (x) {}
+    try {
+      window.location.reload();
+    } catch (x) {}
+  };
+  // the copy: what the cloud itself gave this person, locked with this sign-in's key
+  const save = async () => {
+    const S = session;
+    if (!S || llqaQuickHeld || llqaFrozen) return false;
+    const a = LLQAAuth.get();
+    if (a.status !== "in" || !a.acct || !a.uid || String(a.acct.key || "") !== S.key) return false;
+    const st = LLQACloud.stores();
+    const lists = {},
+      docs = {};
+    LISTS.forEach((n) => {
+      const s = st[n];
+      if (s && s.server && Array.isArray(s.data)) lists[n] = s.data;
+    });
+    DOCS.forEach((p) => {
+      const s = st["doc:" + p];
+      if (s && s.server && s.data && typeof s.data === "object") docs[p] = s.data;
+    });
+    Object.keys(st).forEach((id) => {
+      const s = st[id];
+      if (/^doc:attendance\//.test(id) && s && s.server && s.data && typeof s.data === "object") docs[id.slice(4)] = s.data;
+    });
+    const u = typeof LLQAApp !== "undefined" && LLQAApp.ctx ? LLQAApp.ctx.user : null;
+    if (!u || !lists.students || !lists.teachers) return false;
+    try {
+      const body = JSON.stringify({ v: 1, uid: a.uid, acct: a.acct, u, at: Date.now(), lists, docs });
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, S.ck, new TextEncoder().encode(body));
+      await put(S.key, { v: 1, salt: S.salt, iv, ct, at: Date.now() });
+      return true;
+    } catch (e) {
+      return false;
+    }
+  };
+  // kept a few seconds after the lists are in, then every 10 minutes and when the CRM is put away (and at Logout)
+  let readyAt = 0,
+    savedAt = 0;
+  const tick = () => {
+    const S = session;
+    if (!S || llqaQuickHeld || llqaFrozen) return;
+    const a = LLQAAuth.get();
+    if (a.status !== "in" || !a.acct || String(a.acct.key || "") !== S.key) return;
+    const st = LLQACloud.stores();
+    if (!(st.students && st.students.server && st.teachers && st.teachers.server)) return;
+    if (!readyAt) readyAt = Date.now();
+    if (Date.now() - readyAt < 5000 || Date.now() - savedAt < (savedAt ? 600000 : 0)) return;
+    savedAt = Date.now();
+    save();
+  };
+  try {
+    if (typeof window !== "undefined") {
+      setInterval(() => {
+        try {
+          tick();
+        } catch (e) {}
+      }, 2000);
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden && session && Date.now() - savedAt > 60000) {
+          savedAt = Date.now();
+          save();
+        }
+      });
+    }
+  } catch (e) {}
+  return { can, unlock, keep, begin, confirm, save, held: () => llqaQuickHeld, forget: (key) => del(String(key)).catch(() => {}) };
+})();
 // the first Super Admin sign-in (the owner): only while none exists
 const llqaOwnerSetup = async (pw, email) => {
   LLQAAuth.start();
@@ -11405,6 +11643,7 @@ const llqaChangeOwnSecret = async (oldS, newS) => {
     if (a.mustChange) await fb.db.collection("accounts").doc(u.uid).set({ mustChange: false }, { merge: true });
   } catch (e) {}
   await LLQAAuth.refresh();
+  if (!llqaIsPinRole(a.role)) LLQAQuick.keep(a.key, String(newS)).then(() => LLQAQuick.save()).catch(() => {}); // v82: the locked copy follows the new password
   return { ok: true };
 };
 // the rules a password must follow (Settings → Security), at least 8 characters for staff

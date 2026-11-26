@@ -7,7 +7,7 @@ const LoginScreen = ({
 }) => {
   // v81: before a sign-in the CRM's lists can't be read: the names come from the sign-in directory
   const [dir, setDir] = useState(null);
-  const [v81, setV81] = useState({ secret: "", secret2: "", email: "", busy: false, owner: null, who: "owner", pick: "", tlKey: "", stKey: "", change: null });
+  const [v81, setV81] = useState({ secret: "", secret2: "", email: "", busy: false, owner: llqaOwnerKnown() ? true : null, who: "owner", pick: "", tlKey: "", stKey: "", change: null });
   const v81Set = (p) => setV81((o) => ({ ...o, ...p }));
   useEffect(() => {
     LLQAAuth.start();
@@ -43,6 +43,22 @@ const LoginScreen = ({
     }, 300);
     return () => clearTimeout(t);
   }, [step, v81.owner, v81.who, dir, tlName, teacherId, parentIdInput, pwd, v81.secret]); // v81.5: and while they type
+  // v82: as soon as the sign-in screen opens — does a Super Admin sign-in exist (remembered on this computer, asked
+  // again), the connection to Google's sign-in server; and why an instant sign-in was undone, if it was
+  React.useEffect(() => {
+    try {
+      llqaOwnerSoon();
+      llqaWarm();
+    } catch (e) {}
+    try {
+      const m = sessionStorage.getItem("llqa_signin_msg");
+      if (m) {
+        sessionStorage.removeItem("llqa_signin_msg");
+        setStep("superadmin");
+        setError(m);
+      }
+    } catch (e) {}
+  }, []);
   const [pendingUser, setPendingUser] = useState(null);
   const [network, setNetwork] = useState(null);
   const [bioMethod, setBioMethod] = useState(null);
@@ -135,7 +151,19 @@ const LoginScreen = ({
     const p = llqaLoginPlan(role, { v81, dir, tlName, teacherId, parentIdInput, customRoleName, pwd });
     if (p.error) return setError(p.error);
     v81Set({ busy: true });
-    const r = await llqaSignIn(p.key, p.secret, p.what);
+    const net = llqaSignIn(p.key, p.secret, p.what);
+    // v82: a password sign-in this computer keeps a locked copy for: opened here, the dashboard at once — Google confirms
+    // in the background (nothing is kept or sent until it does; if it refuses, the CRM starts again with the reason)
+    if (p.what === "password" && LLQAQuick.can(p.key)) {
+      const c = await LLQAQuick.unlock(p.key, p.secret);
+      if (c) {
+        LLQAQuick.begin(c, net);
+        v81Set({ busy: false, secret: "" });
+        return v81Go(role, c.u);
+      }
+      LLQAQuick.keep(p.key, p.secret); // none yet (or it did not open): locked with this password once the sign-in is in
+    }
+    const r = await net;
     if (!r.ok) {
       v81Set({ busy: false });
       return setError(r.error === "none" ? p.none : r.error);
