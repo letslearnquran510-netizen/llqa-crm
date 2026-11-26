@@ -34,6 +34,7 @@ function App() {
   React.useEffect(() => {
     if (llqaLookLive) llqaLookKeep(appSettings);
   }, [llqaLookLive, appSettings]);
+  React.useEffect(() => llqaUpdStart(), []); // v81.4: new versions are watched for from the start (the sign-in screen too)
   const llqaLookS = llqaLookLive ? appSettings : { ...(appSettings || {}), ...llqaLookSaved() };
   const [theme, setThemeLocal] = useState(
     (llqaLookS && llqaLookS.theme) || "dark",
@@ -436,6 +437,7 @@ function App() {
       students: students || [],
       customRoles: customRoles || [],
       onLogin: (u) => {
+        llqaSignMark("screen"); // v81.4
         setUser(u);
         const customAcc =
           u.role && u.role.startsWith && u.role.startsWith("custom:")
@@ -580,7 +582,7 @@ function App() {
         setStudents(_mb(students, typeof a === "function" ? a(scStudents) : a))
     : setStudents;
   // v65: what the automation screens and pop-ups read
-  LLQAApp.set({ views, setViews, accounts, accountPins, autoAttendance, setAutoAttendance, /* v81 */ trainingPrograms, setTrainingPrograms, parentNotes, setParentNotes, setTeacherFeedback, /* v80: training, families' messages and ratings */ teacherFeedback, hrHiring, setHrHiring, /* v78: parents' feedback (the score), new hires */ apLiabilities, setApLiabilities, finance, setFinance, /* v77: bills, the finance document */ user, setPage, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory, appSettings, attNeed, clsNeed, shifts, setShifts, payrollHistory, setPayrollHistory, qcViolations, setAppSettings }); // v75: payroll (month close, reminders, My pay) // v74: shifts (handover, feedback) // v73: clsNeed (older months of class records) // v72: attNeed (older months on request) // v71: appSettings (exchange rates for the Autopilot) // v68: Dashboard "Teachers in today"
+  LLQAApp.set({ views, setViews, accounts, accountPins, autoAttendance, setAutoAttendance, /* v81 */ trainingPrograms, setTrainingPrograms, parentNotes, setParentNotes, setTeacherFeedback, /* v80: training, families' messages and ratings */ teacherFeedback, hrHiring, setHrHiring, /* v78: parents' feedback (the score), new hires */ apLiabilities, setApLiabilities, finance, setFinance, /* v77: bills, the finance document */ user, setPage, page, teachers, setTeachers, students, setStudents, salesMasterData, upsertSalesMaster, dailyProgress, setDailyProgress, arPayments, waitlist, setWaitlist, messageLog, setMessageLog, messaging, setMessaging, automation, setAutomation, leaves, setLeaves, covers, setCovers, parentRequests, setParentRequests, calendar, setCalendar, setArPayments, teamLeads, makeups, setMakeups, leads, setLeads, rewards, setRewards, salesReferrals, setSalesReferrals, pages: visibleNav.map((n) => n.id), runnerInfo, setRunnerInfo, attendanceHistory, appSettings, attNeed, clsNeed, shifts, setShifts, payrollHistory, setPayrollHistory, qcViolations, setAppSettings }); // v75: payroll (month close, reminders, My pay) // v74: shifts (handover, feedback) // v73: clsNeed (older months of class records) // v72: attNeed (older months on request) // v71: appSettings (exchange rates for the Autopilot) // v68: Dashboard "Teachers in today"
   const render = () => {
     switch (page) {
       case "dashboard":
