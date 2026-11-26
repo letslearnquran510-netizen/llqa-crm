@@ -7237,7 +7237,7 @@ const llqaUpdReload = () => {
   try {
     LLQAPending.flush(); // anything not sent yet stays on this computer and goes after the reload
   } catch (e) {}
-  window.location.reload();
+  window.location.replace(window.location.pathname + "?fresh=" + Date.now()); // v82: the new page from the network (sw.js), not this computer's
 };
 const llqaUpdTry = () => {
   if (llqaUpd.timer) clearTimeout(llqaUpd.timer);
@@ -7322,19 +7322,21 @@ const llqaSignReport = () => {
   const wait = () => {
     let ready = true;
     try {
-      ready = lists.every((l) => (role === "superadmin" && LLQACloud.shown ? LLQACloud.shown(l) : LLQACloud.ready(l)));
+      ready = lists.every((l) => (role === "superadmin" && LLQACloud.shown && T.quick == null ? LLQACloud.shown(l) : LLQACloud.ready(l))); // v82: an instant sign-in waits for the live lists
     } catch (e) {}
     if (!ready && Date.now() - t1 < 30000) return void setTimeout(wait, 100);
     llqaSignMark("data");
     const s = (a, b) => (T[a] != null && T[b] != null ? ((T[a] - T[b]) / 1000).toFixed(1) + " s" : "—");
     try {
       const all = JSON.parse(localStorage.getItem("llqa_signin_times") || "[]");
-      all.push({ at: T.at, role, name: T.name, pw: T.pw, auth: T.auth, acct: T.acct, seed: T.seed, person: T.person, screen: T.screen, data: T.data });
+      all.push({ at: T.at, role, name: T.name, quick: T.quick, pw: T.pw, auth: T.auth, acct: T.acct, seed: T.seed, person: T.person, screen: T.screen, data: T.data });
       localStorage.setItem("llqa_signin_times", JSON.stringify(all.slice(-10)));
     } catch (e) {}
     if (role === "superadmin")
       // v81.5: each moment after Sign In — where the time went shows itself
-      llqaToast({ kind: "update", key: "signin-time", text: "⏱ This sign-in took " + s("data", "t00") + " on this computer: Google confirmed the password at " + s(T.pw != null ? "pw" : "auth", "t00") + " · your account and the academy's lists were in at " + s(T.seed != null && T.seed > (T.acct || 0) ? "seed" : "acct", "t00") + " · the screen at " + s("screen", "t00") + "." });
+      if (T.quick != null)
+        llqaToast({ kind: "update", key: "signin-time", text: "⏱ This sign-in took " + s("screen", "t00") + " on this computer — opened from its locked copy; Google confirmed the password at " + s(T.pw != null ? "pw" : "acct", "t00") + " and the live data came at " + s("data", "t00") + "." });
+      else llqaToast({ kind: "update", key: "signin-time", text: "⏱ This sign-in took " + s("data", "t00") + " on this computer: Google confirmed the password at " + s(T.pw != null ? "pw" : "auth", "t00") + " · your account and the academy's lists were in at " + s(T.seed != null && T.seed > (T.acct || 0) ? "seed" : "acct", "t00") + " · the screen at " + s("screen", "t00") + "." });
   };
   wait();
 };
@@ -12528,9 +12530,16 @@ const LLQASecretField = ({ label, pin, value, onChange, onEnter }) => {
 };
 const LLQAOwnerFields = ({ v81, v81Set, dir, pwd, setPwd, onEnter }) => {
   // v81.1: when the list can't be read, it says so (it used to guess "Sign in with your password")
-  const check = () => llqaOwnerExists().then((x) => v81Set({ owner: x === null ? "unknown" : x }));
+  // v82: asked at once (the sign-in screen asked already); a Super Admin known on this computer keeps the box when the
+  // cloud can't be reached
+  const check = (fresh) =>
+    llqaOwnerSoon(fresh).then((x) => {
+      if (x === null) {
+        if (!llqaOwnerKnown()) v81Set({ owner: "unknown" });
+      } else v81Set({ owner: x });
+    });
   React.useEffect(() => {
-    if (v81.owner === null) check();
+    check();
   }, []);
   if (v81.owner === null) return llqaSmall("Checking…", null, "ck");
   if (v81.owner === "unknown")
@@ -12540,7 +12549,7 @@ const LLQAOwnerFields = ({ v81, v81Set, dir, pwd, setPwd, onEnter }) => {
         type: "button",
         onClick: () => {
           v81Set({ owner: null });
-          check();
+          check(true);
         },
         style: { ...llqaFieldStyle, width: "auto", cursor: "pointer", marginBottom: 12 },
       },
