@@ -10900,6 +10900,16 @@ const LLQAAuth = (() => {
   const loadNow = async (uid) => {
     const u = fb.auth.currentUser;
     if (!u || u.uid !== uid) throw new Error("later");
+    // v81.5: already asked for the moment Google confirmed the password (used once; asked again if it failed)
+    const E = typeof llqaEarly !== "undefined" ? llqaEarly : null;
+    if (E && E.uid === uid && E.acct && Date.now() - E.at < 30000) {
+      const p = E.acct;
+      E.acct = null;
+      try {
+        const d0 = await p;
+        return d0 ? { ...d0, uid } : null;
+      } catch (e) {}
+    }
     const d = await llqaRestGet("accounts/" + encodeURIComponent(uid), await u.getIdToken());
     return d ? { ...d, uid } : null;
   };
@@ -11032,16 +11042,69 @@ const llqaSignMark = (k) => {
     if (llqaSignT && llqaSignT[k] == null) llqaSignT[k] = Math.round(performance.now() - llqaSignT.p0);
   } catch (e) {}
 };
+// v81.5: the moment Google confirms the password, the account and the dashboard's lists are asked for with its answer's
+// sign-in token — alongside the Firebase library's own second request (its profile lookup), not after it. Google's
+// answer is read as it arrives (a copy; the library reads its own); nothing is kept. If it can't be read, the sign-in
+// goes on as before.
+let llqaEarly = null;
+const llqaEarlyStart = (uid, tok) => {
+  const T = llqaSignT;
+  if (!T || T.key == null || T.early || !uid || !tok) return;
+  T.early = true;
+  llqaSignMark("pw");
+  try {
+    const acct = llqaRestGet("accounts/" + encodeURIComponent(uid), tok);
+    acct.catch(() => {});
+    llqaEarly = { uid, at: Date.now(), acct, seed: llqaSeedStart(T.key, Promise.resolve(tok)) };
+  } catch (e) {}
+};
+(() => {
+  try {
+    if (typeof window === "undefined" || typeof window.fetch !== "function" || window.__llqaFetchHook) return;
+    window.__llqaFetchHook = true;
+    const of = window.fetch;
+    window.fetch = function (input) {
+      const p = of.apply(this, arguments);
+      try {
+        const url = typeof input === "string" ? input : (input && input.url) || "";
+        if (llqaSignT && llqaSignT.key != null && !llqaSignT.early && /accounts:signInWithPassword/.test(url))
+          p.then((r) => {
+            if (r && r.ok)
+              r.clone()
+                .json()
+                .then((j) => j && llqaEarlyStart(j.localId, j.idToken))
+                .catch(() => {});
+          }).catch(() => {});
+      } catch (e) {}
+      return p;
+    };
+  } catch (e) {}
+})();
+// v81.5: the connection to Google's sign-in server, opened and kept open while someone is about to sign in (a plain
+// request for the project's public settings — no data, no sign-in attempt); only on the real site (https), not with
+// the test emulators or a local copy
+const llqaWarm = (() => {
+  let last = 0;
+  return () => {
+    try {
+      if (Date.now() - last < 60000 || window.__LLQA_EMU || location.protocol !== "https:" || !firebaseConfig || !firebaseConfig.apiKey || typeof fetch !== "function") return;
+      last = Date.now();
+      fetch("https://identitytoolkit.googleapis.com/v1/projects?key=" + encodeURIComponent(firebaseConfig.apiKey)).catch(() => {});
+    } catch (e) {}
+  };
+})();
 const llqaSignIn = async (key, secret, what) => {
-  llqaSignT = { at: Date.now(), p0: performance.now(), t00: 0 };
+  llqaSignT = { at: Date.now(), p0: performance.now(), t00: 0, key: String(key) };
+  llqaEarly = null;
   LLQAAuth.start();
   if (!initFirebase() || !fb.auth) return { error: "The cloud is not set up on this computer." };
   let L = null;
   try {
     // v81.2: looked up ahead while the person was being chosen (one trip to the cloud less after Sign In)
+    // v81.5: usable for 5 minutes (it is refreshed while the person types); kept for a second try after a wrong password
     const ah = llqaLoginAhead.get(String(key));
-    llqaLoginAhead.delete(String(key));
-    L = ah && Date.now() - ah.at < 60000 ? await ah.p.catch(() => llqaLoginGet(key)) : await llqaLoginGet(key);
+    L = ah && Date.now() - ah.at < 300000 ? await ah.p.catch(() => llqaLoginGet(key)) : await llqaLoginGet(key);
+    if (!L || !L.email) llqaLoginAhead.delete(String(key));
   } catch (e) {
     // v81.1: the list of sign-ins is refused before a sign-in only while Firebase still has the old access rules
     if (/permission/.test(String((e && e.code) || ""))) return { error: "The list of sign-ins can't be read — the CRM's new access rules aren't in Firebase yet (Firestore → Rules)." };
@@ -11058,7 +11121,9 @@ const llqaSignIn = async (key, secret, what) => {
     return { error: m === "wrong" ? "Wrong " + (what || "password") + "." : m };
   }
   const u = fb.auth.currentUser;
-  const seedP = llqaSeedStart(key); // v81.4: the dashboard's lists, straight away (with the account read)
+  // v81.4: the dashboard's lists, straight away (with the account read); v81.5: already asked for at Google's answer
+  const early = llqaEarly && u && llqaEarly.uid === u.uid ? llqaEarly : null;
+  const seedP = early ? early.seed : llqaSeedStart(key);
   const res = await new Promise((resolve) => {
     const s0 = LLQAAuth.get();
     if (s0.status === "in" && u && s0.uid === u.uid) return resolve(s0);
@@ -11078,7 +11143,7 @@ const llqaSignIn = async (key, secret, what) => {
   if (res.status !== "in") return { error: res.error || "Sign-in failed." };
   llqaSignMark("acct");
   // v81.4: a moment at most for the dashboard's first numbers (fetched above, with the account), so it opens complete
-  if (seedP) await Promise.race([seedP.core, new Promise((r) => setTimeout(r, 1500))]);
+  if (seedP) await Promise.race([seedP.core, new Promise((r) => setTimeout(r, 1000))]); // v81.5: 1 s at most (was 1.5 s)
   llqaSignMark("seed");
   return { ok: true, acct: res.acct };
 };
@@ -12049,12 +12114,12 @@ const llqaSeedLong = (c, on) => {
   } catch (e) {}
   return false;
 };
-const llqaSeedStart = (key) => {
+const llqaSeedStart = (key, tokP) => {
   try {
     const k = String(key || "");
     const u = fb.auth && fb.auth.currentUser;
-    if (!(k === "owner" || /^a-/.test(k)) || !u || !llqaRestBase()) return null;
-    const tok = u.getIdToken();
+    if (!(k === "owner" || /^a-/.test(k)) || !(u || tokP) || !llqaRestBase()) return null;
+    const tok = tokP || u.getIdToken(); // v81.5: Google's answer's token, before the library has the person
     const one = (p) => p.catch(() => {});
     const list = ([c, cap]) =>
       llqaSeedLong(c)
