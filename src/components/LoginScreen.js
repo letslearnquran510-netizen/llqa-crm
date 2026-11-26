@@ -38,10 +38,11 @@ const LoginScreen = ({
     const t = setTimeout(() => {
       try {
         llqaLoginSoon(llqaLoginKeyFor(role, { v81, dir, tlName, teacherId, parentIdInput, customRoleName }));
+        llqaWarm(); // v81.5
       } catch (e) {}
     }, 300);
     return () => clearTimeout(t);
-  }, [step, v81.owner, v81.who, dir, tlName, teacherId, parentIdInput]);
+  }, [step, v81.owner, v81.who, dir, tlName, teacherId, parentIdInput, pwd, v81.secret]); // v81.5: and while they type
   const [pendingUser, setPendingUser] = useState(null);
   const [network, setNetwork] = useState(null);
   const [bioMethod, setBioMethod] = useState(null);

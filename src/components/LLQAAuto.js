@@ -7329,11 +7329,12 @@ const llqaSignReport = () => {
     const s = (a, b) => (T[a] != null && T[b] != null ? ((T[a] - T[b]) / 1000).toFixed(1) + " s" : "—");
     try {
       const all = JSON.parse(localStorage.getItem("llqa_signin_times") || "[]");
-      all.push({ at: T.at, role, name: T.name, auth: T.auth, acct: T.acct, person: T.person, screen: T.screen, data: T.data });
+      all.push({ at: T.at, role, name: T.name, pw: T.pw, auth: T.auth, acct: T.acct, seed: T.seed, person: T.person, screen: T.screen, data: T.data });
       localStorage.setItem("llqa_signin_times", JSON.stringify(all.slice(-10)));
     } catch (e) {}
     if (role === "superadmin")
-      llqaToast({ kind: "update", key: "signin-time", text: "⏱ This sign-in took " + s("data", "t00") + " on this computer: the password check " + s("auth", "name") + " · your account " + s("acct", "auth") + " · the academy's lists " + s("data", "screen") + "." });
+      // v81.5: each moment after Sign In — where the time went shows itself
+      llqaToast({ kind: "update", key: "signin-time", text: "⏱ This sign-in took " + s("data", "t00") + " on this computer: Google confirmed the password at " + s(T.pw != null ? "pw" : "auth", "t00") + " · your account and the academy's lists were in at " + s(T.seed != null && T.seed > (T.acct || 0) ? "seed" : "acct", "t00") + " · the screen at " + s("screen", "t00") + "." });
   };
   wait();
 };
