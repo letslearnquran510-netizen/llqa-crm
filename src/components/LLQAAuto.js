@@ -1961,6 +1961,11 @@ const llqaClockTick = (state) => {
       }
     }
   } catch (e) {}
+  // v83: purchase requests to approve (as they come); the person's own requests approved or rejected
+  try {
+    const u = LLQAApp.ctx.user;
+    if (u && !LLQA_RUNNER && llqaCanOpen("procurement") && llqaReadyFor(["procPurchases"])) llqaProcNotices(state);
+  } catch (e) {}
   if (!runnerUp) {
     if (llqaCanOpen("students")) job(llqaLeaveStartRun);
     if (llqaCanOpen("students")) job(llqaLeaveEndRun); // v73.1
@@ -1973,6 +1978,7 @@ const llqaClockTick = (state) => {
     if (llqaCanOpen("timetable")) job(llqaCoverRunAuto);
     if (sales) job(llqaFeeRunAuto);
     if (llqaCanOpen("ap")) job(llqaApRepeatRun); // v77: the next repeating bill
+    if (llqaCanOpen("procurement")) job(llqaProcAutoRun); // v83: an item at its reorder point asks for its reorder
   } else
     try {
       llqaRunnerNews();
@@ -8324,6 +8330,7 @@ const llqaDashCards3Items = () => {
   return [
     llqaCanOpen("sales") && llqaDashCard("leads", "🎯", "Leads", ls.due, ls.due ? "follow-ups due today" : ls.open + " open leads", ls.due ? c.warn : null, () => llqaGo("sales", "leads")),
     llqaCanOpen("timetable") && llqaDashCard("makeups", "🧩", "Make-ups", owed, owed ? "missed classes to make up" : "nothing owed", owed ? c.warn : null, () => llqaGo("timetable", "makeup")),
+    llqaCanOpen("procurement") && llqaProcDashCard(), // v83
     llqaCanOpen("timetable") && llqaDashCard("tday", "🧑‍🏫", "Teachers' day", tday, tday ? "schedules not sent — next 24 hours" : "all sent (or no classes)", tday ? c.booked : null, () => llqaGo("timetable", "teacherday")),
   ].filter(Boolean);
 };
@@ -9199,7 +9206,14 @@ const llqaApPay = (l, f) => {
 const llqaApUnpay = (l, payId) => {
   const ctx = LLQAApp.ctx;
   if (typeof ctx.setApLiabilities !== "function" || !l) return false;
-  ctx.setApLiabilities((prev) => (prev || []).map((x) => (x && x.id === l.id ? llqaApSync({ ...x, pays: (x.pays || []).filter((p) => p.id !== payId), editedBy: llqaPayActor(), editedAt: new Date().toISOString() }) : x)));
+  ctx.setApLiabilities((prev) =>
+    (prev || []).map((x) => {
+      if (!(x && x.id === l.id)) return x;
+      const pays = (x.pays || []).filter((p) => p.id !== payId);
+      const y = { ...x, pays, editedBy: llqaPayActor(), editedAt: new Date().toISOString() };
+      return pays.length ? llqaApSync(y) : { ...y, paidAmount: 0, status: "unpaid", paidDate: "" }; // v83: the last payment undone — nothing paid
+    }),
+  );
   return true;
 };
 const llqaApApprove = (l) => {
@@ -9231,7 +9245,7 @@ const llqaApVendor = (name) => ((llqaFinDoc().vendors || {})[String(name || "").
 const llqaApSetVendor = (name, info) => {
   const k = String(name || "").trim().toLowerCase();
   if (!k) return false;
-  return llqaSetFin((d) => ({ ...d, vendors: { ...(d.vendors || {}), [k]: { ...info, name: String(name).trim(), by: llqaPayActor(), at: new Date().toISOString() } } }));
+  return llqaSetFin((d) => ({ ...d, vendors: { ...(d.vendors || {}), [k]: { ...((d.vendors || {})[k] || {}), ...info, name: String(name).trim(), by: llqaPayActor(), at: new Date().toISOString() } } })); // v83: merged
 };
 // the due date after this one, on the same day of the month (the last day in a shorter month)
 const llqaApNextDue = (l) => {
@@ -9755,7 +9769,7 @@ const LLQARemoveWin = ({ kind, id, onClose }) => {
 };
 
 // add or change a bill
-const LLQA_AP_CATS = ["Salaries", "Rent", "Utilities", "Software/SaaS", "Marketing", "Equipment", "Internet/Telecom", "Bank/Fees", "Taxes", "Vendor Services", "Other"];
+const LLQA_AP_CATS = ["Salaries", "Rent", "Utilities", "Software/SaaS", "Marketing", "Equipment", "Internet/Telecom", "Bank/Fees", "Taxes", "Vendor Services", "Supplies", "Other"]; // v83: + Supplies (bought for stock)
 const LLQAApBillWin = ({ billId, paid, onClose }) => {
   const ctx = LLQAApp.ctx;
   const l = billId != null ? (ctx.apLiabilities || []).find((x) => x && String(x.id) === String(billId)) : null;
